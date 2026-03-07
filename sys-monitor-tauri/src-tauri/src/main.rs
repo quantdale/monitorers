@@ -1,0 +1,175 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod collector;
+mod state;
+
+use state::SafeAppState;
+use tauri::Manager;
+
+// ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+pub struct MetricsSnapshot {
+    pub cpu: f64,
+    pub mem: f64,
+    pub mem_used_gb: f64,
+    pub mem_total_gb: f64,
+    pub disks: Vec<DiskSnapshot>,
+    pub net_recv_kb: f64,
+    pub net_sent_kb: f64,
+    pub igpu: f64,
+    pub dgpu: f64,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct DiskSnapshot {
+    pub key: String,
+    pub active: f64,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct HistoryPayload {
+    pub cpu: Vec<f64>,
+    pub mem: Vec<f64>,
+    pub disks: Vec<DiskHistory>,
+    pub net_recv: Vec<f64>,
+    pub net_sent: Vec<f64>,
+    pub igpu: Vec<f64>,
+    pub dgpu: Vec<f64>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct DiskHistory {
+    pub key: String,
+    pub values: Vec<f64>,
+}
+
+// ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
+
+fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
+    let cpu = s.cpu_history.back().copied().unwrap_or(0.0);
+    let mem = s.mem_history.back().copied().unwrap_or(0.0);
+    let total_mem_bytes = s.system.total_memory();
+    let used_mem_bytes = s.system.used_memory();
+    let mem_total_gb = total_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let mem_used_gb = used_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+
+    let disks = s
+        .disk_display_order
+        .iter()
+        .map(|k| DiskSnapshot {
+            key: k.clone(),
+            active: s
+                .disk_active_histories
+                .get(k)
+                .and_then(|h| h.back().copied())
+                .unwrap_or(0.0),
+        })
+        .collect();
+
+    MetricsSnapshot {
+        cpu,
+        mem,
+        mem_used_gb,
+        mem_total_gb,
+        disks,
+        net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
+        net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
+        igpu: s.igpu_history.back().copied().unwrap_or(0.0),
+        dgpu: s.dgpu_history.back().copied().unwrap_or(0.0),
+    }
+}
+
+// ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
+
+/// Called by the frontend once on mount to get the full 3600-point history.
+/// After that, incremental updates arrive via the "metrics-update" event.
+#[tauri::command]
+fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
+    let s = state.lock().unwrap();
+    HistoryPayload {
+        cpu: s.cpu_history.iter().copied().collect(),
+        mem: s.mem_history.iter().copied().collect(),
+        disks: s
+            .disk_display_order
+            .iter()
+            .map(|k: &String| DiskHistory {
+                key: k.clone(),
+                values: s
+                    .disk_active_histories
+                    .get(k)
+                    .map(|h: &std::collections::VecDeque<f64>| {
+                        h.iter().copied().collect::<Vec<f64>>()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        net_recv: s.net_recv_history.iter().copied().collect(),
+        net_sent: s.net_sent_history.iter().copied().collect(),
+        igpu: s.igpu_history.iter().copied().collect(),
+        dgpu: s.dgpu_history.iter().copied().collect(),
+    }
+}
+
+// ── ENTRY POINT ──────────────────────────────────────────────────────────────
+
+fn main() {
+    tauri::Builder::default()
+        .setup(|app| {
+            // AppState::new() must run here (after Tauri/winit has initialised
+            // COM via CoInitializeEx) rather than inside manage(), because
+            // WMIConnection uses assume_initialized() which requires COM to
+            // already be set up on the calling thread.
+            let app_state = state::AppState::new();
+            app.manage(SafeAppState::new(app_state));
+
+            // Clone the AppHandle — it is Send + Clone and carries a reference
+            // to all managed state via Arc internally.
+            let app_handle = app.handle();
+
+            std::thread::spawn(move || {
+                // Initialize COM for this thread (MTA — not yet initialized here,
+                // so COMLibrary::new() works, unlike the main thread where winit
+                // has already called CoInitializeEx(COINIT_APARTMENTTHREADED)).
+                // The WMI connection stays local to this thread so COM thread
+                // affinity is respected (no RPC_E_WRONG_THREAD errors).
+                let wmi_con: Option<wmi::WMIConnection> = match wmi::COMLibrary::new() {
+                    Ok(com) => match wmi::WMIConnection::new(com) {
+                        Ok(con) => {
+                            eprintln!("[WMI] Background thread connection initialized (MTA).");
+                            Some(con)
+                        }
+                        Err(e) => {
+                            eprintln!("[WMI] WMI connection failed: {:?}. GPU classification unavailable.", e);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("[WMI] COM init failed on background thread: {:?}", e);
+                        None
+                    }
+                };
+
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+
+                    // Acquire managed state, poll all metrics, build snapshot.
+                    let snapshot = {
+                        let state = app_handle.state::<SafeAppState>();
+                        let mut s = state.lock().unwrap();
+                        collector::refresh_all(&mut s, wmi_con.as_ref());
+                        build_snapshot(&s)
+                    };
+
+                    // Emit to all open frontend windows.
+                    app_handle.emit_all("metrics-update", snapshot).ok();
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![get_history])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

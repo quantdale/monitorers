@@ -1,0 +1,19 @@
+[package]
+name = "sys-monitor"
+version = "0.1.0"
+edition = "2021"
+# NOTE: This crate is the Rust data-collection backend.
+# It does not have a binary target yet — main.rs was the egui entry point and has been removed.
+# A lib target (or new binary) will be added when this crate is wired up to the Tauri frontend
+# as a workspace member or standalone library.
+
+[dependencies]
+sysinfo = "0.33"
+wmi = "0.13"
+windows = { version = "0.52", features = ["Win32_System_Performance", "Win32_Foundation"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,10 @@
+# Rust build artifacts
+sys-monitor/target/
+sys-monitor-tauri/src-tauri/target/
+
+# Node / frontend
+sys-monitor-tauri/node_modules/
+sys-monitor-tauri/dist/
+
+# Cursor editor
+.cursor/
