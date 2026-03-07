@@ -604,3 +604,151 @@ pub fn refresh_all(
     push_history(&mut app.igpu_history, igpu_util, 3600);
     push_history(&mut app.dgpu_history, dgpu_util, 3600);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, VecDeque};
+
+    // --- extract_luid_from_name ---
+
+    #[test]
+    fn test_extract_luid_pid_prefix() {
+        let input = "pid_1234_luid_0x00000000_0x00017D0F_phys_0_eng_0_engtype_3D";
+        assert_eq!(
+            extract_luid_from_name(input),
+            Some("0x00017D0F".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_luid_legacy_prefix() {
+        let input = "luid_0x00000000_0x00017A19_phys_0_eng_0_engtype_3D";
+        assert_eq!(
+            extract_luid_from_name(input),
+            Some("0x00017A19".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_luid_total_returns_none() {
+        assert_eq!(extract_luid_from_name("_Total"), None);
+    }
+
+    #[test]
+    fn test_extract_luid_empty_returns_none() {
+        assert_eq!(extract_luid_from_name(""), None);
+    }
+
+    #[test]
+    fn test_extract_luid_malformed_returns_none() {
+        assert_eq!(extract_luid_from_name("pid_99_luid_notahex"), None);
+    }
+
+    // --- pdh_instance_to_drive_letters ---
+
+    #[test]
+    fn test_pdh_instance_single_drive() {
+        assert_eq!(pdh_instance_to_drive_letters("0 C:"), vec!["C:"]);
+    }
+
+    #[test]
+    fn test_pdh_instance_two_drives() {
+        assert_eq!(
+            pdh_instance_to_drive_letters("0 C: D:"),
+            vec!["C:", "D:"]
+        );
+    }
+
+    #[test]
+    fn test_pdh_instance_disk_only_no_letters() {
+        assert_eq!(pdh_instance_to_drive_letters("1"), vec![] as Vec<String>);
+    }
+
+    #[test]
+    fn test_pdh_instance_total_empty() {
+        assert_eq!(pdh_instance_to_drive_letters("_Total"), vec![] as Vec<String>);
+    }
+
+    #[test]
+    fn test_pdh_instance_whitespace_resilience() {
+        assert_eq!(pdh_instance_to_drive_letters("  0 C:  "), vec!["C:"]);
+    }
+
+    // --- classify_luid ---
+
+    #[test]
+    fn test_classify_luid_intel_igpu() {
+        let mut map = HashMap::new();
+        map.insert(
+            "0x00017A19".to_string(),
+            "Intel(R) Iris Xe Graphics".to_string(),
+        );
+        assert_eq!(classify_luid("0x00017A19", &map), GpuClass::IGpu);
+    }
+
+    #[test]
+    fn test_classify_luid_nvidia_dgpu() {
+        let mut map = HashMap::new();
+        map.insert(
+            "0x00017D0F".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        assert_eq!(classify_luid("0x00017D0F", &map), GpuClass::DGpu);
+    }
+
+    #[test]
+    fn test_classify_luid_amd_dgpu() {
+        let mut map = HashMap::new();
+        map.insert("0x00017E00".to_string(), "AMD Radeon RX 6700".to_string());
+        assert_eq!(classify_luid("0x00017E00", &map), GpuClass::DGpu);
+    }
+
+    #[test]
+    fn test_classify_luid_fallback_igpu() {
+        let map: HashMap<String, String> = HashMap::new();
+        assert_eq!(classify_luid("0x00017A19", &map), GpuClass::IGpu);
+    }
+
+    #[test]
+    fn test_classify_luid_fallback_dgpu() {
+        let map: HashMap<String, String> = HashMap::new();
+        assert_eq!(classify_luid("0x00017D0F", &map), GpuClass::DGpu);
+    }
+
+    #[test]
+    fn test_classify_luid_unknown() {
+        let map: HashMap<String, String> = HashMap::new();
+        assert_eq!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown);
+    }
+
+    // --- push_history ---
+
+    #[test]
+    fn test_push_history_under_capacity() {
+        let mut d: VecDeque<f64> = [1.0, 2.0].into();
+        push_history(&mut d, 3.0, 5);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_push_history_at_capacity_drops_oldest() {
+        let mut d: VecDeque<f64> = [1.0, 2.0, 3.0].into();
+        push_history(&mut d, 4.0, 3);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_push_history_empty() {
+        let mut d: VecDeque<f64> = VecDeque::new();
+        push_history(&mut d, 42.0, 3);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![42.0]);
+    }
+
+    #[test]
+    fn test_push_history_max_len_one() {
+        let mut d: VecDeque<f64> = [99.0].into();
+        push_history(&mut d, 7.0, 1);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![7.0]);
+    }
+}
