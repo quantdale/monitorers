@@ -725,7 +725,7 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
     push_history(&mut app.net_sent_history, sent_kbs, 3600);
 }
 
-// ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
+// ── CPU TEMPERATURE (WMI ROOT\CIMV2) ───────────────────────────────────────────
 
 /// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
 pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
@@ -737,20 +737,41 @@ pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
     }
 }
 
-/// Query CPU temperature from ACPI thermal zone (ROOT\WMI).
-/// CurrentTemperature is in tenths of Kelvin; returns temp in Celsius or None.
-pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64> {
-    let con = wmi_thermal?;
-    let rows = con
-        .raw_query::<HashMap<String, wmi::Variant>>("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")
-        .ok()?;
-    let row = rows.first()?;
-    let tenths_kelvin = match row.get("CurrentTemperature") {
-        Some(wmi::Variant::UI4(n)) => *n as f64,
-        Some(wmi::Variant::I4(n)) => (*n).max(0) as f64,
+/// Extract tenths-of-Kelvin from a WMI Variant. Handles UI4, UI8, I4, I8, R4, R8, String.
+pub fn variant_to_tenths_kelvin(v: Option<&wmi::Variant>) -> Option<f64> {
+    let tenths = match v? {
+        wmi::Variant::UI4(n) => *n as f64,
+        wmi::Variant::UI8(n) => *n as f64,
+        wmi::Variant::I4(n) => (*n).max(0) as f64,
+        wmi::Variant::I8(n) => (*n).max(0) as f64,
+        wmi::Variant::R4(n) => *n as f64,
+        wmi::Variant::R8(n) => *n,
+        wmi::Variant::String(s) => s.parse::<f64>().unwrap_or(0.0),
         _ => return None,
     };
-    tenths_kelvin_to_celsius_checked(tenths_kelvin)
+    Some(tenths)
+}
+
+/// Query CPU temperature from thermal zone info (ROOT\CIMV2).
+/// Uses Win32_PerfFormattedData_Counters_ThermalZoneInformation.HighPrecisionTemperature
+/// (tenths of Kelvin). Iterates all zones and returns max temp in Celsius, or None.
+pub fn query_cpu_temp_c(wmi_con: Option<&wmi::WMIConnection>) -> Option<f64> {
+    let con = wmi_con?;
+    let rows = con
+        .raw_query::<HashMap<String, wmi::Variant>>(
+            "SELECT HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation",
+        )
+        .ok()?;
+    let mut max_c: Option<f64> = None;
+    for row in &rows {
+        let tenths = variant_to_tenths_kelvin(row.get("HighPrecisionTemperature"));
+        if let Some(t) = tenths {
+            if let Some(c) = tenths_kelvin_to_celsius_checked(t) {
+                max_c = Some(max_c.map_or(c, |m| m.max(c)));
+            }
+        }
+    }
+    max_c
 }
 
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
@@ -766,10 +787,13 @@ pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64>
 pub fn refresh_all(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
-    wmi_thermal: Option<&wmi::WMIConnection>,
 ) {
     refresh_cpu(app);
-    app.cpu_temp_c = query_cpu_temp_c(wmi_thermal);
+    app.cpu_temp_c = query_cpu_temp_c(wmi_con);
+    if app.cpu_temp_c.is_none() && !app.cpu_temp_error_logged {
+        app.cpu_temp_error_logged = true;
+        eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
+    }
     refresh_memory(app);
     refresh_network(app);
 
@@ -914,6 +938,51 @@ mod tests {
     fn test_classify_luid_unknown() {
         let map: HashMap<String, String> = HashMap::new();
         assert_eq!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown);
+    }
+
+    // --- variant_to_tenths_kelvin ---
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_ui4() {
+        // 3232 tenths K ≈ 50 °C
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI4(3232))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_ui8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI8(2732))), Some(2732.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_i4() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(3000))), Some(3000.0));
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(-1))), Some(0.0)); // clamped
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_i8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I8(3232))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_r4() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R4(3232.0))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_r8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R8(2731.5))), Some(2731.5));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_string() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("3232".into()))), Some(3232.0));
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("invalid".into()))), Some(0.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_none() {
+        assert_eq!(variant_to_tenths_kelvin(None), None);
     }
 
     // --- tenths_kelvin_to_celsius_checked ---

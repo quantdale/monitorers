@@ -198,16 +198,6 @@ fn main() {
                         None
                     }
                 };
-                let wmi_thermal: Option<wmi::WMIConnection> = match wmi::COMLibrary::new() {
-                    Ok(com) => match wmi::WMIConnection::with_namespace_path("ROOT\\WMI", com) {
-                        Ok(con) => {
-                            eprintln!("[WMI] Thermal (ROOT\\WMI) connection initialized.");
-                            Some(con)
-                        }
-                        Err(_) => None,
-                    },
-                    Err(_) => None,
-                };
 
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -216,7 +206,7 @@ fn main() {
                     let snapshot = {
                         let state = app_handle.state::<SafeAppState>();
                         let mut s = state.lock().unwrap();
-                        collector::refresh_all(&mut s, wmi_con.as_ref(), wmi_thermal.as_ref());
+                        collector::refresh_all(&mut s, wmi_con.as_ref());
                         build_snapshot(&s)
                     };
 

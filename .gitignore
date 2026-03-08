@@ -1,5 +1,4 @@
 # Rust build artifacts
-sys-monitor/target/
 sys-monitor-tauri/src-tauri/target/
 
 # Node / frontend
