@@ -63,11 +63,18 @@ impl AppState {
         let mut networks = Networks::new_with_refreshed_list();
         networks.refresh(false);
 
-        let cpu_name = system
+        // sysinfo populates brand on per-core entries via CPUID; the global entry is synthetic.
+        // CPU model never changes at runtime, so we read once at startup.
+        let raw = system
             .cpus()
             .first()
-            .map(|c| c.name().to_string())
+            .map(|c| c.brand().to_string())
             .unwrap_or_default();
+        let cpu_name = if raw.is_empty() {
+            "CPU".to_string()
+        } else {
+            raw
+        };
 
         let (pdh_query, pdh_gpu_3d_counter, pdh_gpu_video_counter, pdh_disk_active_counter, pdh_disk_read_counter, pdh_disk_write_counter) =
             match crate::collector::new_pdh_gpu_query() {

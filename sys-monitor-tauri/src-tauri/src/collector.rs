@@ -1178,6 +1178,17 @@ mod tests {
     // --- push_history ---
 
     #[test]
+    fn test_cpu_name_fallback() {
+        let brand = "";
+        let name = if brand.is_empty() {
+            "CPU".to_string()
+        } else {
+            brand.to_string()
+        };
+        assert_eq!(name, "CPU");
+    }
+
+    #[test]
     fn test_push_history_multiple_pushes_at_capacity() {
         let mut d: VecDeque<f64> = [1.0, 2.0, 3.0].into();
         push_history(&mut d, 4.0, 3);
