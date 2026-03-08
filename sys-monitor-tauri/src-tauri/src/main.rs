@@ -98,10 +98,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
         .gpu_entries
         .iter()
         .map(|(_, name, hist)| {
-            let name_lower = name.to_lowercase();
-            let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
-                && nvidia_temp.is_some()
-            {
+            let temp_c = if collector::is_nvidia_gpu(name) && nvidia_temp.is_some() {
                 nvidia_temp
             } else {
                 None
@@ -163,10 +160,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
             .gpu_entries
             .iter()
             .map(|(_, name, hist)| {
-                let name_lower = name.to_lowercase();
-                let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
-                    && s.nvidia_temp.is_some()
-                {
+                let temp_c = if collector::is_nvidia_gpu(name) && s.nvidia_temp.is_some() {
                     s.nvidia_temp
                 } else {
                     None

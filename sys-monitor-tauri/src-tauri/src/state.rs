@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use sysinfo::{Disks, Networks, System};
+use windows::Win32::System::Performance::PdhCloseQuery;
 
 // ── PDH handles ──────────────────────────────────────────────────────────────
 // All PDH handles live here. These are raw Win32 isize values (PDH_HQUERY /
@@ -16,6 +17,16 @@ pub struct PdhHandles {
     pub disk_read_counter: Option<isize>,      // \PhysicalDisk(*)\Disk Read Bytes/sec
     pub disk_write_counter: Option<isize>,     // \PhysicalDisk(*)\Disk Write Bytes/sec
     pub disk_response_counter: Option<isize>,  // \PhysicalDisk(*)\Avg. Disk sec/Transfer
+}
+
+impl Drop for PdhHandles {
+    fn drop(&mut self) {
+        if let Some(query) = self.query.take() {
+            unsafe {
+                PdhCloseQuery(query);
+            }
+        }
+    }
 }
 
 // ── RawPoll ──────────────────────────────────────────────────────────────────
