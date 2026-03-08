@@ -753,14 +753,6 @@ pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64>
     tenths_kelvin_to_celsius_checked(tenths_kelvin)
 }
 
-// ── CPU NAME (WMI FALLBACK HELPER) ───────────────────────────────────────────
-
-/// True if we should try WMI fallback for CPU name (empty, generic, or too short).
-pub fn is_generic_or_empty_cpu_name(name: &str) -> bool {
-    let t = name.trim();
-    t.is_empty() || t == "CPU" || t.len() < 4
-}
-
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
 
 /// Run one full 1-second poll: refresh all metrics and push to history deques.
@@ -964,44 +956,6 @@ mod tests {
     fn test_tenths_kelvin_to_celsius_boundary_150() {
         // 150 °C: tenths = (150 + 273.15) * 10 = 4231.5
         assert_eq!(tenths_kelvin_to_celsius_checked(4231.5), Some(150.0));
-    }
-
-    // --- is_generic_or_empty_cpu_name ---
-
-    #[test]
-    fn test_is_generic_cpu_name_empty() {
-        assert!(is_generic_or_empty_cpu_name(""));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_whitespace_only() {
-        assert!(is_generic_or_empty_cpu_name("   "));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_cpu() {
-        assert!(is_generic_or_empty_cpu_name("CPU"));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_cpu_lowercase_still_generic_by_length() {
-        // "cpu" has len 3, so treated as generic (too short) even though not exact "CPU"
-        assert!(is_generic_or_empty_cpu_name("cpu"));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_three_chars() {
-        assert!(is_generic_or_empty_cpu_name("ABC"));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_four_chars() {
-        assert!(!is_generic_or_empty_cpu_name("ABCD"));
-    }
-
-    #[test]
-    fn test_is_generic_cpu_name_real_name() {
-        assert!(!is_generic_or_empty_cpu_name("Intel(R) Core(TM) i7-12700H"));
     }
 
     // --- push_history ---
