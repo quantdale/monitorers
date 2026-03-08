@@ -11,35 +11,27 @@ interface Props {
 
 export function TimeRangeSelector({ options, value, onChange }: Props) {
   return (
-    <div
+    <select
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
       style={{
-        display: 'flex',
-        gap: 6,
-        flexWrap: 'wrap',
+        padding: '4px 12px',
+        borderRadius: 4,
+        border: '1px solid #444',
+        background: '#1e1e1e',
+        color: '#fff',
+        cursor: 'pointer',
+        fontSize: 12,
+        fontWeight: 600,
+        fontFamily: 'inherit',
+        outline: 'none',
       }}
     >
-      {options.map((opt) => {
-        const active = opt.value === value;
-        return (
-          <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
-            style={{
-              padding: '4px 12px',
-              borderRadius: 4,
-              border: active ? '1px solid #4699e8' : '1px solid #444',
-              background: active ? 'rgba(70, 153, 232, 0.2)' : 'transparent',
-              color: active ? '#4699e8' : '#888',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: active ? 600 : 400,
-              transition: 'all 0.15s ease',
-            }}
-          >
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
+      {options.map((opt) => (
+        <option key={opt.value} value={opt.value} style={{ background: '#1e1e1e', color: '#fff' }}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
   );
 }

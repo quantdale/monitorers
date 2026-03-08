@@ -30,9 +30,11 @@ pub struct AppState {
     pub pdh_disk_active_counter: Option<isize>,
     pub pdh_disk_read_counter: Option<isize>,
     pub pdh_disk_write_counter: Option<isize>,
-    /// Current read/write MB/s per disk key (no history).
+    pub pdh_disk_response_counter: Option<isize>,
+    /// Current read/write MB/s and avg response time per disk key (no history).
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
+    pub disk_avg_response_ms: HashMap<String, f64>,
     #[allow(dead_code)] // Only read when nvapi feature is enabled
     pub nvapi_initialized: bool,
     pub nvidia_temp_history: VecDeque<f64>,
@@ -76,10 +78,10 @@ impl AppState {
             raw
         };
 
-        let (pdh_query, pdh_gpu_3d_counter, pdh_gpu_video_counter, pdh_disk_active_counter, pdh_disk_read_counter, pdh_disk_write_counter) =
+        let (pdh_query, pdh_gpu_3d_counter, pdh_gpu_video_counter, pdh_disk_active_counter, pdh_disk_read_counter, pdh_disk_write_counter, pdh_disk_response_counter) =
             match crate::collector::new_pdh_gpu_query() {
-                Some((q, c3d, cvid, cdisk, cdisk_r, cdisk_w)) => (Some(q), Some(c3d), cvid, cdisk, cdisk_r, cdisk_w),
-                None => (None, None, None, None, None, None),
+                Some((q, c3d, cvid, cdisk, cdisk_r, cdisk_w, cdisk_resp)) => (Some(q), Some(c3d), cvid, cdisk, cdisk_r, cdisk_w, cdisk_resp),
+                None => (None, None, None, None, None, None, None),
             };
 
         // NVAPI must be initialized once per process. Same reason as PDH query handle — stateful C API.
@@ -113,8 +115,10 @@ impl AppState {
             pdh_disk_active_counter,
             pdh_disk_read_counter,
             pdh_disk_write_counter,
+            pdh_disk_response_counter,
             disk_read_mb_s: HashMap::new(),
             disk_write_mb_s: HashMap::new(),
+            disk_avg_response_ms: HashMap::new(),
             nvapi_initialized,
             nvidia_temp_history: VecDeque::with_capacity(3600),
         }

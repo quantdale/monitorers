@@ -19,8 +19,8 @@ function mockHistoryPayload(): HistoryPayload {
     cpu_temp_c: 52,
     mem: Array.from({ length: n }, (_, i) => 50 + 35 * Math.sin(t(i) + 0.5)),
     disks: [
-      { key: 'C:', values: Array.from({ length: n }, (_, i) => Math.max(0, 10 + 30 * Math.sin(t(i) + 1))), read_mb_s: 12.5, write_mb_s: 8.2, temp_c: 42 },
-      { key: 'D:', values: Array.from({ length: n }, (_, i) => Math.max(0, 5 + 15 * Math.sin(t(i) + 2))), read_mb_s: 3.1, write_mb_s: 1.8, temp_c: 38 },
+      { key: 'C:', values: Array.from({ length: n }, (_, i) => Math.max(0, 10 + 30 * Math.sin(t(i) + 1))), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
+      { key: 'D:', values: Array.from({ length: n }, (_, i) => Math.max(0, 5 + 15 * Math.sin(t(i) + 2))), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
     ],
     net_recv: Array.from({ length: n }, (_, i) => 100 + 200 * Math.sin(t(i) + 2.5)),
     net_sent: Array.from({ length: n }, (_, i) => 50 + 150 * Math.sin(t(i) + 3)),
@@ -41,8 +41,8 @@ function mockMetricsSnapshot(): MetricsSnapshot {
     mem_used_gb: 6 + 2 * Math.sin(t * 0.1),
     mem_total_gb: 16,
     disks: [
-      { key: 'C:', active: Math.max(0, 10 + 30 * Math.sin(t * 0.2 + 1)), read_mb_s: 12.5, write_mb_s: 8.2, temp_c: 42 },
-      { key: 'D:', active: Math.max(0, 5 + 15 * Math.sin(t * 0.2 + 2)), read_mb_s: 3.1, write_mb_s: 1.8, temp_c: 38 },
+      { key: 'C:', active: Math.max(0, 10 + 30 * Math.sin(t * 0.2 + 1)), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
+      { key: 'D:', active: Math.max(0, 5 + 15 * Math.sin(t * 0.2 + 2)), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
     ],
     net_recv_kb: Math.max(0, 100 + 200 * Math.sin(t * 0.4 + 2.5)),
     net_sent_kb: Math.max(0, 50 + 150 * Math.sin(t * 0.4 + 3)),
@@ -73,6 +73,7 @@ function mergeDiskHistory(
       values: appendToHistory(d.values, update.active),
       read_mb_s: update.read_mb_s,
       write_mb_s: update.write_mb_s,
+      avg_response_ms: update.avg_response_ms,
       temp_c: update.temp_c ?? null,
     };
   });
@@ -80,7 +81,7 @@ function mergeDiskHistory(
   // Add newly discovered disks.
   for (const snap of snapshotDisks) {
     if (!updated.find((d) => d.key === snap.key)) {
-      updated.push({ key: snap.key, values: [snap.active], read_mb_s: snap.read_mb_s, write_mb_s: snap.write_mb_s, temp_c: snap.temp_c ?? null });
+      updated.push({ key: snap.key, values: [snap.active], read_mb_s: snap.read_mb_s, write_mb_s: snap.write_mb_s, avg_response_ms: snap.avg_response_ms, temp_c: snap.temp_c ?? null });
     }
   }
 
@@ -207,6 +208,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       values: sliceWindow(d.values, w),
       read_mb_s: d.read_mb_s,
       write_mb_s: d.write_mb_s,
+      avg_response_ms: d.avg_response_ms,
       temp_c: d.temp_c ?? null,
     })),
     net_recv: sliceWindow(history.net_recv, w),

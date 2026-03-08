@@ -14,6 +14,7 @@ import { useMetrics } from './hooks/useMetrics';
 import { SortableCard } from './components/SortableCard';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
+import { MetricCardSelector } from './components/MetricCardSelector';
 import type { ViewMode } from './utils';
 
 const TIME_OPTIONS = [
@@ -44,6 +45,12 @@ function formatTempC(temp: number | null | undefined): string {
   return `${Math.round(temp)} °C`;
 }
 
+function formatResponseMs(ms: number): string {
+  if (!ms || ms <= 0 || !isFinite(ms)) return 'Avg: —';
+  if (ms < 10) return `Avg: ${ms.toFixed(1)} ms`;
+  return `Avg: ${Math.round(ms)} ms`;
+}
+
 const badgeStyle: React.CSSProperties = {
   border: '1px solid #444',
   padding: '4px 8px',
@@ -58,6 +65,7 @@ export default function App() {
   const [windowSecs, setWindowSecs] = useState(60);
   const [viewMode, setViewMode] = useState<ViewMode>('default');
   const [cardOrder, setCardOrder] = useState<string[]>([]);
+  const [hiddenCardIds, setHiddenCardIds] = useState<Set<string>>(new Set());
 
   const metrics = useMetrics(windowSecs);
 
@@ -82,6 +90,28 @@ export default function App() {
       return defaultIds;
     });
   }, [metrics]);
+
+  function handleMetricToggle(id: string, visible: boolean) {
+    setHiddenCardIds(prev => {
+      const next = new Set(prev);
+      if (visible) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function getCardLabel(id: string): string {
+    if (!metrics) return id;
+    if (id === 'cpu') return metrics.cpu_name || 'CPU';
+    if (id === 'memory') return 'Memory';
+    if (id === 'network') return 'Network';
+    if (id.startsWith('disk_')) return `Disk ${id.slice('disk_'.length)}`;
+    if (id.startsWith('gpu_')) {
+      const idx = parseInt(id.slice('gpu_'.length), 10);
+      return metrics.gpus[idx]?.name ?? id;
+    }
+    return id;
+  }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -137,19 +167,27 @@ export default function App() {
       const diskIdx = metrics.disks.findIndex(d => d.key === diskKey);
       if (diskIdx === -1) return null;
       const disk = metrics.disks[diskIdx];
+      const avgStr = formatResponseMs(disk.avg_response_ms);
       return (
         <SortableCard
           key={id}
           id={id}
-          title={`Disk ${disk.key} — Active Time`}
-          value={formatPercent(disk.values.at(-1))}
+          title={`Disk ${disk.key}`}
+          value={`Active Time ${formatPercent(disk.values.at(-1))}`}
           history={disk.values}
           color={DISK_COLORS[diskIdx % DISK_COLORS.length]}
+          listViewValue={
+            <>
+              <span>Active Time {formatPercent(disk.values.at(-1))}</span>
+              <span style={{ color: '#888', marginLeft: 4 }}>{avgStr}</span>
+            </>
+          }
           badge={
             <>
               <span style={badgeStyle}>
                 R: {disk.read_mb_s.toFixed(1)} MB/s · W: {disk.write_mb_s.toFixed(1)} MB/s
               </span>
+              <span style={badgeStyle}>{formatResponseMs(disk.avg_response_ms)}</span>
               <span style={badgeStyle}>{formatTempC(disk.temp_c)}</span>
             </>
           }
@@ -187,12 +225,27 @@ export default function App() {
           secondaryColor="#e88a50"
           yDomain={[0, 'auto']}
           badge={
-            <span style={badgeStyle}>
-              ↓ {formatThroughput(recv)} · ↑ {formatThroughput(sent)}
-            </span>
+            <>
+              <span style={{ ...badgeStyle, border: '1px solid rgba(80, 216, 240, 0.55)' }}>↓ {formatThroughput(recv)}</span>
+              <span style={{ ...badgeStyle, border: '1px solid rgba(232, 138, 80, 0.55)' }}>↑ {formatThroughput(sent)}</span>
+            </>
           }
-          listViewValue={`↓ ${formatThroughput(recv)} · ↑ ${formatThroughput(sent)}`}
-          listViewMinMax={`↓ ${formatThroughput(minR)}–${formatThroughput(maxR)}  ↑ ${formatThroughput(minS)}–${formatThroughput(maxS)}`}
+          listViewValue={
+            <>
+              <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600 }}>↓ {formatThroughput(recv)}</span>
+              <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600 }}>↑ {formatThroughput(sent)}</span>
+            </>
+          }
+          listViewMinMax={
+            <>
+              <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
+                ↓ {formatThroughput(minR)} – {formatThroughput(maxR)}
+              </span>
+              <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
+                ↑ {formatThroughput(minS)} – {formatThroughput(maxS)}
+              </span>
+            </>
+          }
           viewMode={viewMode}
         />
       );
@@ -219,6 +272,8 @@ export default function App() {
     return null;
   }
 
+  const visibleCardOrder = cardOrder.filter(id => !hiddenCardIds.has(id));
+
   const containerStyle =
     viewMode === 'tile'
       ? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } as React.CSSProperties
@@ -243,12 +298,21 @@ export default function App() {
         </span>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <TimeRangeSelector
-          options={TIME_OPTIONS}
-          value={windowSecs}
-          onChange={setWindowSecs}
-        />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <TimeRangeSelector
+            options={TIME_OPTIONS}
+            value={windowSecs}
+            onChange={setWindowSecs}
+          />
+          {metrics && cardOrder.length > 0 && (
+            <MetricCardSelector
+              items={cardOrder.map(id => ({ id, label: getCardLabel(id) }))}
+              hiddenIds={hiddenCardIds}
+              onToggle={handleMetricToggle}
+            />
+          )}
+        </div>
         <ViewModeSelector value={viewMode} onChange={setViewMode} />
       </div>
 
@@ -265,9 +329,9 @@ export default function App() {
         </div>
       ) : (
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={cardOrder} strategy={strategy}>
+          <SortableContext items={visibleCardOrder} strategy={strategy}>
             <div style={containerStyle}>
-              {cardOrder.map(id => renderCard(id))}
+              {visibleCardOrder.map(id => renderCard(id))}
             </div>
           </SortableContext>
         </DndContext>

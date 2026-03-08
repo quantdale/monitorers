@@ -14,8 +14,8 @@ interface Props {
   viewMode: ViewMode;
   secondaryHistory?: number[];
   secondaryColor?: string;
-  listViewValue?: string;
-  listViewMinMax?: string;
+  listViewValue?: string | React.ReactNode;
+  listViewMinMax?: string | React.ReactNode;
 }
 
 export function SortableCard(props: Props) {

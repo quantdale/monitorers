@@ -30,8 +30,8 @@ interface Props {
   secondaryHistory?: number[];
   secondaryColor?: string;
   /** Custom list view value and min/max when default formatting doesn't apply (e.g. network KB/s). */
-  listViewValue?: string;
-  listViewMinMax?: string;
+  listViewValue?: string | React.ReactNode;
+  listViewMinMax?: string | React.ReactNode;
 }
 
 export function MetricCard({
@@ -108,12 +108,16 @@ export function MetricCard({
             minWidth: 0,
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontFamily: 'monospace', color: '#fff' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, fontFamily: 'monospace', color: '#fff', gap: 8 }}>
             <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
-            <span style={{ flexShrink: 0 }}>{displayValue}</span>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{displayValue}</div>
           </div>
-          <div style={{ fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
-            {displayMinMax}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {typeof displayMinMax === 'string' ? (
+              <span style={{ fontSize: 11, color: '#888', fontFamily: 'monospace' }}>{displayMinMax}</span>
+            ) : (
+              displayMinMax
+            )}
           </div>
         </div>
 

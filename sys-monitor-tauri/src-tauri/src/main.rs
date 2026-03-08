@@ -37,6 +37,7 @@ pub struct DiskSnapshot {
     pub active: f64,
     pub read_mb_s: f64,
     pub write_mb_s: f64,
+    pub avg_response_ms: f64,
     pub temp_c: Option<f64>,
 }
 
@@ -65,6 +66,7 @@ pub struct DiskHistory {
     pub values: Vec<f64>,
     pub read_mb_s: f64,
     pub write_mb_s: f64,
+    pub avg_response_ms: f64,
     pub temp_c: Option<f64>,
 }
 
@@ -90,6 +92,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
                 .unwrap_or(0.0),
             read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
             write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+            avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
             temp_c: None,
         })
         .collect();
@@ -156,6 +159,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                     .unwrap_or_default(),
                 read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
                 write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+                avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
                 temp_c: None,
             })
             .collect(),
