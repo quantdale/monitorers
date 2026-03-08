@@ -16,6 +16,7 @@ export interface MetricsSnapshot {
   cpu: number;
   cpu_name: string;
   cpu_temp_c?: number | null;
+  nvidia_temp?: number | null;
   mem: number;
   mem_used_gb: number;
   mem_total_gb: number;

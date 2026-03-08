@@ -14,6 +14,7 @@ pub struct MetricsSnapshot {
     pub cpu: f64,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
+    pub nvidia_temp: Option<f64>,
     pub mem: f64,
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
@@ -93,13 +94,24 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         })
         .collect();
 
+    let nvidia_temp = s.nvidia_temp_history.back().copied();
     let gpus = s
         .gpu_histories
         .iter()
-        .map(|(_, name, hist)| GpuSnapshot {
-            name: name.clone(),
-            util: hist.back().copied().unwrap_or(0.0),
-            temp_c: None,
+        .map(|(_, name, hist)| {
+            let name_lower = name.to_lowercase();
+            let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
+                && nvidia_temp.is_some()
+            {
+                nvidia_temp
+            } else {
+                None
+            };
+            GpuSnapshot {
+                name: name.clone(),
+                util: hist.back().copied().unwrap_or(0.0),
+                temp_c,
+            }
         })
         .collect();
 
@@ -107,6 +119,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         cpu,
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
+        nvidia_temp,
         mem,
         mem_used_gb,
         mem_total_gb,
@@ -151,10 +164,20 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
         gpus: s
             .gpu_histories
             .iter()
-            .map(|(_, name, hist)| GpuHistory {
-                name: name.clone(),
-                values: hist.iter().copied().collect(),
-                temp_c: None,
+            .map(|(_, name, hist)| {
+                let name_lower = name.to_lowercase();
+                let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
+                    && s.nvidia_temp_history.back().is_some()
+                {
+                    s.nvidia_temp_history.back().copied()
+                } else {
+                    None
+                };
+                GpuHistory {
+                    name: name.clone(),
+                    values: hist.iter().copied().collect(),
+                    temp_c,
+                }
             })
             .collect(),
     }
@@ -198,16 +221,6 @@ fn main() {
                         None
                     }
                 };
-                let wmi_thermal: Option<wmi::WMIConnection> = match wmi::COMLibrary::new() {
-                    Ok(com) => match wmi::WMIConnection::with_namespace_path("ROOT\\WMI", com) {
-                        Ok(con) => {
-                            eprintln!("[WMI] Thermal (ROOT\\WMI) connection initialized.");
-                            Some(con)
-                        }
-                        Err(_) => None,
-                    },
-                    Err(_) => None,
-                };
 
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -216,7 +229,7 @@ fn main() {
                     let snapshot = {
                         let state = app_handle.state::<SafeAppState>();
                         let mut s = state.lock().unwrap();
-                        collector::refresh_all(&mut s, wmi_con.as_ref(), wmi_thermal.as_ref());
+                        collector::refresh_all(&mut s, wmi_con.as_ref());
                         build_snapshot(&s)
                     };
 

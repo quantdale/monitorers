@@ -147,7 +147,8 @@ fn strip_brand_prefix(caption: &str) -> String {
 /// Classify a LUID as iGPU or dGPU.
 ///
 /// Primary: keyword match on vendor caption from Win32_VideoController.
-/// Fallback: hardcoded LUIDs from the developer's machine.
+/// LUIDs not in the vendor map fall through to Unknown — no hardcoded fallbacks,
+/// since LUIDs are machine-specific and change across reboots.
 pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuClass {
     if let Some(vendor) = vendor_map.get(luid) {
         let v = vendor.to_lowercase();
@@ -158,14 +159,7 @@ pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuCla
             return GpuClass::DGpu;
         }
     }
-
-    // Hardcoded fallback LUIDs — machine-specific, serve as safety net.
-    match luid {
-        "0x00017A19" => GpuClass::IGpu, // Intel iGPU (GDI Render, VideoProcessing)
-        "0x00017C9F" => GpuClass::IGpu, // Intel Xe display adapter
-        "0x00017D0F" => GpuClass::DGpu, // Nvidia dGPU
-        _ => GpuClass::Unknown,
-    }
+    GpuClass::Unknown
 }
 
 // ── WMI GPU VENDOR MAP ───────────────────────────────────────────────────────
@@ -173,9 +167,14 @@ pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuCla
 /// Build a LUID → vendor-name map by positionally matching:
 ///   Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine (has LUIDs, no names)
 ///   Win32_VideoController (has names, no LUIDs)
+///
+/// `extra_luids`: LUIDs from PDH that may not appear in GPUEngine (e.g. dGPU engines
+/// that only show up when a process uses them). These get the last VideoController
+/// caption when we have more LUIDs than adapters.
 pub fn build_gpu_vendor_map(
     wmi_con: &wmi::WMIConnection,
     gpu_debug: bool,
+    extra_luids: impl Iterator<Item = String>,
 ) -> HashMap<String, String> {
     use std::collections::HashSet;
 
@@ -197,6 +196,9 @@ pub fn build_gpu_vendor_map(
             }
         }
     }
+    for luid in extra_luids {
+        luid_set.insert(luid);
+    }
     let mut luids: Vec<String> = luid_set.into_iter().collect();
     luids.sort(); // alphabetical sort mirrors PCI enumeration order
 
@@ -214,14 +216,24 @@ pub fn build_gpu_vendor_map(
     };
 
     let mut map: HashMap<String, String> = HashMap::new();
+    let last_caption = vc_rows
+        .last()
+        .and_then(|vc| vc.get("Caption"))
+        .and_then(|c| match c {
+            wmi::Variant::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
     for (i, luid) in luids.iter().enumerate() {
-        if let Some(vc) = vc_rows.get(i) {
-            let caption = match vc.get("Caption") {
-                Some(wmi::Variant::String(s)) => s.clone(),
-                _ => String::new(),
-            };
-            map.insert(luid.clone(), caption);
-        }
+        let caption = vc_rows
+            .get(i)
+            .and_then(|vc| vc.get("Caption"))
+            .and_then(|c| match c {
+                wmi::Variant::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| last_caption.clone());
+        map.insert(luid.clone(), caption);
     }
 
     if gpu_debug {
@@ -351,11 +363,6 @@ pub fn query_gpu_utilization_pdh(
         None => return result,
     };
 
-    let vendor_map = match wmi_con {
-        Some(con) => build_gpu_vendor_map(con, app.gpu_debug),
-        None => HashMap::new(),
-    };
-
     let mut luid_3d_totals: HashMap<String, f64> = HashMap::new();
 
     // SAFETY: PDH API calls. All mutable pointers point to stack variables or
@@ -404,25 +411,32 @@ pub fn query_gpu_utilization_pdh(
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if app.gpu_debug {
-                eprintln!("[PDH DEBUG] instance: {}", name);
-            }
             let luid = match extract_luid_from_name(&name) {
                 Some(l) => l,
                 None => continue,
             };
             let util = item.FmtValue.Anonymous.doubleValue.clamp(0.0, 100.0);
-            *luid_3d_totals.entry(luid).or_insert(0.0) += util;
+            *luid_3d_totals.entry(luid.clone()).or_insert(0.0) += util;
         }
     }
 
+    // Build vendor map with PDH LUIDs included so dGPU engines that only appear
+    // in PDH (not in GPUEngine WMI) get a caption.
+    let vendor_map = match wmi_con {
+        Some(con) => build_gpu_vendor_map(con, app.gpu_debug, luid_3d_totals.keys().cloned()),
+        None => HashMap::new(),
+    };
+
     // Build list from vendor_map so we include GPUs with 0% util.
-    let mut entries: Vec<(String, String, f64)> = Vec::new();
+    // Merge util by caption — multiple LUIDs (e.g. 0x00017C9F and 0x00017D0F) can
+    // map to the same physical GPU; sum their utilization.
+    let mut caption_util: HashMap<String, (GpuClass, f64)> = HashMap::new();
     for (luid, caption) in &vendor_map {
         let class = classify_luid(luid, &vendor_map);
         if matches!(class, GpuClass::Unknown) {
             if !app.gpu_error_logged {
-                eprintln!("[PDH] Unclassified LUID: {}", luid);
+                eprintln!("[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown", luid);
+                app.gpu_error_logged = true;
             }
             continue;
         }
@@ -431,14 +445,22 @@ pub fn query_gpu_utilization_pdh(
         if display_name.is_empty() {
             continue;
         }
-        entries.push((luid.clone(), display_name, util));
+        caption_util
+            .entry(display_name)
+            .and_modify(|(_, u)| {
+                *u = (*u + util).min(100.0);
+            })
+            .or_insert((class, util));
     }
 
-    // Sort: iGPU first, then dGPU; within each class by LUID.
+    let mut entries: Vec<(String, GpuClass, f64)> = caption_util
+        .into_iter()
+        .map(|(display_name, (class, util))| (display_name, class, util))
+        .collect();
+
+    // Sort: iGPU first, then dGPU; within each class by display name.
     entries.sort_by(|a, b| {
-        let class_a = classify_luid(&a.0, &vendor_map);
-        let class_b = classify_luid(&b.0, &vendor_map);
-        let ord = match (class_a, class_b) {
+        let ord = match (a.1, b.1) {
             (GpuClass::IGpu, GpuClass::DGpu) => std::cmp::Ordering::Less,
             (GpuClass::DGpu, GpuClass::IGpu) => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
@@ -447,12 +469,13 @@ pub fn query_gpu_utilization_pdh(
     });
 
     // For duplicate display names (same model), add " 1", " 2" suffix.
+    // Use display_name as stable key for history (merged LUIDs share one history).
     let mut name_counts: HashMap<String, usize> = HashMap::new();
-    for (_, name, _) in &entries {
+    for (name, _, _) in &entries {
         *name_counts.entry(name.clone()).or_insert(0) += 1;
     }
     let mut name_indices: HashMap<String, usize> = HashMap::new();
-    for (luid, display_name, util) in entries {
+    for (display_name, _class, util) in entries {
         let suffix = if *name_counts.get(&display_name).unwrap_or(&0) > 1 {
             let idx = *name_indices.entry(display_name.clone()).or_insert(0);
             name_indices.insert(display_name.clone(), idx + 1);
@@ -460,7 +483,7 @@ pub fn query_gpu_utilization_pdh(
         } else {
             String::new()
         };
-        result.push((luid, format!("{}{}", display_name, suffix), util));
+        result.push((display_name.clone(), format!("{}{}", display_name, suffix), util));
     }
 
     if app.gpu_debug {
@@ -725,7 +748,7 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
     push_history(&mut app.net_sent_history, sent_kbs, 3600);
 }
 
-// ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
+// ── CPU TEMPERATURE (WMI ROOT\CIMV2) ───────────────────────────────────────────
 
 /// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
 pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
@@ -737,20 +760,109 @@ pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
     }
 }
 
-/// Query CPU temperature from ACPI thermal zone (ROOT\WMI).
-/// CurrentTemperature is in tenths of Kelvin; returns temp in Celsius or None.
-pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64> {
-    let con = wmi_thermal?;
-    let rows = con
-        .raw_query::<HashMap<String, wmi::Variant>>("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")
-        .ok()?;
-    let row = rows.first()?;
-    let tenths_kelvin = match row.get("CurrentTemperature") {
-        Some(wmi::Variant::UI4(n)) => *n as f64,
-        Some(wmi::Variant::I4(n)) => (*n).max(0) as f64,
+/// Extract tenths-of-Kelvin from a WMI Variant. Handles UI4, UI8, I4, I8, R4, R8, String.
+pub fn variant_to_tenths_kelvin(v: Option<&wmi::Variant>) -> Option<f64> {
+    let tenths = match v? {
+        wmi::Variant::UI4(n) => *n as f64,
+        wmi::Variant::UI8(n) => *n as f64,
+        wmi::Variant::I4(n) => (*n).max(0) as f64,
+        wmi::Variant::I8(n) => (*n).max(0) as f64,
+        wmi::Variant::R4(n) => *n as f64,
+        wmi::Variant::R8(n) => *n,
+        wmi::Variant::String(s) => s.parse::<f64>().unwrap_or(0.0),
         _ => return None,
     };
-    tenths_kelvin_to_celsius_checked(tenths_kelvin)
+    Some(tenths)
+}
+
+/// Query CPU temperature from thermal zone info (ROOT\CIMV2).
+/// Uses Win32_PerfFormattedData_Counters_ThermalZoneInformation.HighPrecisionTemperature
+/// (tenths of Kelvin). Iterates all zones and returns max temp in Celsius, or None.
+pub fn query_cpu_temp_c(wmi_con: Option<&wmi::WMIConnection>) -> Option<f64> {
+    let con = wmi_con?;
+    let rows = con
+        .raw_query::<HashMap<String, wmi::Variant>>(
+            "SELECT HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation",
+        )
+        .ok()?;
+    let mut max_c: Option<f64> = None;
+    for row in &rows {
+        let tenths = variant_to_tenths_kelvin(row.get("HighPrecisionTemperature"));
+        if let Some(t) = tenths {
+            if let Some(c) = tenths_kelvin_to_celsius_checked(t) {
+                max_c = Some(max_c.map_or(c, |m| m.max(c)));
+            }
+        }
+    }
+    max_c
+}
+
+// ── NVAPI GPU TEMPERATURE ────────────────────────────────────────────────────
+
+/// Returns GPU core temperature in Celsius, or None if unavailable.
+/// Uses NVAPI — Nvidia's proprietary C SDK. Only works on systems with an
+/// Nvidia GPU and driver installed. Requires `nvapi` feature.
+#[cfg(feature = "nvapi")]
+pub fn query_nvidia_gpu_temp(state: &crate::state::AppState) -> Option<f32> {
+    // NVAPI must be initialized once per process — same reason as PDH query handle, stateful C API.
+    // unsafe: NVAPI is a C library, Rust cannot verify its safety.
+    // NVAPI_OK (0): all NVAPI functions return a status code; 0 = success.
+    if !state.nvapi_initialized {
+        return None;
+    }
+
+    unsafe {
+        use nvapi_sys::gpu::thermal::{
+            NvAPI_GPU_GetThermalSettings, NV_GPU_THERMAL_SETTINGS, NV_GPU_THERMAL_SETTINGS_VER,
+            NVAPI_THERMAL_TARGET_ALL,
+        };
+        use nvapi_sys::gpu::NvAPI_EnumPhysicalGPUs;
+        use nvapi_sys::handles::NvPhysicalGpuHandle;
+        use nvapi_sys::status::NVAPI_OK;
+        use nvapi_sys::types::NVAPI_MAX_PHYSICAL_GPUS;
+
+        let mut gpu_handles: [NvPhysicalGpuHandle; 64] = std::mem::zeroed();
+        let mut gpu_count: u32 = 0;
+        let status = NvAPI_EnumPhysicalGPUs(&mut gpu_handles, &mut gpu_count);
+        if status != NVAPI_OK || gpu_count == 0 {
+            return None;
+        }
+
+        // Query thermal settings. Use NVAPI_THERMAL_TARGET_ALL (15) to get all sensors,
+        // then pick the GPU core sensor (target == NVAPI_THERMAL_TARGET_GPU).
+        let mut thermal: NV_GPU_THERMAL_SETTINGS = std::mem::zeroed();
+        thermal.version = NV_GPU_THERMAL_SETTINGS_VER;
+
+        for i in 0..(gpu_count as usize).min(NVAPI_MAX_PHYSICAL_GPUS) {
+            let status = NvAPI_GPU_GetThermalSettings(
+                gpu_handles[i],
+                NVAPI_THERMAL_TARGET_ALL as u32,
+                &mut thermal,
+            );
+            if status == NVAPI_OK {
+                // Find GPU core sensor (target == 1 = NVAPI_THERMAL_TARGET_GPU)
+                for s in &thermal.sensor {
+                    if s.target == nvapi_sys::gpu::thermal::NVAPI_THERMAL_TARGET_GPU
+                        && s.currentTemp >= 0
+                        && s.currentTemp <= 150
+                    {
+                        return Some(s.currentTemp as f32);
+                    }
+                }
+                // Fallback: sensor[0] if no explicit GPU target
+                let temp = thermal.sensor[0].currentTemp;
+                if temp >= 0 && temp <= 150 {
+                    return Some(temp as f32);
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(feature = "nvapi"))]
+pub fn query_nvidia_gpu_temp(_state: &crate::state::AppState) -> Option<f32> {
+    None
 }
 
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
@@ -766,10 +878,13 @@ pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64>
 pub fn refresh_all(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
-    wmi_thermal: Option<&wmi::WMIConnection>,
 ) {
     refresh_cpu(app);
-    app.cpu_temp_c = query_cpu_temp_c(wmi_thermal);
+    app.cpu_temp_c = query_cpu_temp_c(wmi_con);
+    if app.cpu_temp_c.is_none() && !app.cpu_temp_error_logged {
+        app.cpu_temp_error_logged = true;
+        eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
+    }
     refresh_memory(app);
     refresh_network(app);
 
@@ -784,6 +899,14 @@ pub fn refresh_all(
     }
 
     let gpu_list = query_gpu_utilization_pdh(app, wmi_con);
+
+    // Query Nvidia GPU temperature
+    if let Some(temp) = query_nvidia_gpu_temp(app) {
+        push_history(&mut app.nvidia_temp_history, temp as f64, 3600);
+    } else {
+        push_history(&mut app.nvidia_temp_history, 0.0, 3600);
+    }
+
     let mut existing: HashMap<String, VecDeque<f64>> = app
         .gpu_histories
         .drain(..)
@@ -899,21 +1022,75 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_luid_fallback_igpu() {
-        let map: HashMap<String, String> = HashMap::new();
-        assert_eq!(classify_luid("0x00017A19", &map), GpuClass::IGpu);
+    fn test_classify_luid_nvidia_by_keyword() {
+        let mut map = HashMap::new();
+        map.insert("0xABCD1234".to_string(), "NVIDIA GeForce RTX 3060".to_string());
+        assert!(matches!(classify_luid("0xABCD1234", &map), GpuClass::DGpu));
     }
 
     #[test]
-    fn test_classify_luid_fallback_dgpu() {
-        let map: HashMap<String, String> = HashMap::new();
-        assert_eq!(classify_luid("0x00017D0F", &map), GpuClass::DGpu);
+    fn test_classify_luid_intel_by_keyword() {
+        let mut map = HashMap::new();
+        map.insert("0xABCD5678".to_string(), "Intel(R) Iris Xe Graphics".to_string());
+        assert!(matches!(classify_luid("0xABCD5678", &map), GpuClass::IGpu));
     }
 
     #[test]
-    fn test_classify_luid_unknown() {
+    fn test_classify_luid_amd_by_keyword() {
+        let mut map = HashMap::new();
+        map.insert("0xABCDEF00".to_string(), "AMD Radeon RX 6700 XT".to_string());
+        assert!(matches!(classify_luid("0xABCDEF00", &map), GpuClass::DGpu));
+    }
+
+    #[test]
+    fn test_classify_luid_unknown_returns_unknown() {
         let map: HashMap<String, String> = HashMap::new();
-        assert_eq!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown);
+        assert!(matches!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown));
+    }
+
+    // --- variant_to_tenths_kelvin ---
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_ui4() {
+        // 3232 tenths K ≈ 50 °C
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI4(3232))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_ui8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI8(2732))), Some(2732.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_i4() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(3000))), Some(3000.0));
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(-1))), Some(0.0)); // clamped
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_i8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I8(3232))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_r4() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R4(3232.0))), Some(3232.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_r8() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R8(2731.5))), Some(2731.5));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_string() {
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("3232".into()))), Some(3232.0));
+        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("invalid".into()))), Some(0.0));
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_none() {
+        assert_eq!(variant_to_tenths_kelvin(None), None);
     }
 
     // --- tenths_kelvin_to_celsius_checked ---
@@ -987,6 +1164,18 @@ mod tests {
         push_history(&mut d, 7.0, 1);
         assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![7.0]);
     }
+
+    // --- NVAPI helper tests ---
+
+    #[test]
+    fn test_nvidia_temp_returns_none_gracefully() {
+        // On a system where NVAPI is unavailable or GPU is absent,
+        // query_nvidia_gpu_temp() must return None, not panic.
+        let state = crate::state::AppState::new();
+        let _ = query_nvidia_gpu_temp(&state);
+    }
+
+    // --- push_history ---
 
     #[test]
     fn test_push_history_multiple_pushes_at_capacity() {
