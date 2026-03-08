@@ -17,12 +17,12 @@ pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max
 
 /// Open a PDH query and register GPU + disk utilization counters once at startup.
 ///
-/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt))`.
+/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))`.
 /// Returns `None` if the query or 3D counter cannot be opened.
 ///
 /// The query handle must live for the process lifetime — recreating it resets
 /// the baseline and always returns 0%.
-pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>)> {
+pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>, Option<isize>, Option<isize>)> {
     // SAFETY: PDH C API calls via FFI. All pointer arguments are stack variables.
     // Return codes are checked before any output values are read.
     unsafe {
@@ -65,11 +65,31 @@ pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>
                 None
             };
 
+        let path_disk_read = windows::core::w!(r"\PhysicalDisk(*)\Disk Read Bytes/sec");
+        let mut counter_disk_read: isize = 0;
+        let counter_disk_read_opt =
+            if PdhAddEnglishCounterW(query, path_disk_read, 0, &mut counter_disk_read) == 0 {
+                Some(counter_disk_read)
+            } else {
+                eprintln!("[PDH] Failed to add disk read bytes/sec counter.");
+                None
+            };
+
+        let path_disk_write = windows::core::w!(r"\PhysicalDisk(*)\Disk Write Bytes/sec");
+        let mut counter_disk_write: isize = 0;
+        let counter_disk_write_opt =
+            if PdhAddEnglishCounterW(query, path_disk_write, 0, &mut counter_disk_write) == 0 {
+                Some(counter_disk_write)
+            } else {
+                eprintln!("[PDH] Failed to add disk write bytes/sec counter.");
+                None
+            };
+
         // First collect — establishes the baseline (value₁). Real readings
         // start on the second poll. The first result is always 0%, by design.
         let _ = PdhCollectQueryData(query);
         eprintln!("[PDH] GPU/disk counters initialized successfully.");
-        Some((query, counter_3d, counter_video_opt, counter_disk_opt))
+        Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))
     }
 }
 
@@ -530,6 +550,91 @@ pub fn query_disk_active_time(
     }
 }
 
+/// Read \PhysicalDisk(*)\Disk Read Bytes/sec and Disk Write Bytes/sec.
+/// Returns (instance_name -> (read_mb_s, write_mb_s)). Skips _Total.
+fn query_disk_read_write(
+    app: &crate::state::AppState,
+) -> HashMap<String, (f64, f64)> {
+    let mut result = HashMap::new();
+    let counter_read = match app.pdh_disk_read_counter {
+        Some(c) => c,
+        None => return result,
+    };
+    let counter_write = match app.pdh_disk_write_counter {
+        Some(c) => c,
+        None => return result,
+    };
+
+    const BYTES_TO_MB: f64 = 1.0 / (1024.0 * 1024.0);
+
+    let read_map = query_pdh_counter_array(counter_read);
+    let write_map = query_pdh_counter_array(counter_write);
+
+    for (name, read_bps) in read_map {
+        if name == "_Total" {
+            continue;
+        }
+        let write_bps = write_map.get(&name).copied().unwrap_or(0.0);
+        result.insert(
+            name,
+            (read_bps * BYTES_TO_MB, write_bps * BYTES_TO_MB),
+        );
+    }
+    for (name, write_bps) in write_map {
+        if name == "_Total" {
+            continue;
+        }
+        if !result.contains_key(&name) {
+            result.insert(name, (0.0, write_bps * BYTES_TO_MB));
+        }
+    }
+
+    result
+}
+
+/// Read a PDH counter array into instance_name -> value map.
+fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
+    let mut result = HashMap::new();
+    unsafe {
+        let mut buf_size: u32 = 0;
+        let mut item_count: u32 = 0;
+        let _ = PdhGetFormattedCounterArrayW(
+            counter,
+            PDH_FMT_DOUBLE,
+            &mut buf_size,
+            &mut item_count,
+            None,
+        );
+        if item_count == 0 {
+            return result;
+        }
+        let u64_count = (buf_size as usize * 3 + 7) / 8;
+        let mut backing: Vec<u64> = vec![0u64; u64_count];
+        let mut actual_buf_size: u32 = (u64_count * 8) as u32;
+        let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
+        let status = PdhGetFormattedCounterArrayW(
+            counter,
+            PDH_FMT_DOUBLE,
+            &mut actual_buf_size,
+            &mut item_count,
+            Some(buf_ptr),
+        );
+        if status != 0 {
+            return result;
+        }
+        for i in 0..item_count as usize {
+            let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
+            if item.FmtValue.CStatus > 1 {
+                continue;
+            }
+            let name = item.szName.to_string().unwrap_or_default();
+            let value = item.FmtValue.Anonymous.doubleValue;
+            result.insert(name, value);
+        }
+    }
+    result
+}
+
 pub fn refresh_disk(app: &mut crate::state::AppState) {
     app.disks.refresh(false);
 
@@ -541,6 +646,10 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
             known_drive_letters.insert(mount_upper[..2].to_string(), mount);
         }
     }
+
+    let read_write = query_disk_read_write(app);
+    app.disk_read_mb_s.clear();
+    app.disk_write_mb_s.clear();
 
     for (instance_name, pct_active) in query_disk_active_time(app) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
@@ -560,7 +669,12 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
         }
 
         if let Some(history) = app.disk_active_histories.get_mut(&disk_key) {
-            push_history(history, pct_active, 3600);
+            push_history(history, pct_active.clamp(0.0, 100.0), 3600);
+        }
+
+        if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
+            app.disk_read_mb_s.insert(disk_key.clone(), *read_mb);
+            app.disk_write_mb_s.insert(disk_key.clone(), *write_mb);
         }
     }
 }
@@ -569,7 +683,7 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
 
 pub fn refresh_cpu(app: &mut crate::state::AppState) {
     app.system.refresh_cpu_usage();
-    let cpu_pct = app.system.global_cpu_usage() as f64;
+    let cpu_pct = app.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
     app.cpu_history.push_back(cpu_pct);
     if app.cpu_history.len() > 3600 {
         app.cpu_history.pop_front();
@@ -585,7 +699,7 @@ pub fn refresh_memory(app: &mut crate::state::AppState) {
     } else {
         0.0
     };
-    app.mem_history.push_back(mem_pct);
+    app.mem_history.push_back(mem_pct.clamp(0.0, 100.0));
     if app.mem_history.len() > 3600 {
         app.mem_history.pop_front();
     }
@@ -605,10 +719,34 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
         total_sent_bytes += data.transmitted();
     }
 
-    let recv_kbs = total_recv_bytes as f64 / 1024.0;
-    let sent_kbs = total_sent_bytes as f64 / 1024.0;
+    let recv_kbs = (total_recv_bytes as f64 / 1024.0).max(0.0);
+    let sent_kbs = (total_sent_bytes as f64 / 1024.0).max(0.0);
     push_history(&mut app.net_recv_history, recv_kbs, 3600);
     push_history(&mut app.net_sent_history, sent_kbs, 3600);
+}
+
+// ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
+
+/// Query CPU temperature from ACPI thermal zone (ROOT\WMI).
+/// CurrentTemperature is in tenths of Kelvin; returns temp in Celsius or None.
+pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64> {
+    let con = wmi_thermal?;
+    let rows = con
+        .raw_query::<HashMap<String, wmi::Variant>>("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")
+        .ok()?;
+    let row = rows.first()?;
+    let tenths_kelvin = match row.get("CurrentTemperature") {
+        Some(wmi::Variant::UI4(n)) => *n as f64,
+        Some(wmi::Variant::I4(n)) => (*n).max(0) as f64,
+        _ => return None,
+    };
+    // Tenths of Kelvin to Celsius: (tenths_kelvin / 10.0) - 273.15
+    let temp_c = (tenths_kelvin / 10.0) - 273.15;
+    if temp_c >= -50.0 && temp_c <= 150.0 {
+        Some(temp_c)
+    } else {
+        None
+    }
 }
 
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
@@ -624,8 +762,10 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
 pub fn refresh_all(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
+    wmi_thermal: Option<&wmi::WMIConnection>,
 ) {
     refresh_cpu(app);
+    app.cpu_temp_c = query_cpu_temp_c(wmi_thermal);
     refresh_memory(app);
     refresh_network(app);
 
@@ -649,7 +789,7 @@ pub fn refresh_all(
         .into_iter()
         .map(|(luid, display_name, util)| {
             let mut hist = existing.remove(&luid).unwrap_or_else(|| VecDeque::with_capacity(3600));
-            push_history(&mut hist, util, 3600);
+            push_history(&mut hist, util.clamp(0.0, 100.0), 3600);
             (luid, display_name, hist)
         })
         .collect();
