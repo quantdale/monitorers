@@ -4,7 +4,7 @@
 mod collector;
 mod state;
 
-use state::SafeAppState;
+use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use tauri::Manager;
 
 // ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
@@ -72,37 +72,30 @@ pub struct DiskHistory {
 
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
-fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
-    let cpu = s.cpu.history.back().copied().unwrap_or(0.0);
-    let mem = s.mem.history.back().copied().unwrap_or(0.0);
-    let total_mem_bytes = s.cpu.system.total_memory();
-    let used_mem_bytes = s.cpu.system.used_memory();
-    let mem_total_gb = total_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    let mem_used_gb = used_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
+    let cpu = s.cpu_history.back().copied().unwrap_or(0.0);
+    let mem = s.mem_history.back().copied().unwrap_or(0.0);
 
     let disks = s
-        .disk
-        .display_order
+        .disk_display_order
         .iter()
         .map(|k| DiskSnapshot {
             key: k.clone(),
             active: s
-                .disk
-                .active_histories
+                .disk_active_histories
                 .get(k)
                 .and_then(|h| h.back().copied())
                 .unwrap_or(0.0),
-            read_mb_s: s.disk.read_mb_s.get(k).copied().unwrap_or(0.0),
-            write_mb_s: s.disk.write_mb_s.get(k).copied().unwrap_or(0.0),
-            avg_response_ms: s.disk.avg_response_ms.get(k).copied().unwrap_or(0.0),
+            read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
+            write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+            avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
             temp_c: None,
         })
         .collect();
 
-    let nvidia_temp = s.gpu.nvidia_temp;
+    let nvidia_temp = s.nvidia_temp;
     let gpus = s
-        .gpu
-        .entries
+        .gpu_entries
         .iter()
         .map(|(_, name, hist)| {
             let name_lower = name.to_lowercase();
@@ -123,15 +116,15 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
 
     MetricsSnapshot {
         cpu,
-        cpu_name: s.cpu.name.clone(),
-        cpu_temp_c: s.cpu.temp_c,
+        cpu_name: s.cpu_name.clone(),
+        cpu_temp_c: s.cpu_temp_c,
         nvidia_temp,
         mem,
-        mem_used_gb,
-        mem_total_gb,
+        mem_used_gb: s.mem_used_gb,
+        mem_total_gb: s.mem_total_gb,
         disks,
-        net_recv_kb: s.network.recv_history.back().copied().unwrap_or(0.0),
-        net_sent_kb: s.network.sent_history.back().copied().unwrap_or(0.0),
+        net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
+        net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
         gpus,
     }
 }
@@ -142,44 +135,39 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
 /// After that, incremental updates arrive via the "metrics-update" event.
 #[tauri::command]
 fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
-    let s = state.lock().unwrap();
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
     HistoryPayload {
-        cpu: s.cpu.history.iter().copied().collect(),
-        cpu_name: s.cpu.name.clone(),
-        cpu_temp_c: s.cpu.temp_c,
-        mem: s.mem.history.iter().copied().collect(),
+        cpu: s.cpu_history.iter().copied().collect(),
+        cpu_name: s.cpu_name.clone(),
+        cpu_temp_c: s.cpu_temp_c,
+        mem: s.mem_history.iter().copied().collect(),
         disks: s
-            .disk
-            .display_order
+            .disk_display_order
             .iter()
-            .map(|k: &String| DiskHistory {
+            .map(|k| DiskHistory {
                 key: k.clone(),
                 values: s
-                    .disk
-                    .active_histories
+                    .disk_active_histories
                     .get(k)
-                    .map(|h: &std::collections::VecDeque<f64>| {
-                        h.iter().copied().collect::<Vec<f64>>()
-                    })
+                    .map(|h| h.iter().copied().collect::<Vec<f64>>())
                     .unwrap_or_default(),
-                read_mb_s: s.disk.read_mb_s.get(k).copied().unwrap_or(0.0),
-                write_mb_s: s.disk.write_mb_s.get(k).copied().unwrap_or(0.0),
-                avg_response_ms: s.disk.avg_response_ms.get(k).copied().unwrap_or(0.0),
+                read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
+                write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+                avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
                 temp_c: None,
             })
             .collect(),
-        net_recv: s.network.recv_history.iter().copied().collect(),
-        net_sent: s.network.sent_history.iter().copied().collect(),
+        net_recv: s.net_recv_history.iter().copied().collect(),
+        net_sent: s.net_sent_history.iter().copied().collect(),
         gpus: s
-            .gpu
-            .entries
+            .gpu_entries
             .iter()
             .map(|(_, name, hist)| {
                 let name_lower = name.to_lowercase();
                 let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
-                    && s.gpu.nvidia_temp.is_some()
+                    && s.nvidia_temp.is_some()
                 {
-                    s.gpu.nvidia_temp
+                    s.nvidia_temp
                 } else {
                     None
                 };
@@ -198,15 +186,24 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // AppState::new() must run here (after Tauri/winit has initialised
-            // COM via CoInitializeEx) rather than inside manage(), because
-            // WMIConnection uses assume_initialized() which requires COM to
-            // already be set up on the calling thread.
-            let app_state = state::AppState::new();
-            app.manage(SafeAppState::new(app_state));
+            // CollectorState::new() must run here (after Tauri/winit has initialised
+            // COM via CoInitializeEx) for PDH and sysinfo init.
+            let mut collector_state = CollectorState::new();
+            let cpu_name = collector_state
+                .system
+                .cpus()
+                .first()
+                .map(|c| c.brand().to_string())
+                .unwrap_or_default();
+            let cpu_name = if cpu_name.is_empty() {
+                "CPU".to_string()
+            } else {
+                cpu_name
+            };
 
-            // Clone the AppHandle — it is Send + Clone and carries a reference
-            // to all managed state via Arc internally.
+            let history_store = HistoryStore::new(&cpu_name);
+            app.manage(SafeHistoryStore::new(history_store));
+
             let app_handle = app.handle();
 
             std::thread::spawn(move || {
@@ -235,15 +232,17 @@ fn main() {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
 
-                    // Acquire managed state, poll all metrics, build snapshot.
+                    // All slow I/O — no lock held
+                    let raw = collector::poll(&mut collector_state, wmi_con.as_ref());
+
+                    // Lock held for microseconds only
                     let snapshot = {
-                        let state = app_handle.state::<SafeAppState>();
-                        let mut s = state.lock().unwrap();
-                        collector::refresh_all(&mut s, wmi_con.as_ref());
+                        let store = app_handle.state::<SafeHistoryStore>();
+                        let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+                        collector::commit(&mut s, &raw);
                         build_snapshot(&s)
                     };
 
-                    // Emit to all open frontend windows.
                     app_handle.emit_all("metrics-update", snapshot).ok();
                 }
             });
