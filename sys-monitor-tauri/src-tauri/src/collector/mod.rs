@@ -40,8 +40,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
             return None;
         }
 
-        let path_3d =
-            windows::core::w!(r"\GPU Engine(*engtype_3D*)\Utilization Percentage");
+        let path_3d = windows::core::w!(r"\GPU Engine(*engtype_3D*)\Utilization Percentage");
         let mut counter_3d: isize = 0;
         if PdhAddEnglishCounterW(query, path_3d, 0, &mut counter_3d) != 0 {
             eprintln!("[PDH] Failed to add GPU 3D counter — GPU metrics unavailable.");
@@ -84,7 +83,8 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
         let path_disk_response = windows::core::w!(r"\PhysicalDisk(*)\Avg. Disk sec/Transfer");
         let mut counter_disk_response: isize = 0;
         let counter_disk_response_opt =
-            if PdhAddEnglishCounterW(query, path_disk_response, 0, &mut counter_disk_response) == 0 {
+            if PdhAddEnglishCounterW(query, path_disk_response, 0, &mut counter_disk_response) == 0
+            {
                 Some(counter_disk_response)
             } else {
                 eprintln!("[PDH] Failed to add disk avg response time counter.");
@@ -171,11 +171,8 @@ pub fn poll(
             )
         };
 
-    let gpu_updates = gpu::query_gpu_utilization_pdh(
-        &collector.pdh,
-        wmi_con,
-        &collector.gpu_error_lock,
-    );
+    let gpu_updates =
+        gpu::query_gpu_utilization_pdh(&collector.pdh, wmi_con, &collector.gpu_error_lock);
 
     let nvidia_temp = nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
 
@@ -202,7 +199,11 @@ pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPo
     push_history(&mut store.cpu_history, poll.cpu_usage, MAX_HISTORY);
     store.cpu_temp_c = poll.cpu_temp_c;
 
-    push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), MAX_HISTORY);
+    push_history(
+        &mut store.mem_history,
+        poll.mem_pct.clamp(0.0, 100.0),
+        MAX_HISTORY,
+    );
     store.mem_used_gb = poll.mem_used_gb;
     store.mem_total_gb = poll.mem_total_gb;
 
@@ -218,7 +219,9 @@ pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPo
         .gpu_updates
         .iter()
         .map(|(key, display_name, util)| {
-            let mut hist = existing.remove(key).unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
+            let mut hist = existing
+                .remove(key)
+                .unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
             push_history(&mut hist, util.clamp(0.0, 100.0), MAX_HISTORY);
             (key.clone(), display_name.clone(), hist)
         })

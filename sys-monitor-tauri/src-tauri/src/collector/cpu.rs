@@ -58,39 +58,66 @@ mod tests {
     #[test]
     fn test_variant_to_tenths_kelvin_ui4() {
         // 3232 tenths K ≈ 50 °C
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI4(3232))), Some(3232.0));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::UI4(3232))),
+            Some(3232.0)
+        );
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_ui8() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::UI8(2732))), Some(2732.0));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::UI8(2732))),
+            Some(2732.0)
+        );
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_i4() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(3000))), Some(3000.0));
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I4(-1))), Some(0.0)); // clamped
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::I4(3000))),
+            Some(3000.0)
+        );
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::I4(-1))),
+            Some(0.0)
+        ); // clamped
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_i8() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::I8(3232))), Some(3232.0));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::I8(3232))),
+            Some(3232.0)
+        );
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_r4() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R4(3232.0))), Some(3232.0));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::R4(3232.0))),
+            Some(3232.0)
+        );
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_r8() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::R8(2731.5))), Some(2731.5));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::R8(2731.5))),
+            Some(2731.5)
+        );
     }
 
     #[test]
     fn test_variant_to_tenths_kelvin_string() {
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("3232".into()))), Some(3232.0));
-        assert_eq!(variant_to_tenths_kelvin(Some(&wmi::Variant::String("invalid".into()))), Some(0.0));
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::String("3232".into()))),
+            Some(3232.0)
+        );
+        assert_eq!(
+            variant_to_tenths_kelvin(Some(&wmi::Variant::String("invalid".into()))),
+            Some(0.0)
+        );
     }
 
     #[test]

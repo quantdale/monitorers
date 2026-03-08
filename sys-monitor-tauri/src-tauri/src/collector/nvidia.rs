@@ -14,8 +14,8 @@ pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
 
     unsafe {
         use nvapi_sys::gpu::thermal::{
-            NvAPI_GPU_GetThermalSettings, NV_GPU_THERMAL_SETTINGS, NV_GPU_THERMAL_SETTINGS_VER,
-            NVAPI_THERMAL_TARGET_ALL,
+            NvAPI_GPU_GetThermalSettings, NVAPI_THERMAL_TARGET_ALL, NV_GPU_THERMAL_SETTINGS,
+            NV_GPU_THERMAL_SETTINGS_VER,
         };
         use nvapi_sys::gpu::NvAPI_EnumPhysicalGPUs;
         use nvapi_sys::handles::NvPhysicalGpuHandle;

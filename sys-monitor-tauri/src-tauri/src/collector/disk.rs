@@ -104,10 +104,7 @@ fn query_disk_read_write(pdh: &crate::state::PdhHandles) -> HashMap<String, (f64
             continue;
         }
         let write_bps = write_map.get(&name).copied().unwrap_or(0.0);
-        result.insert(
-            name,
-            (read_bps * BYTES_TO_MB, write_bps * BYTES_TO_MB),
-        );
+        result.insert(name, (read_bps * BYTES_TO_MB, write_bps * BYTES_TO_MB));
     }
     for (name, write_bps) in write_map {
         if name == "_Total" {
@@ -275,10 +272,7 @@ mod tests {
 
     #[test]
     fn test_pdh_instance_two_drives() {
-        assert_eq!(
-            pdh_instance_to_drive_letters("0 C: D:"),
-            vec!["C:", "D:"]
-        );
+        assert_eq!(pdh_instance_to_drive_letters("0 C: D:"), vec!["C:", "D:"]);
     }
 
     #[test]
@@ -288,7 +282,10 @@ mod tests {
 
     #[test]
     fn test_pdh_instance_total_empty() {
-        assert_eq!(pdh_instance_to_drive_letters("_Total"), vec![] as Vec<String>);
+        assert_eq!(
+            pdh_instance_to_drive_letters("_Total"),
+            vec![] as Vec<String>
+        );
     }
 
     #[test]

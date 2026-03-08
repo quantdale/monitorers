@@ -9,12 +9,12 @@ use windows::Win32::System::Performance::PdhCloseQuery;
 // PDH rate counters store their baseline inside the handle.
 
 pub struct PdhHandles {
-    pub query: Option<isize>,                  // PDH_HQUERY — container for all counters
-    pub gpu_3d_counter: Option<isize>,         // \GPU Engine(*engtype_3D*)\Utilization Percentage
-    pub disk_active_counter: Option<isize>,    // \PhysicalDisk(*)\% Idle Time
-    pub disk_read_counter: Option<isize>,      // \PhysicalDisk(*)\Disk Read Bytes/sec
-    pub disk_write_counter: Option<isize>,     // \PhysicalDisk(*)\Disk Write Bytes/sec
-    pub disk_response_counter: Option<isize>,  // \PhysicalDisk(*)\Avg. Disk sec/Transfer
+    pub query: Option<isize>,          // PDH_HQUERY — container for all counters
+    pub gpu_3d_counter: Option<isize>, // \GPU Engine(*engtype_3D*)\Utilization Percentage
+    pub disk_active_counter: Option<isize>, // \PhysicalDisk(*)\% Idle Time
+    pub disk_read_counter: Option<isize>, // \PhysicalDisk(*)\Disk Read Bytes/sec
+    pub disk_write_counter: Option<isize>, // \PhysicalDisk(*)\Disk Write Bytes/sec
+    pub disk_response_counter: Option<isize>, // \PhysicalDisk(*)\Avg. Disk sec/Transfer
 }
 
 impl Drop for PdhHandles {

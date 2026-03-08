@@ -101,7 +101,10 @@ pub fn build_gpu_vendor_map(
     ) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[GPU] build_gpu_vendor_map: LUID enumeration failed: {:?}", e);
+            eprintln!(
+                "[GPU] build_gpu_vendor_map: LUID enumeration failed: {:?}",
+                e
+            );
             return HashMap::new();
         }
     };
@@ -120,9 +123,9 @@ pub fn build_gpu_vendor_map(
     let mut luids: Vec<String> = luid_set.into_iter().collect();
     luids.sort(); // alphabetical sort mirrors PCI enumeration order
 
-    let vc_rows = match wmi_con.raw_query::<HashMap<String, wmi::Variant>>(
-        "SELECT Caption FROM Win32_VideoController",
-    ) {
+    let vc_rows = match wmi_con
+        .raw_query::<HashMap<String, wmi::Variant>>("SELECT Caption FROM Win32_VideoController")
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!(
@@ -258,7 +261,10 @@ pub fn query_gpu_utilization_pdh(
         let class = classify_luid(luid, &vendor_map);
         if matches!(class, GpuClass::Unknown) {
             gpu_error_lock.get_or_init(|| {
-                eprintln!("[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown", luid);
+                eprintln!(
+                    "[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown",
+                    luid
+                );
             });
             continue;
         }
@@ -305,7 +311,11 @@ pub fn query_gpu_utilization_pdh(
         } else {
             String::new()
         };
-        result.push((display_name.clone(), format!("{}{}", display_name, suffix), util));
+        result.push((
+            display_name.clone(),
+            format!("{}{}", display_name, suffix),
+            util,
+        ));
     }
 
     if cfg!(debug_assertions) {
@@ -387,27 +397,39 @@ mod tests {
     #[test]
     fn test_classify_luid_nvidia_by_keyword() {
         let mut map = HashMap::new();
-        map.insert("0xABCD1234".to_string(), "NVIDIA GeForce RTX 3060".to_string());
+        map.insert(
+            "0xABCD1234".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
         assert!(matches!(classify_luid("0xABCD1234", &map), GpuClass::DGpu));
     }
 
     #[test]
     fn test_classify_luid_intel_by_keyword() {
         let mut map = HashMap::new();
-        map.insert("0xABCD5678".to_string(), "Intel(R) Iris Xe Graphics".to_string());
+        map.insert(
+            "0xABCD5678".to_string(),
+            "Intel(R) Iris Xe Graphics".to_string(),
+        );
         assert!(matches!(classify_luid("0xABCD5678", &map), GpuClass::IGpu));
     }
 
     #[test]
     fn test_classify_luid_amd_by_keyword() {
         let mut map = HashMap::new();
-        map.insert("0xABCDEF00".to_string(), "AMD Radeon RX 6700 XT".to_string());
+        map.insert(
+            "0xABCDEF00".to_string(),
+            "AMD Radeon RX 6700 XT".to_string(),
+        );
         assert!(matches!(classify_luid("0xABCDEF00", &map), GpuClass::DGpu));
     }
 
     #[test]
     fn test_classify_luid_unknown_returns_unknown() {
         let map: HashMap<String, String> = HashMap::new();
-        assert!(matches!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown));
+        assert!(matches!(
+            classify_luid("0xDEADBEEF", &map),
+            GpuClass::Unknown
+        ));
     }
 }
