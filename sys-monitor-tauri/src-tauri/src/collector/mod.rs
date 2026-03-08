@@ -48,18 +48,6 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
             return None;
         }
 
-        let path_video = windows::core::w!(
-            r"\GPU Engine(*engtype_VideoDecode*)\Utilization Percentage"
-        );
-        let mut counter_video: isize = 0;
-        let counter_video_opt =
-            if PdhAddEnglishCounterW(query, path_video, 0, &mut counter_video) == 0 {
-                Some(counter_video)
-            } else {
-                eprintln!("[PDH] VideoDecode counter unavailable — video GPU tracking disabled.");
-                None
-            };
-
         // Disk % Idle Time added to the same query as GPU so one
         // PdhCollectQueryData snapshots both domains atomically.
         // active% = 100 - idle%  (inverted in query_disk_active_time).
@@ -110,7 +98,6 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
         Some(crate::state::PdhHandles {
             query: Some(query),
             gpu_3d_counter: Some(counter_3d),
-            gpu_video_counter: counter_video_opt,
             disk_active_counter: counter_disk_opt,
             disk_read_counter: counter_disk_read_opt,
             disk_write_counter: counter_disk_write_opt,

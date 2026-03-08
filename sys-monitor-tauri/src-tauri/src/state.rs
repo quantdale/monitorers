@@ -11,8 +11,6 @@ use windows::Win32::System::Performance::PdhCloseQuery;
 pub struct PdhHandles {
     pub query: Option<isize>,                  // PDH_HQUERY — container for all counters
     pub gpu_3d_counter: Option<isize>,         // \GPU Engine(*engtype_3D*)\Utilization Percentage
-    #[allow(dead_code)]
-    pub gpu_video_counter: Option<isize>,      // \GPU Engine(*engtype_VideoDecode*)\Utilization Percentage (dead_code)
     pub disk_active_counter: Option<isize>,    // \PhysicalDisk(*)\% Idle Time
     pub disk_read_counter: Option<isize>,      // \PhysicalDisk(*)\Disk Read Bytes/sec
     pub disk_write_counter: Option<isize>,     // \PhysicalDisk(*)\Disk Write Bytes/sec
@@ -70,7 +68,6 @@ impl CollectorState {
         let pdh = crate::collector::new_pdh_gpu_query().unwrap_or_else(|| PdhHandles {
             query: None,
             gpu_3d_counter: None,
-            gpu_video_counter: None,
             disk_active_counter: None,
             disk_read_counter: None,
             disk_write_counter: None,
