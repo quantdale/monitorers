@@ -1,10 +1,13 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::OnceLock;
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
     PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
 };
 
 // ── PUSH HISTORY HELPER ──────────────────────────────────────────────────────
+
+const MAX_HISTORY: usize = 3600;
 
 pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max_len: usize) {
     deque.push_back(value);
@@ -17,12 +20,12 @@ pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max
 
 /// Open a PDH query and register GPU + disk utilization counters once at startup.
 ///
-/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt, counter_disk_response_opt))`.
+/// Returns `Some(PdhHandles)` with all counters that could be opened.
 /// Returns `None` if the query or 3D counter cannot be opened.
 ///
 /// The query handle must live for the process lifetime — recreating it resets
 /// the baseline and always returns 0%.
-pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>, Option<isize>, Option<isize>, Option<isize>)> {
+pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
     // SAFETY: PDH C API calls via FFI. All pointer arguments are stack variables.
     // Return codes are checked before any output values are read.
     unsafe {
@@ -99,7 +102,15 @@ pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>
         // start on the second poll. The first result is always 0%, by design.
         let _ = PdhCollectQueryData(query);
         eprintln!("[PDH] GPU/disk counters initialized successfully.");
-        Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt, counter_disk_response_opt))
+        Some(crate::state::PdhHandles {
+            query: Some(query),
+            gpu_3d_counter: Some(counter_3d),
+            gpu_video_counter: counter_video_opt,
+            disk_active_counter: counter_disk_opt,
+            disk_read_counter: counter_disk_read_opt,
+            disk_write_counter: counter_disk_write_opt,
+            disk_response_counter: counter_disk_response_opt,
+        })
     }
 }
 
@@ -193,7 +204,6 @@ pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuCla
 /// caption when we have more LUIDs than adapters.
 pub fn build_gpu_vendor_map(
     wmi_con: &wmi::WMIConnection,
-    gpu_debug: bool,
     extra_luids: impl Iterator<Item = String>,
 ) -> HashMap<String, String> {
     use std::collections::HashSet;
@@ -256,7 +266,7 @@ pub fn build_gpu_vendor_map(
         map.insert(luid.clone(), caption);
     }
 
-    if gpu_debug {
+    if cfg!(debug_assertions) {
         eprintln!("[GPU DEBUG] Vendor map: {:?}", map);
     }
     map
@@ -267,8 +277,7 @@ pub fn build_gpu_vendor_map(
 #[allow(dead_code)]
 pub fn query_gpu_perf_counters(
     wmi_con: &wmi::WMIConnection,
-    gpu_debug: bool,
-    gpu_error_logged: &mut bool,
+    gpu_error_lock: &OnceLock<()>,
 ) -> (Vec<(String, f64)>, Vec<(String, f64)>) {
     let query = "SELECT Name, UtilizationPercentage \
                  FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine";
@@ -276,24 +285,22 @@ pub fn query_gpu_perf_counters(
     let rows = match wmi_con.raw_query::<HashMap<String, wmi::Variant>>(query) {
         Ok(r) => r,
         Err(e) => {
-            if !*gpu_error_logged {
+            gpu_error_lock.get_or_init(|| {
                 eprintln!("[GPU] WMI query failed: {:?}", e);
                 eprintln!(
                     "[GPU] GPUPerformanceCounters class not found. \
                      GPU drivers may not expose WMI performance counters \
                      (virtual machine, old driver, or WDDM < 2.0)."
                 );
-                *gpu_error_logged = true;
-            }
+            });
             return (vec![], vec![]);
         }
     };
 
     if rows.is_empty() {
-        if !*gpu_error_logged {
+        gpu_error_lock.get_or_init(|| {
             eprintln!("[GPU] WMI query returned no results.");
-            *gpu_error_logged = true;
-        }
+        });
         return (vec![], vec![]);
     }
 
@@ -301,7 +308,7 @@ pub fn query_gpu_perf_counters(
     let mut luid_video_totals: HashMap<String, f64> = HashMap::new();
 
     for row in &rows {
-        if gpu_debug {
+        if cfg!(debug_assertions) {
             eprintln!("[GPU DEBUG] Row: {:?}", row);
         }
 
@@ -349,7 +356,7 @@ pub fn query_gpu_perf_counters(
         .map(|(luid, total)| (luid, total.min(100.0)))
         .collect();
 
-    if gpu_debug {
+    if cfg!(debug_assertions) {
         eprintln!("[GPU DEBUG] 3D totals (summed, capped): {:?}", capped_3d);
         eprintln!("[GPU DEBUG] Video totals (summed, capped): {:?}", capped_video);
     }
@@ -372,8 +379,7 @@ pub type GpuUtilEntry = (String, String, f64);
 pub fn query_gpu_utilization_pdh(
     pdh: &crate::state::PdhHandles,
     wmi_con: Option<&wmi::WMIConnection>,
-    gpu_error_logged: &mut bool,
-    gpu_debug: bool,
+    gpu_error_lock: &OnceLock<()>,
 ) -> Vec<GpuUtilEntry> {
     let mut result = Vec::new();
     if pdh.query.is_none() {
@@ -444,7 +450,7 @@ pub fn query_gpu_utilization_pdh(
     // Build vendor map with PDH LUIDs included so dGPU engines that only appear
     // in PDH (not in GPUEngine WMI) get a caption.
     let vendor_map = match wmi_con {
-        Some(con) => build_gpu_vendor_map(con, gpu_debug, luid_3d_totals.keys().cloned()),
+        Some(con) => build_gpu_vendor_map(con, luid_3d_totals.keys().cloned()),
         None => HashMap::new(),
     };
 
@@ -455,10 +461,9 @@ pub fn query_gpu_utilization_pdh(
     for (luid, caption) in &vendor_map {
         let class = classify_luid(luid, &vendor_map);
         if matches!(class, GpuClass::Unknown) {
-            if !*gpu_error_logged {
+            gpu_error_lock.get_or_init(|| {
                 eprintln!("[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown", luid);
-                *gpu_error_logged = true;
-            }
+            });
             continue;
         }
         let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
@@ -507,7 +512,7 @@ pub fn query_gpu_utilization_pdh(
         result.push((display_name.clone(), format!("{}{}", display_name, suffix), util));
     }
 
-    if gpu_debug {
+    if cfg!(debug_assertions) {
         eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
@@ -903,9 +908,10 @@ pub fn poll(
     let cpu_usage = collector.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
 
     let cpu_temp_c = query_cpu_temp_c(wmi_con);
-    if cpu_temp_c.is_none() && !collector.cpu_temp_error_logged {
-        collector.cpu_temp_error_logged = true;
-        eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
+    if cpu_temp_c.is_none() {
+        collector.cpu_temp_error_lock.get_or_init(|| {
+            eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
+        });
     }
 
     // Memory
@@ -957,8 +963,7 @@ pub fn poll(
     let gpu_updates = query_gpu_utilization_pdh(
         &collector.pdh,
         wmi_con,
-        &mut collector.gpu_error_logged,
-        collector.gpu_debug,
+        &collector.gpu_error_lock,
     );
 
     let nvidia_temp = query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
@@ -983,15 +988,15 @@ pub fn poll(
 
 /// Append RawPoll values into HistoryStore. Fast — no I/O, pure memory writes.
 pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    push_history(&mut store.cpu_history, poll.cpu_usage, 3600);
+    push_history(&mut store.cpu_history, poll.cpu_usage, MAX_HISTORY);
     store.cpu_temp_c = poll.cpu_temp_c;
 
-    push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), 3600);
+    push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), MAX_HISTORY);
     store.mem_used_gb = poll.mem_used_gb;
     store.mem_total_gb = poll.mem_total_gb;
 
-    push_history(&mut store.net_recv_history, poll.net_recv_kb_s, 3600);
-    push_history(&mut store.net_sent_history, poll.net_sent_kb_s, 3600);
+    push_history(&mut store.net_recv_history, poll.net_recv_kb_s, MAX_HISTORY);
+    push_history(&mut store.net_sent_history, poll.net_sent_kb_s, MAX_HISTORY);
 
     let mut existing: HashMap<String, VecDeque<f64>> = store
         .gpu_entries
@@ -1002,8 +1007,8 @@ pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPo
         .gpu_updates
         .iter()
         .map(|(key, display_name, util)| {
-            let mut hist = existing.remove(key).unwrap_or_else(|| VecDeque::with_capacity(3600));
-            push_history(&mut hist, util.clamp(0.0, 100.0), 3600);
+            let mut hist = existing.remove(key).unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
+            push_history(&mut hist, util.clamp(0.0, 100.0), MAX_HISTORY);
             (key.clone(), display_name.clone(), hist)
         })
         .collect();
@@ -1015,13 +1020,13 @@ pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPo
             store.disk_display_order.push(disk_key.clone());
             store
                 .disk_active_histories
-                .insert(disk_key.clone(), VecDeque::with_capacity(3600));
+                .insert(disk_key.clone(), VecDeque::with_capacity(MAX_HISTORY));
         }
         if let (Some(history), Some(&pct)) = (
             store.disk_active_histories.get_mut(disk_key),
             poll.disk_active.get(disk_key),
         ) {
-            push_history(history, pct, 3600);
+            push_history(history, pct, MAX_HISTORY);
         }
     }
     store.disk_read_mb_s = poll.disk_read_mb_s.clone();
