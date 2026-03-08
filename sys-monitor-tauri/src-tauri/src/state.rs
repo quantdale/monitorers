@@ -12,8 +12,8 @@ pub struct AppState {
     pub disk_display_order: Vec<String>,
     pub net_recv_history: VecDeque<f64>,
     pub net_sent_history: VecDeque<f64>,
-    pub igpu_history: VecDeque<f64>,
-    pub dgpu_history: VecDeque<f64>,
+    /// Per-GPU: (luid, display_name, history). LUID is stable key for matching.
+    pub gpu_histories: Vec<(String, String, VecDeque<f64>)>,
     pub gpu_error_logged: bool,
     pub gpu_debug: bool,
     // wmi_con is intentionally NOT stored here.
@@ -68,8 +68,7 @@ impl AppState {
             networks,
             net_recv_history: VecDeque::with_capacity(3600),
             net_sent_history: VecDeque::with_capacity(3600),
-            igpu_history: VecDeque::with_capacity(3600),
-            dgpu_history: VecDeque::with_capacity(3600),
+            gpu_histories: Vec::new(),
             gpu_debug: false,
             gpu_error_logged: false,
             pdh_query,

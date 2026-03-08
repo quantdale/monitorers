@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
     PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
@@ -104,6 +104,24 @@ pub fn extract_luid_from_name(name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Strip brand prefix from GPU caption for display (e.g. "NVIDIA GeForce RTX 4050" → "GeForce RTX 4050").
+fn strip_brand_prefix(caption: &str) -> String {
+    let c = caption.trim();
+    let lower = c.to_lowercase();
+    let stripped = if lower.starts_with("nvidia ") {
+        c[7..].trim_start()
+    } else if lower.starts_with("intel(r) ") {
+        c[9..].trim_start()
+    } else if lower.starts_with("intel ") {
+        c[6..].trim_start()
+    } else if lower.starts_with("amd ") {
+        c[4..].trim_start()
+    } else {
+        c
+    };
+    stripped.to_string()
 }
 
 /// Classify a LUID as iGPU or dGPU.
@@ -289,7 +307,10 @@ pub fn query_gpu_perf_counters(
 
 // ── GPU PDH UTILIZATION ──────────────────────────────────────────────────────
 
-/// Read GPU 3D-engine utilization from PDH. Returns (igpu_util%, dgpu_util%).
+/// Per-GPU result: (luid, display_name, utilization%).
+pub type GpuUtilEntry = (String, String, f64);
+
+/// Read GPU 3D-engine utilization from PDH. Returns list of (luid, display_name, util%) per GPU.
 ///
 /// PdhCollectQueryData is called once per poll in refresh_all() before this
 /// function runs. This function only reads the already-collected data.
@@ -300,13 +321,14 @@ pub fn query_gpu_perf_counters(
 pub fn query_gpu_utilization_pdh(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
-) -> (f64, f64) {
+) -> Vec<GpuUtilEntry> {
+    let mut result = Vec::new();
     if app.pdh_query.is_none() {
-        return (0.0, 0.0);
+        return result;
     }
     let counter_3d = match app.pdh_gpu_3d_counter {
         Some(c) => c,
-        None => return (0.0, 0.0),
+        None => return result,
     };
 
     let vendor_map = match wmi_con {
@@ -324,7 +346,6 @@ pub fn query_gpu_utilization_pdh(
         let mut buf_size: u32 = 0;
         let mut item_count: u32 = 0;
 
-        // Probe call — returns PDH_MORE_DATA but sets buf_size and item_count.
         let _ = PdhGetFormattedCounterArrayW(
             counter_3d,
             PDH_FMT_DOUBLE,
@@ -334,12 +355,9 @@ pub fn query_gpu_utilization_pdh(
         );
 
         if item_count == 0 {
-            return (0.0, 0.0);
+            return result;
         }
 
-        // Vec<u64> guarantees 8-byte alignment required by the f64 union inside
-        // PDH_FMT_COUNTERVALUE_ITEM_W. 3× safety margin covers new processes
-        // that may have started between the probe and data calls.
         let u64_count = (buf_size as usize * 3 + 7) / 8;
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;
@@ -354,61 +372,82 @@ pub fn query_gpu_utilization_pdh(
         );
 
         if status != 0 {
-            return (0.0, 0.0);
+            return result;
         }
 
         for i in 0..item_count as usize {
             let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
-
-            // PDH_CSTATUS_VALID_DATA = 0x0, PDH_CSTATUS_NEW_DATA = 0x1
             if item.FmtValue.CStatus > 1 {
                 continue;
             }
-
             let name = match item.szName.to_string() {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-
             if app.gpu_debug {
                 eprintln!("[PDH DEBUG] instance: {}", name);
             }
-
             let luid = match extract_luid_from_name(&name) {
                 Some(l) => l,
                 None => continue,
             };
-
-            // doubleValue valid because we requested PDH_FMT_DOUBLE.
             let util = item.FmtValue.Anonymous.doubleValue.clamp(0.0, 100.0);
             *luid_3d_totals.entry(luid).or_insert(0.0) += util;
         }
     }
 
-    let mut igpu_max = 0.0f64;
-    let mut dgpu_max = 0.0f64;
-
-    for (luid, total) in luid_3d_totals {
-        let capped = total.min(100.0);
-        match classify_luid(&luid, &vendor_map) {
-            GpuClass::IGpu => igpu_max = igpu_max.max(capped),
-            GpuClass::DGpu => dgpu_max = dgpu_max.max(capped),
-            GpuClass::Unknown => {
-                if !app.gpu_error_logged {
-                    eprintln!("[PDH] Unclassified LUID: {} (util={:.1}%)", luid, capped);
-                }
+    // Build list from vendor_map so we include GPUs with 0% util.
+    let mut entries: Vec<(String, String, f64)> = Vec::new();
+    for (luid, caption) in &vendor_map {
+        let class = classify_luid(luid, &vendor_map);
+        if matches!(class, GpuClass::Unknown) {
+            if !app.gpu_error_logged {
+                eprintln!("[PDH] Unclassified LUID: {}", luid);
             }
+            continue;
         }
+        let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
+        let display_name = strip_brand_prefix(caption);
+        if display_name.is_empty() {
+            continue;
+        }
+        entries.push((luid.clone(), display_name, util));
+    }
+
+    // Sort: iGPU first, then dGPU; within each class by LUID.
+    entries.sort_by(|a, b| {
+        let class_a = classify_luid(&a.0, &vendor_map);
+        let class_b = classify_luid(&b.0, &vendor_map);
+        let ord = match (class_a, class_b) {
+            (GpuClass::IGpu, GpuClass::DGpu) => std::cmp::Ordering::Less,
+            (GpuClass::DGpu, GpuClass::IGpu) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        };
+        ord.then_with(|| a.0.cmp(&b.0))
+    });
+
+    // For duplicate display names (same model), add " 1", " 2" suffix.
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for (_, name, _) in &entries {
+        *name_counts.entry(name.clone()).or_insert(0) += 1;
+    }
+    let mut name_indices: HashMap<String, usize> = HashMap::new();
+    for (luid, display_name, util) in entries {
+        let suffix = if *name_counts.get(&display_name).unwrap_or(&0) > 1 {
+            let idx = *name_indices.entry(display_name.clone()).or_insert(0);
+            name_indices.insert(display_name.clone(), idx + 1);
+            format!(" {}", idx + 1)
+        } else {
+            String::new()
+        };
+        result.push((luid, format!("{}{}", display_name, suffix), util));
     }
 
     if app.gpu_debug {
-        eprintln!(
-            "[PDH DEBUG] Final: igpu_max={:.1}%, dgpu_max={:.1}%",
-            igpu_max, dgpu_max
-        );
+        eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
-    (igpu_max, dgpu_max)
+    result
 }
 
 // ── DISK HELPERS ─────────────────────────────────────────────────────────────
@@ -600,9 +639,20 @@ pub fn refresh_all(
         refresh_disk(app);
     }
 
-    let (igpu_util, dgpu_util) = query_gpu_utilization_pdh(app, wmi_con);
-    push_history(&mut app.igpu_history, igpu_util, 3600);
-    push_history(&mut app.dgpu_history, dgpu_util, 3600);
+    let gpu_list = query_gpu_utilization_pdh(app, wmi_con);
+    let mut existing: HashMap<String, VecDeque<f64>> = app
+        .gpu_histories
+        .drain(..)
+        .map(|(luid, _, hist)| (luid, hist))
+        .collect();
+    app.gpu_histories = gpu_list
+        .into_iter()
+        .map(|(luid, display_name, util)| {
+            let mut hist = existing.remove(&luid).unwrap_or_else(|| VecDeque::with_capacity(3600));
+            push_history(&mut hist, util, 3600);
+            (luid, display_name, hist)
+        })
+        .collect();
 }
 
 #[cfg(test)]

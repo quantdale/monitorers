@@ -3,6 +3,11 @@ export interface DiskSnapshot {
   active: number;
 }
 
+export interface GpuSnapshot {
+  name: string;
+  util: number;
+}
+
 export interface MetricsSnapshot {
   cpu: number;
   mem: number;
@@ -11,12 +16,16 @@ export interface MetricsSnapshot {
   disks: DiskSnapshot[];
   net_recv_kb: number;
   net_sent_kb: number;
-  igpu: number;
-  dgpu: number;
+  gpus: GpuSnapshot[];
 }
 
 export interface DiskHistory {
   key: string;
+  values: number[];
+}
+
+export interface GpuHistory {
+  name: string;
   values: number[];
 }
 
@@ -26,6 +35,5 @@ export interface HistoryPayload {
   disks: DiskHistory[];
   net_recv: number[];
   net_sent: number[];
-  igpu: number[];
-  dgpu: number[];
+  gpus: GpuHistory[];
 }

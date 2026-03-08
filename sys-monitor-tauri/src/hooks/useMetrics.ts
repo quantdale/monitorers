@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/tauri';
-import type { MetricsSnapshot, HistoryPayload, DiskHistory } from '../types/metrics';
+import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
 
 const MAX_HISTORY = 3600;
 
@@ -22,8 +22,10 @@ function mockHistoryPayload(): HistoryPayload {
     ],
     net_recv: Array.from({ length: n }, (_, i) => 100 + 200 * Math.sin(t(i) + 2.5)),
     net_sent: Array.from({ length: n }, (_, i) => 50 + 150 * Math.sin(t(i) + 3)),
-    igpu: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)),
-    dgpu: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)),
+    gpus: [
+      { name: 'UHD Graphics', values: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)) },
+      { name: 'RTX 4050', values: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)) },
+    ],
   };
 }
 
@@ -41,8 +43,10 @@ function mockMetricsSnapshot(): MetricsSnapshot {
     ],
     net_recv_kb: Math.max(0, 100 + 200 * Math.sin(t * 0.4 + 2.5)),
     net_sent_kb: Math.max(0, 50 + 150 * Math.sin(t * 0.4 + 3)),
-    igpu: 15 + 25 * Math.sin(t * 0.3 + 0.8),
-    dgpu: 20 + 40 * Math.sin(t * 0.3 + 1.2),
+    gpus: [
+      { name: 'UHD Graphics', util: 15 + 25 * Math.sin(t * 0.3 + 0.8) },
+      { name: 'RTX 4050', util: 20 + 40 * Math.sin(t * 0.3 + 1.2) },
+    ],
   };
 }
 
@@ -76,6 +80,26 @@ function mergeDiskHistory(
   return updated;
 }
 
+function mergeGpuHistory(
+  prev: GpuHistory[],
+  snapshotGpus: MetricsSnapshot['gpus']
+): GpuHistory[] {
+  const updated = prev.map((g) => {
+    const update = snapshotGpus.find((x) => x.name === g.name);
+    if (!update) return g;
+    return {
+      name: g.name,
+      values: appendToHistory(g.values, update.util),
+    };
+  });
+  for (const snap of snapshotGpus) {
+    if (!updated.find((g) => g.name === snap.name)) {
+      updated.push({ name: snap.name, values: [snap.util] });
+    }
+  }
+  return updated;
+}
+
 /** Slice the rightmost `windowSeconds` points from a history array. */
 function sliceWindow(arr: number[], windowSeconds: number): number[] {
   if (arr.length <= windowSeconds) return arr;
@@ -90,8 +114,7 @@ export interface SlicedHistory {
   disks: DiskHistory[];
   net_recv: number[];
   net_sent: number[];
-  igpu: number[];
-  dgpu: number[];
+  gpus: GpuHistory[];
 }
 
 export function useMetrics(windowSeconds: number): SlicedHistory | null {
@@ -128,8 +151,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
             disks: mergeDiskHistory(prev.disks, snap.disks),
             net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
             net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
-            igpu: appendToHistory(prev.igpu, snap.igpu),
-            dgpu: appendToHistory(prev.dgpu, snap.dgpu),
+            gpus: mergeGpuHistory(prev.gpus, snap.gpus),
           };
         });
       });
@@ -148,8 +170,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
           disks: mergeDiskHistory(prev.disks, snap.disks),
           net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
           net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
-          igpu: appendToHistory(prev.igpu, snap.igpu),
-          dgpu: appendToHistory(prev.dgpu, snap.dgpu),
+          gpus: mergeGpuHistory(prev.gpus, snap.gpus),
         };
       });
     }, 1000);
@@ -171,7 +192,9 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     })),
     net_recv: sliceWindow(history.net_recv, w),
     net_sent: sliceWindow(history.net_sent, w),
-    igpu: sliceWindow(history.igpu, w),
-    dgpu: sliceWindow(history.dgpu, w),
+    gpus: history.gpus.map((g) => ({
+      name: g.name,
+      values: sliceWindow(g.values, w),
+    })),
   };
 }

@@ -13,6 +13,7 @@ const TIME_OPTIONS = [
 ];
 
 const DISK_COLORS = ['#e88246', '#c46be8', '#e8d446', '#46e8d4'];
+const GPU_COLORS = ['#64b4ff', '#78c888', '#e8a050', '#c080e0'];
 
 function formatKbps(kb: number): string {
   if (kb >= 1024 * 1024) return `${(kb / (1024 * 1024)).toFixed(1)} GB/s`;
@@ -106,19 +107,15 @@ export default function App() {
             yDomain={[0, 'auto']}
           />
 
-          <MetricCard
-            title="iGPU"
-            value={formatPercent(metrics.igpu.at(-1))}
-            history={metrics.igpu}
-            color="#64b4ff"
-          />
-
-          <MetricCard
-            title="dGPU"
-            value={formatPercent(metrics.dgpu.at(-1))}
-            history={metrics.dgpu}
-            color="#78c888"
-          />
+          {metrics.gpus.map((gpu, idx) => (
+            <MetricCard
+              key={gpu.name}
+              title={gpu.name}
+              value={formatPercent(gpu.values.at(-1))}
+              history={gpu.values}
+              color={GPU_COLORS[idx % GPU_COLORS.length]}
+            />
+          ))}
         </>
       )}
     </div>

@@ -18,8 +18,13 @@ pub struct MetricsSnapshot {
     pub disks: Vec<DiskSnapshot>,
     pub net_recv_kb: f64,
     pub net_sent_kb: f64,
-    pub igpu: f64,
-    pub dgpu: f64,
+    pub gpus: Vec<GpuSnapshot>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct GpuSnapshot {
+    pub name: String,
+    pub util: f64,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -35,8 +40,13 @@ pub struct HistoryPayload {
     pub disks: Vec<DiskHistory>,
     pub net_recv: Vec<f64>,
     pub net_sent: Vec<f64>,
-    pub igpu: Vec<f64>,
-    pub dgpu: Vec<f64>,
+    pub gpus: Vec<GpuHistory>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct GpuHistory {
+    pub name: String,
+    pub values: Vec<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -68,6 +78,15 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         })
         .collect();
 
+    let gpus = s
+        .gpu_histories
+        .iter()
+        .map(|(_, name, hist)| GpuSnapshot {
+            name: name.clone(),
+            util: hist.back().copied().unwrap_or(0.0),
+        })
+        .collect();
+
     MetricsSnapshot {
         cpu,
         mem,
@@ -76,8 +95,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         disks,
         net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
         net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
-        igpu: s.igpu_history.back().copied().unwrap_or(0.0),
-        dgpu: s.dgpu_history.back().copied().unwrap_or(0.0),
+        gpus,
     }
 }
 
@@ -107,8 +125,14 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
             .collect(),
         net_recv: s.net_recv_history.iter().copied().collect(),
         net_sent: s.net_sent_history.iter().copied().collect(),
-        igpu: s.igpu_history.iter().copied().collect(),
-        dgpu: s.dgpu_history.iter().copied().collect(),
+        gpus: s
+            .gpu_histories
+            .iter()
+            .map(|(_, name, hist)| GpuHistory {
+                name: name.clone(),
+                values: hist.iter().copied().collect(),
+            })
+            .collect(),
     }
 }
 
