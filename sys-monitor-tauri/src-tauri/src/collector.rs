@@ -352,18 +352,18 @@ pub fn query_gpu_perf_counters(
 /// Per-GPU result: (luid, display_name, utilization%).
 pub type GpuUtilEntry = (String, String, f64);
 
-/// Read GPU 3D-engine utilization from PDH. Returns list of (luid, display_name, util%) per GPU.
+/// Read GPU 3D-engine utilization from PDH. Returns list of (history_key, display_name, util%) per GPU.
 ///
-/// PdhCollectQueryData is called once per poll in refresh_all() before this
-/// function runs. This function only reads the already-collected data.
+/// PdhCollectQueryData is called once per poll in poll() before this function runs.
+/// This function only reads the already-collected data.
 ///
 /// `wmi_con` is the caller's MTA-thread WMI connection used for vendor-name
-/// classification. It lives in the background thread's stack frame, not in AppState,
-/// to avoid STA/MTA COM thread-affinity violations.
+/// classification. It lives in the background thread's stack frame.
 pub fn query_gpu_utilization_pdh(
-    gpu: &mut crate::state::GpuState,
     pdh: &crate::state::PdhHandles,
     wmi_con: Option<&wmi::WMIConnection>,
+    gpu_error_logged: &mut bool,
+    gpu_debug: bool,
 ) -> Vec<GpuUtilEntry> {
     let mut result = Vec::new();
     if pdh.query.is_none() {
@@ -434,7 +434,7 @@ pub fn query_gpu_utilization_pdh(
     // Build vendor map with PDH LUIDs included so dGPU engines that only appear
     // in PDH (not in GPUEngine WMI) get a caption.
     let vendor_map = match wmi_con {
-        Some(con) => build_gpu_vendor_map(con, gpu.debug, luid_3d_totals.keys().cloned()),
+        Some(con) => build_gpu_vendor_map(con, gpu_debug, luid_3d_totals.keys().cloned()),
         None => HashMap::new(),
     };
 
@@ -445,9 +445,9 @@ pub fn query_gpu_utilization_pdh(
     for (luid, caption) in &vendor_map {
         let class = classify_luid(luid, &vendor_map);
         if matches!(class, GpuClass::Unknown) {
-            if !gpu.error_logged {
+            if !*gpu_error_logged {
                 eprintln!("[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown", luid);
-                gpu.error_logged = true;
+                *gpu_error_logged = true;
             }
             continue;
         }
@@ -497,7 +497,7 @@ pub fn query_gpu_utilization_pdh(
         result.push((display_name.clone(), format!("{}{}", display_name, suffix), util));
     }
 
-    if gpu.debug {
+    if gpu_debug {
         eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
@@ -682,11 +682,21 @@ fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
     result
 }
 
-pub fn refresh_disk(disk: &mut crate::state::DiskState, pdh: &crate::state::PdhHandles) {
-    disk.sysinfo_disks.refresh(false);
+/// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
+pub fn poll_disk(
+    disks: &mut sysinfo::Disks,
+    pdh: &crate::state::PdhHandles,
+) -> (
+    HashMap<String, f64>,
+    HashMap<String, f64>,
+    HashMap<String, f64>,
+    HashMap<String, f64>,
+    Vec<String>,
+) {
+    disks.refresh(false);
 
     let mut known_drive_letters: HashMap<String, String> = HashMap::new();
-    for d in disk.sysinfo_disks.list() {
+    for d in disks.list() {
         let mount = d.mount_point().to_string_lossy().to_string();
         let mount_upper = mount.to_uppercase();
         if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
@@ -696,9 +706,12 @@ pub fn refresh_disk(disk: &mut crate::state::DiskState, pdh: &crate::state::PdhH
 
     let read_write = query_disk_read_write(pdh);
     let response_times = query_disk_response_time(pdh);
-    disk.read_mb_s.clear();
-    disk.write_mb_s.clear();
-    disk.avg_response_ms.clear();
+
+    let mut disk_active = HashMap::new();
+    let mut disk_read_mb_s = HashMap::new();
+    let mut disk_write_mb_s = HashMap::new();
+    let mut disk_avg_response_ms = HashMap::new();
+    let mut disk_display_order = Vec::new();
 
     for (instance_name, pct_active) in query_disk_active_time(pdh) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
@@ -711,29 +724,22 @@ pub fn refresh_disk(disk: &mut crate::state::DiskState, pdh: &crate::state::PdhH
         }
 
         let disk_key = mapped_letters.join(" ");
-        if !disk.active_histories.contains_key(&disk_key) {
-            disk.display_order.push(disk_key.clone());
-            disk.active_histories
-                .insert(disk_key.clone(), std::collections::VecDeque::with_capacity(3600));
+        if !disk_active.contains_key(&disk_key) {
+            disk_display_order.push(disk_key.clone());
         }
-
-        if let Some(history) = disk.active_histories.get_mut(&disk_key) {
-            push_history(history, pct_active.clamp(0.0, 100.0), 3600);
-        }
+        disk_active.insert(disk_key.clone(), pct_active.clamp(0.0, 100.0));
 
         if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
-            disk.read_mb_s.insert(disk_key.clone(), *read_mb);
-            disk.write_mb_s.insert(disk_key.clone(), *write_mb);
+            disk_read_mb_s.insert(disk_key.clone(), *read_mb);
+            disk_write_mb_s.insert(disk_key.clone(), *write_mb);
         }
 
         if let Some(secs) = response_times.get(&instance_name) {
-            // PDH reports seconds per transfer; convert to milliseconds for display.
-            disk.avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
+            disk_avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
         }
     }
 
-    // Fallback: match response_times by drive letters in case instance names differ
-    // between counters (e.g. "% Idle Time" vs "Avg. Disk sec/Transfer").
+    // Fallback: match response_times by drive letters in case instance names differ.
     for (instance_name, secs) in &response_times {
         let letters: Vec<String> = pdh_instance_to_drive_letters(instance_name)
             .into_iter()
@@ -743,56 +749,18 @@ pub fn refresh_disk(disk: &mut crate::state::DiskState, pdh: &crate::state::PdhH
             continue;
         }
         let disk_key = letters.join(" ");
-        if !disk.avg_response_ms.contains_key(&disk_key) && disk.active_histories.contains_key(&disk_key) {
-            disk.avg_response_ms.insert(disk_key, secs * 1000.0);
+        if !disk_avg_response_ms.contains_key(&disk_key) && disk_active.contains_key(&disk_key) {
+            disk_avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
         }
     }
-}
 
-// ── CPU / MEMORY / NETWORK REFRESH ──────────────────────────────────────────
-
-pub fn refresh_cpu(cpu: &mut crate::state::CpuState) {
-    cpu.system.refresh_cpu_usage();
-    let cpu_pct = cpu.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
-    cpu.history.push_back(cpu_pct);
-    if cpu.history.len() > 3600 {
-        cpu.history.pop_front();
-    }
-}
-
-pub fn refresh_memory(cpu: &mut crate::state::CpuState, mem: &mut crate::state::MemoryState) {
-    cpu.system.refresh_memory();
-    let used_mem = cpu.system.used_memory();
-    let total_mem = cpu.system.total_memory();
-    let mem_pct = if total_mem > 0 {
-        (used_mem as f64 / total_mem as f64) * 100.0
-    } else {
-        0.0
-    };
-    mem.history.push_back(mem_pct.clamp(0.0, 100.0));
-    if mem.history.len() > 3600 {
-        mem.history.pop_front();
-    }
-}
-
-pub fn refresh_network(network: &mut crate::state::NetworkState) {
-    network.sysinfo_networks.refresh(false);
-
-    let mut total_recv_bytes = 0u64;
-    let mut total_sent_bytes = 0u64;
-    for (iface_name, data) in &network.sysinfo_networks {
-        let name_upper = iface_name.to_uppercase();
-        if name_upper.contains("LOOPBACK") || name_upper == "LO" {
-            continue;
-        }
-        total_recv_bytes += data.received();
-        total_sent_bytes += data.transmitted();
-    }
-
-    let recv_kbs = (total_recv_bytes as f64 / 1024.0).max(0.0);
-    let sent_kbs = (total_sent_bytes as f64 / 1024.0).max(0.0);
-    push_history(&mut network.recv_history, recv_kbs, 3600);
-    push_history(&mut network.sent_history, sent_kbs, 3600);
+    (
+        disk_active,
+        disk_read_mb_s,
+        disk_write_mb_s,
+        disk_avg_response_ms,
+        disk_display_order,
+    )
 }
 
 // ── CPU TEMPERATURE (WMI ROOT\CIMV2) ───────────────────────────────────────────
@@ -850,11 +818,11 @@ pub fn query_cpu_temp_c(wmi_con: Option<&wmi::WMIConnection>) -> Option<f64> {
 /// Uses NVAPI — Nvidia's proprietary C SDK. Only works on systems with an
 /// Nvidia GPU and driver installed. Requires `nvapi` feature.
 #[cfg(feature = "nvapi")]
-pub fn query_nvidia_gpu_temp(gpu: &crate::state::GpuState) -> Option<f32> {
+pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
     // NVAPI must be initialized once per process — same reason as PDH query handle, stateful C API.
     // unsafe: NVAPI is a C library, Rust cannot verify its safety.
     // NVAPI_OK (0): all NVAPI functions return a status code; 0 = success.
-    if !gpu.nvapi_initialized {
+    if !nvapi_initialized {
         return None;
     }
 
@@ -908,62 +876,147 @@ pub fn query_nvidia_gpu_temp(gpu: &crate::state::GpuState) -> Option<f32> {
 }
 
 #[cfg(not(feature = "nvapi"))]
-pub fn query_nvidia_gpu_temp(_gpu: &crate::state::GpuState) -> Option<f32> {
+pub fn query_nvidia_gpu_temp(_nvapi_initialized: bool) -> Option<f32> {
     None
 }
 
-// ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
+// ── POLL AND COMMIT ───────────────────────────────────────────────────────────
 
-/// Run one full 1-second poll: refresh all metrics and push to history deques.
-///
-/// `wmi_con` is the background thread's MTA WMI connection (lives in the thread's
-/// stack frame). Passing it explicitly avoids storing a COM object in AppState,
-/// which would cause RPC_E_WRONG_THREAD if called across thread apartments.
-///
-/// PdhCollectQueryData is called exactly once here per poll cycle, atomically
-/// snapshotting both GPU and disk PDH counters from the same baseline.
-pub fn refresh_all(
-    app: &mut crate::state::AppState,
+/// Run all slow I/O using CollectorState — no lock held. Returns RawPoll with
+/// fresh values. PdhCollectQueryData is called exactly once per poll.
+pub fn poll(
+    collector: &mut crate::state::CollectorState,
     wmi_con: Option<&wmi::WMIConnection>,
-) {
-    refresh_cpu(&mut app.cpu);
-    app.cpu.temp_c = query_cpu_temp_c(wmi_con);
-    if app.cpu.temp_c.is_none() && !app.cpu.temp_error_logged {
-        app.cpu.temp_error_logged = true;
+) -> crate::state::RawPoll {
+    // CPU
+    collector.system.refresh_cpu_usage();
+    let cpu_usage = collector.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
+
+    let cpu_temp_c = query_cpu_temp_c(wmi_con);
+    if cpu_temp_c.is_none() && !collector.cpu_temp_error_logged {
+        collector.cpu_temp_error_logged = true;
         eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
     }
-    refresh_memory(&mut app.cpu, &mut app.mem);
-    refresh_network(&mut app.network);
+
+    // Memory
+    collector.system.refresh_memory();
+    let used_mem = collector.system.used_memory();
+    let total_mem = collector.system.total_memory();
+    let mem_pct = if total_mem > 0 {
+        (used_mem as f64 / total_mem as f64) * 100.0
+    } else {
+        0.0
+    };
+    let mem_used_gb = used_mem as f64 / (1024.0 * 1024.0 * 1024.0);
+    let mem_total_gb = total_mem as f64 / (1024.0 * 1024.0 * 1024.0);
+
+    // Network
+    collector.sysinfo_networks.refresh(false);
+    let mut total_recv_bytes = 0u64;
+    let mut total_sent_bytes = 0u64;
+    for (iface_name, data) in &collector.sysinfo_networks {
+        let name_upper = iface_name.to_uppercase();
+        if name_upper.contains("LOOPBACK") || name_upper == "LO" {
+            continue;
+        }
+        total_recv_bytes += data.received();
+        total_sent_bytes += data.transmitted();
+    }
+    let net_recv_kb_s = (total_recv_bytes as f64 / 1024.0).max(0.0);
+    let net_sent_kb_s = (total_sent_bytes as f64 / 1024.0).max(0.0);
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
-    let pdh_collected_ok = match app.pdh.query {
+    let pdh_collected_ok = match collector.pdh.query {
         Some(query) => unsafe { PdhCollectQueryData(query) == 0 },
         None => false,
     };
 
-    if pdh_collected_ok {
-        refresh_disk(&mut app.disk, &app.pdh);
+    let (disk_active, disk_read_mb_s, disk_write_mb_s, disk_avg_response_ms, disk_display_order) =
+        if pdh_collected_ok {
+            poll_disk(&mut collector.sysinfo_disks, &collector.pdh)
+        } else {
+            (
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                Vec::new(),
+            )
+        };
+
+    let gpu_updates = query_gpu_utilization_pdh(
+        &collector.pdh,
+        wmi_con,
+        &mut collector.gpu_error_logged,
+        collector.gpu_debug,
+    );
+
+    let nvidia_temp = query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
+
+    crate::state::RawPoll {
+        cpu_usage,
+        cpu_temp_c,
+        mem_used_gb,
+        mem_total_gb,
+        mem_pct,
+        gpu_updates,
+        nvidia_temp,
+        disk_active,
+        disk_read_mb_s,
+        disk_write_mb_s,
+        disk_avg_response_ms,
+        disk_display_order,
+        net_recv_kb_s,
+        net_sent_kb_s,
     }
+}
 
-    let gpu_list = query_gpu_utilization_pdh(&mut app.gpu, &app.pdh, wmi_con);
+/// Append RawPoll values into HistoryStore. Fast — no I/O, pure memory writes.
+pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    push_history(&mut store.cpu_history, poll.cpu_usage, 3600);
+    store.cpu_temp_c = poll.cpu_temp_c;
 
-    // Query Nvidia GPU temperature
-    app.gpu.nvidia_temp = query_nvidia_gpu_temp(&app.gpu).map(|t| t as f64);
+    push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), 3600);
+    store.mem_used_gb = poll.mem_used_gb;
+    store.mem_total_gb = poll.mem_total_gb;
 
-    let mut existing: HashMap<String, VecDeque<f64>> = app
-        .gpu
-        .entries
+    push_history(&mut store.net_recv_history, poll.net_recv_kb_s, 3600);
+    push_history(&mut store.net_sent_history, poll.net_sent_kb_s, 3600);
+
+    let mut existing: HashMap<String, VecDeque<f64>> = store
+        .gpu_entries
         .drain(..)
-        .map(|(luid, _, hist)| (luid, hist))
+        .map(|(key, _, hist)| (key, hist))
         .collect();
-    app.gpu.entries = gpu_list
-        .into_iter()
-        .map(|(luid, display_name, util)| {
-            let mut hist = existing.remove(&luid).unwrap_or_else(|| VecDeque::with_capacity(3600));
+    store.gpu_entries = poll
+        .gpu_updates
+        .iter()
+        .map(|(key, display_name, util)| {
+            let mut hist = existing.remove(key).unwrap_or_else(|| VecDeque::with_capacity(3600));
             push_history(&mut hist, util.clamp(0.0, 100.0), 3600);
-            (luid, display_name, hist)
+            (key.clone(), display_name.clone(), hist)
         })
         .collect();
+
+    store.nvidia_temp = poll.nvidia_temp;
+
+    for disk_key in &poll.disk_display_order {
+        if !store.disk_active_histories.contains_key(disk_key) {
+            store.disk_display_order.push(disk_key.clone());
+            store
+                .disk_active_histories
+                .insert(disk_key.clone(), VecDeque::with_capacity(3600));
+        }
+        if let (Some(history), Some(&pct)) = (
+            store.disk_active_histories.get_mut(disk_key),
+            poll.disk_active.get(disk_key),
+        ) {
+            push_history(history, pct, 3600);
+        }
+    }
+    store.disk_read_mb_s = poll.disk_read_mb_s.clone();
+    store.disk_write_mb_s = poll.disk_write_mb_s.clone();
+    store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
 }
 
 #[cfg(test)]
@@ -1215,8 +1268,8 @@ mod tests {
     fn test_nvidia_temp_returns_none_gracefully() {
         // On a system where NVAPI is unavailable or GPU is absent,
         // query_nvidia_gpu_temp() must return None, not panic.
-        let state = crate::state::AppState::new();
-        let _ = query_nvidia_gpu_temp(&state.gpu);
+        let collector_state = crate::state::CollectorState::new();
+        let _ = query_nvidia_gpu_temp(collector_state.nvapi_initialized);
     }
 
     // --- push_history ---
