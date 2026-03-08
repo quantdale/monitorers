@@ -948,11 +948,7 @@ pub fn refresh_all(
     let gpu_list = query_gpu_utilization_pdh(&mut app.gpu, &app.pdh, wmi_con);
 
     // Query Nvidia GPU temperature
-    if let Some(temp) = query_nvidia_gpu_temp(&app.gpu) {
-        push_history(&mut app.gpu.nvidia_temp_history, temp as f64, 3600);
-    } else {
-        push_history(&mut app.gpu.nvidia_temp_history, 0.0, 3600);
-    }
+    app.gpu.nvidia_temp = query_nvidia_gpu_temp(&app.gpu).map(|t| t as f64);
 
     let mut existing: HashMap<String, VecDeque<f64>> = app
         .gpu
