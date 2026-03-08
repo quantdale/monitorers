@@ -361,14 +361,15 @@ pub type GpuUtilEntry = (String, String, f64);
 /// classification. It lives in the background thread's stack frame, not in AppState,
 /// to avoid STA/MTA COM thread-affinity violations.
 pub fn query_gpu_utilization_pdh(
-    app: &mut crate::state::AppState,
+    gpu: &mut crate::state::GpuState,
+    pdh: &crate::state::PdhHandles,
     wmi_con: Option<&wmi::WMIConnection>,
 ) -> Vec<GpuUtilEntry> {
     let mut result = Vec::new();
-    if app.pdh_query.is_none() {
+    if pdh.query.is_none() {
         return result;
     }
-    let counter_3d = match app.pdh_gpu_3d_counter {
+    let counter_3d = match pdh.gpu_3d_counter {
         Some(c) => c,
         None => return result,
     };
@@ -433,7 +434,7 @@ pub fn query_gpu_utilization_pdh(
     // Build vendor map with PDH LUIDs included so dGPU engines that only appear
     // in PDH (not in GPUEngine WMI) get a caption.
     let vendor_map = match wmi_con {
-        Some(con) => build_gpu_vendor_map(con, app.gpu_debug, luid_3d_totals.keys().cloned()),
+        Some(con) => build_gpu_vendor_map(con, gpu.debug, luid_3d_totals.keys().cloned()),
         None => HashMap::new(),
     };
 
@@ -444,9 +445,9 @@ pub fn query_gpu_utilization_pdh(
     for (luid, caption) in &vendor_map {
         let class = classify_luid(luid, &vendor_map);
         if matches!(class, GpuClass::Unknown) {
-            if !app.gpu_error_logged {
+            if !gpu.error_logged {
                 eprintln!("[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown", luid);
-                app.gpu_error_logged = true;
+                gpu.error_logged = true;
             }
             continue;
         }
@@ -496,7 +497,7 @@ pub fn query_gpu_utilization_pdh(
         result.push((display_name.clone(), format!("{}{}", display_name, suffix), util));
     }
 
-    if app.gpu_debug {
+    if gpu.debug {
         eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
@@ -517,10 +518,8 @@ pub fn pdh_instance_to_drive_letters(instance: &str) -> Vec<String> {
 
 /// Read \PhysicalDisk(*)\% Idle Time values and invert to active-time %.
 /// active% = 100 - idle%  — same value Task Manager's disk graph displays.
-pub fn query_disk_active_time(
-    app: &mut crate::state::AppState,
-) -> HashMap<String, f64> {
-    let counter = match app.pdh_disk_active_counter {
+pub fn query_disk_active_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f64> {
+    let counter = match pdh.disk_active_counter {
         Some(c) => c,
         None => return HashMap::new(),
     };
@@ -585,15 +584,13 @@ pub fn query_disk_active_time(
 
 /// Read \PhysicalDisk(*)\Disk Read Bytes/sec and Disk Write Bytes/sec.
 /// Returns (instance_name -> (read_mb_s, write_mb_s)). Skips _Total.
-fn query_disk_read_write(
-    app: &crate::state::AppState,
-) -> HashMap<String, (f64, f64)> {
+fn query_disk_read_write(pdh: &crate::state::PdhHandles) -> HashMap<String, (f64, f64)> {
     let mut result = HashMap::new();
-    let counter_read = match app.pdh_disk_read_counter {
+    let counter_read = match pdh.disk_read_counter {
         Some(c) => c,
         None => return result,
     };
-    let counter_write = match app.pdh_disk_write_counter {
+    let counter_write = match pdh.disk_write_counter {
         Some(c) => c,
         None => return result,
     };
@@ -627,11 +624,9 @@ fn query_disk_read_write(
 
 /// Read \PhysicalDisk(*)\Avg. Disk sec/Transfer.
 /// Returns (instance_name -> seconds). Skips _Total.
-fn query_disk_response_time(
-    app: &crate::state::AppState,
-) -> HashMap<String, f64> {
+fn query_disk_response_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f64> {
     let mut result = HashMap::new();
-    let counter = match app.pdh_disk_response_counter {
+    let counter = match pdh.disk_response_counter {
         Some(c) => c,
         None => return result,
     };
@@ -687,25 +682,25 @@ fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
     result
 }
 
-pub fn refresh_disk(app: &mut crate::state::AppState) {
-    app.disks.refresh(false);
+pub fn refresh_disk(disk: &mut crate::state::DiskState, pdh: &crate::state::PdhHandles) {
+    disk.sysinfo_disks.refresh(false);
 
     let mut known_drive_letters: HashMap<String, String> = HashMap::new();
-    for disk in app.disks.list() {
-        let mount = disk.mount_point().to_string_lossy().to_string();
+    for d in disk.sysinfo_disks.list() {
+        let mount = d.mount_point().to_string_lossy().to_string();
         let mount_upper = mount.to_uppercase();
         if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
             known_drive_letters.insert(mount_upper[..2].to_string(), mount);
         }
     }
 
-    let read_write = query_disk_read_write(app);
-    let response_times = query_disk_response_time(app);
-    app.disk_read_mb_s.clear();
-    app.disk_write_mb_s.clear();
-    app.disk_avg_response_ms.clear();
+    let read_write = query_disk_read_write(pdh);
+    let response_times = query_disk_response_time(pdh);
+    disk.read_mb_s.clear();
+    disk.write_mb_s.clear();
+    disk.avg_response_ms.clear();
 
-    for (instance_name, pct_active) in query_disk_active_time(app) {
+    for (instance_name, pct_active) in query_disk_active_time(pdh) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
             .into_iter()
             .filter(|letter| known_drive_letters.contains_key(letter))
@@ -716,24 +711,24 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
         }
 
         let disk_key = mapped_letters.join(" ");
-        if !app.disk_active_histories.contains_key(&disk_key) {
-            app.disk_display_order.push(disk_key.clone());
-            app.disk_active_histories
+        if !disk.active_histories.contains_key(&disk_key) {
+            disk.display_order.push(disk_key.clone());
+            disk.active_histories
                 .insert(disk_key.clone(), std::collections::VecDeque::with_capacity(3600));
         }
 
-        if let Some(history) = app.disk_active_histories.get_mut(&disk_key) {
+        if let Some(history) = disk.active_histories.get_mut(&disk_key) {
             push_history(history, pct_active.clamp(0.0, 100.0), 3600);
         }
 
         if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
-            app.disk_read_mb_s.insert(disk_key.clone(), *read_mb);
-            app.disk_write_mb_s.insert(disk_key.clone(), *write_mb);
+            disk.read_mb_s.insert(disk_key.clone(), *read_mb);
+            disk.write_mb_s.insert(disk_key.clone(), *write_mb);
         }
 
         if let Some(secs) = response_times.get(&instance_name) {
             // PDH reports seconds per transfer; convert to milliseconds for display.
-            app.disk_avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
+            disk.avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
         }
     }
 
@@ -748,44 +743,44 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
             continue;
         }
         let disk_key = letters.join(" ");
-        if !app.disk_avg_response_ms.contains_key(&disk_key) && app.disk_active_histories.contains_key(&disk_key) {
-            app.disk_avg_response_ms.insert(disk_key, secs * 1000.0);
+        if !disk.avg_response_ms.contains_key(&disk_key) && disk.active_histories.contains_key(&disk_key) {
+            disk.avg_response_ms.insert(disk_key, secs * 1000.0);
         }
     }
 }
 
 // ── CPU / MEMORY / NETWORK REFRESH ──────────────────────────────────────────
 
-pub fn refresh_cpu(app: &mut crate::state::AppState) {
-    app.system.refresh_cpu_usage();
-    let cpu_pct = app.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
-    app.cpu_history.push_back(cpu_pct);
-    if app.cpu_history.len() > 3600 {
-        app.cpu_history.pop_front();
+pub fn refresh_cpu(cpu: &mut crate::state::CpuState) {
+    cpu.system.refresh_cpu_usage();
+    let cpu_pct = cpu.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
+    cpu.history.push_back(cpu_pct);
+    if cpu.history.len() > 3600 {
+        cpu.history.pop_front();
     }
 }
 
-pub fn refresh_memory(app: &mut crate::state::AppState) {
-    app.system.refresh_memory();
-    let used_mem = app.system.used_memory();
-    let total_mem = app.system.total_memory();
+pub fn refresh_memory(cpu: &mut crate::state::CpuState, mem: &mut crate::state::MemoryState) {
+    cpu.system.refresh_memory();
+    let used_mem = cpu.system.used_memory();
+    let total_mem = cpu.system.total_memory();
     let mem_pct = if total_mem > 0 {
         (used_mem as f64 / total_mem as f64) * 100.0
     } else {
         0.0
     };
-    app.mem_history.push_back(mem_pct.clamp(0.0, 100.0));
-    if app.mem_history.len() > 3600 {
-        app.mem_history.pop_front();
+    mem.history.push_back(mem_pct.clamp(0.0, 100.0));
+    if mem.history.len() > 3600 {
+        mem.history.pop_front();
     }
 }
 
-pub fn refresh_network(app: &mut crate::state::AppState) {
-    app.networks.refresh(false);
+pub fn refresh_network(network: &mut crate::state::NetworkState) {
+    network.sysinfo_networks.refresh(false);
 
     let mut total_recv_bytes = 0u64;
     let mut total_sent_bytes = 0u64;
-    for (iface_name, data) in &app.networks {
+    for (iface_name, data) in &network.sysinfo_networks {
         let name_upper = iface_name.to_uppercase();
         if name_upper.contains("LOOPBACK") || name_upper == "LO" {
             continue;
@@ -796,8 +791,8 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
 
     let recv_kbs = (total_recv_bytes as f64 / 1024.0).max(0.0);
     let sent_kbs = (total_sent_bytes as f64 / 1024.0).max(0.0);
-    push_history(&mut app.net_recv_history, recv_kbs, 3600);
-    push_history(&mut app.net_sent_history, sent_kbs, 3600);
+    push_history(&mut network.recv_history, recv_kbs, 3600);
+    push_history(&mut network.sent_history, sent_kbs, 3600);
 }
 
 // ── CPU TEMPERATURE (WMI ROOT\CIMV2) ───────────────────────────────────────────
@@ -855,11 +850,11 @@ pub fn query_cpu_temp_c(wmi_con: Option<&wmi::WMIConnection>) -> Option<f64> {
 /// Uses NVAPI — Nvidia's proprietary C SDK. Only works on systems with an
 /// Nvidia GPU and driver installed. Requires `nvapi` feature.
 #[cfg(feature = "nvapi")]
-pub fn query_nvidia_gpu_temp(state: &crate::state::AppState) -> Option<f32> {
+pub fn query_nvidia_gpu_temp(gpu: &crate::state::GpuState) -> Option<f32> {
     // NVAPI must be initialized once per process — same reason as PDH query handle, stateful C API.
     // unsafe: NVAPI is a C library, Rust cannot verify its safety.
     // NVAPI_OK (0): all NVAPI functions return a status code; 0 = success.
-    if !state.nvapi_initialized {
+    if !gpu.nvapi_initialized {
         return None;
     }
 
@@ -913,7 +908,7 @@ pub fn query_nvidia_gpu_temp(state: &crate::state::AppState) -> Option<f32> {
 }
 
 #[cfg(not(feature = "nvapi"))]
-pub fn query_nvidia_gpu_temp(_state: &crate::state::AppState) -> Option<f32> {
+pub fn query_nvidia_gpu_temp(_gpu: &crate::state::GpuState) -> Option<f32> {
     None
 }
 
@@ -931,40 +926,41 @@ pub fn refresh_all(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
 ) {
-    refresh_cpu(app);
-    app.cpu_temp_c = query_cpu_temp_c(wmi_con);
-    if app.cpu_temp_c.is_none() && !app.cpu_temp_error_logged {
-        app.cpu_temp_error_logged = true;
+    refresh_cpu(&mut app.cpu);
+    app.cpu.temp_c = query_cpu_temp_c(wmi_con);
+    if app.cpu.temp_c.is_none() && !app.cpu.temp_error_logged {
+        app.cpu.temp_error_logged = true;
         eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
     }
-    refresh_memory(app);
-    refresh_network(app);
+    refresh_memory(&mut app.cpu, &mut app.mem);
+    refresh_network(&mut app.network);
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
-    let pdh_collected_ok = match app.pdh_query {
+    let pdh_collected_ok = match app.pdh.query {
         Some(query) => unsafe { PdhCollectQueryData(query) == 0 },
         None => false,
     };
 
     if pdh_collected_ok {
-        refresh_disk(app);
+        refresh_disk(&mut app.disk, &app.pdh);
     }
 
-    let gpu_list = query_gpu_utilization_pdh(app, wmi_con);
+    let gpu_list = query_gpu_utilization_pdh(&mut app.gpu, &app.pdh, wmi_con);
 
     // Query Nvidia GPU temperature
-    if let Some(temp) = query_nvidia_gpu_temp(app) {
-        push_history(&mut app.nvidia_temp_history, temp as f64, 3600);
+    if let Some(temp) = query_nvidia_gpu_temp(&app.gpu) {
+        push_history(&mut app.gpu.nvidia_temp_history, temp as f64, 3600);
     } else {
-        push_history(&mut app.nvidia_temp_history, 0.0, 3600);
+        push_history(&mut app.gpu.nvidia_temp_history, 0.0, 3600);
     }
 
     let mut existing: HashMap<String, VecDeque<f64>> = app
-        .gpu_histories
+        .gpu
+        .entries
         .drain(..)
         .map(|(luid, _, hist)| (luid, hist))
         .collect();
-    app.gpu_histories = gpu_list
+    app.gpu.entries = gpu_list
         .into_iter()
         .map(|(luid, display_name, util)| {
             let mut hist = existing.remove(&luid).unwrap_or_else(|| VecDeque::with_capacity(3600));
@@ -1224,7 +1220,7 @@ mod tests {
         // On a system where NVAPI is unavailable or GPU is absent,
         // query_nvidia_gpu_temp() must return None, not panic.
         let state = crate::state::AppState::new();
-        let _ = query_nvidia_gpu_temp(&state);
+        let _ = query_nvidia_gpu_temp(&state.gpu);
     }
 
     // --- push_history ---
