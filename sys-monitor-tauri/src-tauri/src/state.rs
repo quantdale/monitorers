@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use sysinfo::{Disks, Networks, System};
 use windows::Win32::System::Performance::PdhCloseQuery;
 
@@ -60,36 +60,22 @@ pub struct CollectorState {
     pub sysinfo_disks: Disks,
     pub sysinfo_networks: Networks,
     pub nvapi_initialized: bool,
-    pub gpu_error_logged: bool,
-    pub gpu_debug: bool,
-    pub cpu_temp_error_logged: bool,
+    pub gpu_error_lock: OnceLock<()>,
+    pub cpu_temp_error_lock: OnceLock<()>,
 }
 
 impl CollectorState {
     pub fn new() -> Self {
-        // PDH init — unchanged
-        let pdh = match crate::collector::new_pdh_gpu_query() {
-            Some((query, gpu_3d, gpu_video, disk_active, disk_read, disk_write, disk_response)) => {
-                PdhHandles {
-                    query: Some(query),
-                    gpu_3d_counter: Some(gpu_3d),
-                    gpu_video_counter: gpu_video,
-                    disk_active_counter: disk_active,
-                    disk_read_counter: disk_read,
-                    disk_write_counter: disk_write,
-                    disk_response_counter: disk_response,
-                }
-            }
-            None => PdhHandles {
-                query: None,
-                gpu_3d_counter: None,
-                gpu_video_counter: None,
-                disk_active_counter: None,
-                disk_read_counter: None,
-                disk_write_counter: None,
-                disk_response_counter: None,
-            },
-        };
+        // PDH init
+        let pdh = crate::collector::new_pdh_gpu_query().unwrap_or_else(|| PdhHandles {
+            query: None,
+            gpu_3d_counter: None,
+            gpu_video_counter: None,
+            disk_active_counter: None,
+            disk_read_counter: None,
+            disk_write_counter: None,
+            disk_response_counter: None,
+        });
 
         // sysinfo init — unchanged
         let mut system = System::new_with_specifics(
@@ -122,9 +108,8 @@ impl CollectorState {
             sysinfo_disks: disks,
             sysinfo_networks: networks,
             nvapi_initialized,
-            gpu_error_logged: false,
-            gpu_debug: false,
-            cpu_temp_error_logged: false,
+            gpu_error_lock: OnceLock::new(),
+            cpu_temp_error_lock: OnceLock::new(),
         }
     }
 }
