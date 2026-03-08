@@ -22,6 +22,19 @@ button {
   outline: none;
 }
 
+/* Drag handle — hidden by default, shown on card hover */
+.drag-handle {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  cursor: grab;
+}
+.metric-card:hover .drag-handle {
+  opacity: 1;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 /* Scrollbar styling for dark theme */
 ::-webkit-scrollbar {
   width: 6px;

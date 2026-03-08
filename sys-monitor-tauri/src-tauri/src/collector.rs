@@ -17,12 +17,12 @@ pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max
 
 /// Open a PDH query and register GPU + disk utilization counters once at startup.
 ///
-/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))`.
+/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt, counter_disk_response_opt))`.
 /// Returns `None` if the query or 3D counter cannot be opened.
 ///
 /// The query handle must live for the process lifetime — recreating it resets
 /// the baseline and always returns 0%.
-pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>, Option<isize>, Option<isize>)> {
+pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>, Option<isize>, Option<isize>, Option<isize>)> {
     // SAFETY: PDH C API calls via FFI. All pointer arguments are stack variables.
     // Return codes are checked before any output values are read.
     unsafe {
@@ -85,11 +85,21 @@ pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>
                 None
             };
 
+        let path_disk_response = windows::core::w!(r"\PhysicalDisk(*)\Avg. Disk sec/Transfer");
+        let mut counter_disk_response: isize = 0;
+        let counter_disk_response_opt =
+            if PdhAddEnglishCounterW(query, path_disk_response, 0, &mut counter_disk_response) == 0 {
+                Some(counter_disk_response)
+            } else {
+                eprintln!("[PDH] Failed to add disk avg response time counter.");
+                None
+            };
+
         // First collect — establishes the baseline (value₁). Real readings
         // start on the second poll. The first result is always 0%, by design.
         let _ = PdhCollectQueryData(query);
         eprintln!("[PDH] GPU/disk counters initialized successfully.");
-        Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))
+        Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt, counter_disk_response_opt))
     }
 }
 
@@ -615,6 +625,25 @@ fn query_disk_read_write(
     result
 }
 
+/// Read \PhysicalDisk(*)\Avg. Disk sec/Transfer.
+/// Returns (instance_name -> seconds). Skips _Total.
+fn query_disk_response_time(
+    app: &crate::state::AppState,
+) -> HashMap<String, f64> {
+    let mut result = HashMap::new();
+    let counter = match app.pdh_disk_response_counter {
+        Some(c) => c,
+        None => return result,
+    };
+    for (name, secs) in query_pdh_counter_array(counter) {
+        if name == "_Total" {
+            continue;
+        }
+        result.insert(name, secs);
+    }
+    result
+}
+
 /// Read a PDH counter array into instance_name -> value map.
 fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
     let mut result = HashMap::new();
@@ -671,8 +700,10 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
     }
 
     let read_write = query_disk_read_write(app);
+    let response_times = query_disk_response_time(app);
     app.disk_read_mb_s.clear();
     app.disk_write_mb_s.clear();
+    app.disk_avg_response_ms.clear();
 
     for (instance_name, pct_active) in query_disk_active_time(app) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
@@ -698,6 +729,27 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
         if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
             app.disk_read_mb_s.insert(disk_key.clone(), *read_mb);
             app.disk_write_mb_s.insert(disk_key.clone(), *write_mb);
+        }
+
+        if let Some(secs) = response_times.get(&instance_name) {
+            // PDH reports seconds per transfer; convert to milliseconds for display.
+            app.disk_avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
+        }
+    }
+
+    // Fallback: match response_times by drive letters in case instance names differ
+    // between counters (e.g. "% Idle Time" vs "Avg. Disk sec/Transfer").
+    for (instance_name, secs) in &response_times {
+        let letters: Vec<String> = pdh_instance_to_drive_letters(instance_name)
+            .into_iter()
+            .filter(|l| known_drive_letters.contains_key(l))
+            .collect();
+        if letters.is_empty() {
+            continue;
+        }
+        let disk_key = letters.join(" ");
+        if !app.disk_avg_response_ms.contains_key(&disk_key) && app.disk_active_histories.contains_key(&disk_key) {
+            app.disk_avg_response_ms.insert(disk_key, secs * 1000.0);
         }
     }
 }

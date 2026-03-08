@@ -3,6 +3,7 @@ export interface DiskSnapshot {
   active: number;
   read_mb_s: number;
   write_mb_s: number;
+  avg_response_ms: number;
   temp_c?: number | null;
 }
 
@@ -31,6 +32,7 @@ export interface DiskHistory {
   values: number[];
   read_mb_s: number;
   write_mb_s: number;
+  avg_response_ms: number;
   temp_c?: number | null;
 }
 
