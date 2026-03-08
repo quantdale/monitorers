@@ -727,6 +727,16 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
 
 // ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
 
+/// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
+pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
+    let temp_c = (tenths_kelvin / 10.0) - 273.15;
+    if temp_c >= -50.0 && temp_c <= 150.0 {
+        Some(temp_c)
+    } else {
+        None
+    }
+}
+
 /// Query CPU temperature from ACPI thermal zone (ROOT\WMI).
 /// CurrentTemperature is in tenths of Kelvin; returns temp in Celsius or None.
 pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64> {
@@ -740,13 +750,15 @@ pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64>
         Some(wmi::Variant::I4(n)) => (*n).max(0) as f64,
         _ => return None,
     };
-    // Tenths of Kelvin to Celsius: (tenths_kelvin / 10.0) - 273.15
-    let temp_c = (tenths_kelvin / 10.0) - 273.15;
-    if temp_c >= -50.0 && temp_c <= 150.0 {
-        Some(temp_c)
-    } else {
-        None
-    }
+    tenths_kelvin_to_celsius_checked(tenths_kelvin)
+}
+
+// ── CPU NAME (WMI FALLBACK HELPER) ───────────────────────────────────────────
+
+/// True if we should try WMI fallback for CPU name (empty, generic, or too short).
+pub fn is_generic_or_empty_cpu_name(name: &str) -> bool {
+    let t = name.trim();
+    t.is_empty() || t == "CPU" || t.len() < 4
 }
 
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
@@ -912,6 +924,86 @@ mod tests {
         assert_eq!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown);
     }
 
+    // --- tenths_kelvin_to_celsius_checked ---
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_zero() {
+        // 2732 tenths of K = 273.2 K ≈ 0.05 °C (water freezing)
+        let r = tenths_kelvin_to_celsius_checked(2732.0).unwrap();
+        assert!((r - 0.05).abs() < 1e-9, "expected ~0.05, got {}", r);
+        // 2731.5 → 0 °C exactly
+        assert_eq!(tenths_kelvin_to_celsius_checked(2731.5), Some(0.0));
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_50c() {
+        let r = tenths_kelvin_to_celsius_checked(3232.0).unwrap();
+        assert!((r - 50.05).abs() < 1e-9, "expected ~50.05, got {}", r);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_below_range_returns_none() {
+        // -51 °C: tenths = (-51 + 273.15) * 10 = 2221.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(2221.5), None);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_above_range_returns_none() {
+        // 151 °C: tenths = (151 + 273.15) * 10 = 4241.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(4241.5), None);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_boundary_minus_50() {
+        // -50 °C: tenths = (-50 + 273.15) * 10 = 2231.5
+        let r = tenths_kelvin_to_celsius_checked(2231.5).unwrap();
+        assert!((r - (-50.0)).abs() < 1e-9, "expected ~-50.0, got {}", r);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_boundary_150() {
+        // 150 °C: tenths = (150 + 273.15) * 10 = 4231.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(4231.5), Some(150.0));
+    }
+
+    // --- is_generic_or_empty_cpu_name ---
+
+    #[test]
+    fn test_is_generic_cpu_name_empty() {
+        assert!(is_generic_or_empty_cpu_name(""));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_whitespace_only() {
+        assert!(is_generic_or_empty_cpu_name("   "));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_cpu() {
+        assert!(is_generic_or_empty_cpu_name("CPU"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_cpu_lowercase_still_generic_by_length() {
+        // "cpu" has len 3, so treated as generic (too short) even though not exact "CPU"
+        assert!(is_generic_or_empty_cpu_name("cpu"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_three_chars() {
+        assert!(is_generic_or_empty_cpu_name("ABC"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_four_chars() {
+        assert!(!is_generic_or_empty_cpu_name("ABCD"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_real_name() {
+        assert!(!is_generic_or_empty_cpu_name("Intel(R) Core(TM) i7-12700H"));
+    }
+
     // --- push_history ---
 
     #[test]
@@ -940,5 +1032,16 @@ mod tests {
         let mut d: VecDeque<f64> = [99.0].into();
         push_history(&mut d, 7.0, 1);
         assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![7.0]);
+    }
+
+    #[test]
+    fn test_push_history_multiple_pushes_at_capacity() {
+        let mut d: VecDeque<f64> = [1.0, 2.0, 3.0].into();
+        push_history(&mut d, 4.0, 3);
+        push_history(&mut d, 5.0, 3);
+        push_history(&mut d, 6.0, 3);
+        push_history(&mut d, 7.0, 3);
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![5.0, 6.0, 7.0]);
     }
 }
