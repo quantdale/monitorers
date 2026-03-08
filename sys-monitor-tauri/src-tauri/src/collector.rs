@@ -154,6 +154,16 @@ fn strip_brand_prefix(caption: &str) -> String {
     stripped.to_string()
 }
 
+/// Returns true if the GPU display name belongs to an Nvidia GPU
+/// that should receive the Nvidia temperature reading.
+pub fn is_nvidia_gpu(display_name: &str) -> bool {
+    let lower = display_name.to_lowercase();
+    lower.contains("geforce")
+        || lower.contains("rtx")
+        || lower.contains("gtx")
+        || lower.contains("nvidia")
+}
+
 /// Classify a LUID as iGPU or dGPU.
 ///
 /// Primary: keyword match on vendor caption from Win32_VideoController.
