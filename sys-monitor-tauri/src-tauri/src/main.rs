@@ -73,33 +73,36 @@ pub struct DiskHistory {
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
 fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
-    let cpu = s.cpu_history.back().copied().unwrap_or(0.0);
-    let mem = s.mem_history.back().copied().unwrap_or(0.0);
-    let total_mem_bytes = s.system.total_memory();
-    let used_mem_bytes = s.system.used_memory();
+    let cpu = s.cpu.history.back().copied().unwrap_or(0.0);
+    let mem = s.mem.history.back().copied().unwrap_or(0.0);
+    let total_mem_bytes = s.cpu.system.total_memory();
+    let used_mem_bytes = s.cpu.system.used_memory();
     let mem_total_gb = total_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     let mem_used_gb = used_mem_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
     let disks = s
-        .disk_display_order
+        .disk
+        .display_order
         .iter()
         .map(|k| DiskSnapshot {
             key: k.clone(),
             active: s
-                .disk_active_histories
+                .disk
+                .active_histories
                 .get(k)
                 .and_then(|h| h.back().copied())
                 .unwrap_or(0.0),
-            read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-            write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-            avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
+            read_mb_s: s.disk.read_mb_s.get(k).copied().unwrap_or(0.0),
+            write_mb_s: s.disk.write_mb_s.get(k).copied().unwrap_or(0.0),
+            avg_response_ms: s.disk.avg_response_ms.get(k).copied().unwrap_or(0.0),
             temp_c: None,
         })
         .collect();
 
-    let nvidia_temp = s.nvidia_temp_history.back().copied();
+    let nvidia_temp = s.gpu.nvidia_temp_history.back().copied();
     let gpus = s
-        .gpu_histories
+        .gpu
+        .entries
         .iter()
         .map(|(_, name, hist)| {
             let name_lower = name.to_lowercase();
@@ -120,15 +123,15 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
 
     MetricsSnapshot {
         cpu,
-        cpu_name: s.cpu_name.clone(),
-        cpu_temp_c: s.cpu_temp_c,
+        cpu_name: s.cpu.name.clone(),
+        cpu_temp_c: s.cpu.temp_c,
         nvidia_temp,
         mem,
         mem_used_gb,
         mem_total_gb,
         disks,
-        net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
-        net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
+        net_recv_kb: s.network.recv_history.back().copied().unwrap_or(0.0),
+        net_sent_kb: s.network.sent_history.back().copied().unwrap_or(0.0),
         gpus,
     }
 }
@@ -141,39 +144,42 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
 fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
     let s = state.lock().unwrap();
     HistoryPayload {
-        cpu: s.cpu_history.iter().copied().collect(),
-        cpu_name: s.cpu_name.clone(),
-        cpu_temp_c: s.cpu_temp_c,
-        mem: s.mem_history.iter().copied().collect(),
+        cpu: s.cpu.history.iter().copied().collect(),
+        cpu_name: s.cpu.name.clone(),
+        cpu_temp_c: s.cpu.temp_c,
+        mem: s.mem.history.iter().copied().collect(),
         disks: s
-            .disk_display_order
+            .disk
+            .display_order
             .iter()
             .map(|k: &String| DiskHistory {
                 key: k.clone(),
                 values: s
-                    .disk_active_histories
+                    .disk
+                    .active_histories
                     .get(k)
                     .map(|h: &std::collections::VecDeque<f64>| {
                         h.iter().copied().collect::<Vec<f64>>()
                     })
                     .unwrap_or_default(),
-                read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-                write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-                avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
+                read_mb_s: s.disk.read_mb_s.get(k).copied().unwrap_or(0.0),
+                write_mb_s: s.disk.write_mb_s.get(k).copied().unwrap_or(0.0),
+                avg_response_ms: s.disk.avg_response_ms.get(k).copied().unwrap_or(0.0),
                 temp_c: None,
             })
             .collect(),
-        net_recv: s.net_recv_history.iter().copied().collect(),
-        net_sent: s.net_sent_history.iter().copied().collect(),
+        net_recv: s.network.recv_history.iter().copied().collect(),
+        net_sent: s.network.sent_history.iter().copied().collect(),
         gpus: s
-            .gpu_histories
+            .gpu
+            .entries
             .iter()
             .map(|(_, name, hist)| {
                 let name_lower = name.to_lowercase();
                 let temp_c = if (name_lower.contains("geforce") || name_lower.contains("rtx") || name_lower.contains("gtx") || name_lower.contains("nvidia"))
-                    && s.nvidia_temp_history.back().is_some()
+                    && s.gpu.nvidia_temp_history.back().is_some()
                 {
-                    s.nvidia_temp_history.back().copied()
+                    s.gpu.nvidia_temp_history.back().copied()
                 } else {
                     None
                 };
