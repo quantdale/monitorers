@@ -1,29 +1,25 @@
-interface Option {
-  label: string;
-  value: number;
-}
+import type { ViewMode } from '../utils';
 
 interface Props {
-  options: Option[];
-  value: number;
-  onChange: (value: number) => void;
+  value: ViewMode;
+  onChange: (mode: ViewMode) => void;
 }
 
-export function TimeRangeSelector({ options, value, onChange }: Props) {
+const MODES: { key: ViewMode; label: string }[] = [
+  { key: 'default', label: 'Default' },
+  { key: 'tile',    label: 'Tile' },
+  { key: 'list',    label: 'List' },
+];
+
+export function ViewModeSelector({ value, onChange }: Props) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 6,
-        flexWrap: 'wrap',
-      }}
-    >
-      {options.map((opt) => {
-        const active = opt.value === value;
+    <div style={{ display: 'flex', gap: 6 }}>
+      {MODES.map(({ key, label }) => {
+        const active = key === value;
         return (
           <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
+            key={key}
+            onClick={() => onChange(key)}
             style={{
               padding: '4px 12px',
               borderRadius: 4,
@@ -36,7 +32,7 @@ export function TimeRangeSelector({ options, value, onChange }: Props) {
               transition: 'all 0.15s ease',
             }}
           >
-            {opt.label}
+            {label}
           </button>
         );
       })}
