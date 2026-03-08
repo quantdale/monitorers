@@ -27,7 +27,7 @@ pub struct GpuState {
     // Populated dynamically from PDH GPU engine instances
     pub entries: Vec<(String, String, VecDeque<f64>)>,
 
-    pub nvidia_temp_history: VecDeque<f64>, // Nvidia GPU core temp °C, max 3600
+    pub nvidia_temp: Option<f64>,          // Nvidia GPU core temp °C, None when unavailable
     pub nvapi_initialized: bool,            // NVAPI init success flag
     pub error_logged: bool,                 // one-shot stderr flag for LUID mismatch
     pub debug: bool,                        // extra PDH/GPU stderr when true (false at startup)
@@ -164,7 +164,7 @@ impl AppState {
             },
             gpu: GpuState {
                 entries: Vec::new(),
-                nvidia_temp_history: VecDeque::with_capacity(3600),
+                nvidia_temp: None,
                 nvapi_initialized,
                 error_logged: false,
                 debug: false,
