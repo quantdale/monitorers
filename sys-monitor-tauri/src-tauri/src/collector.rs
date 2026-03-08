@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
     PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
@@ -17,12 +17,12 @@ pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max
 
 /// Open a PDH query and register GPU + disk utilization counters once at startup.
 ///
-/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt))`.
+/// Returns `Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))`.
 /// Returns `None` if the query or 3D counter cannot be opened.
 ///
 /// The query handle must live for the process lifetime — recreating it resets
 /// the baseline and always returns 0%.
-pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>)> {
+pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>, Option<isize>, Option<isize>)> {
     // SAFETY: PDH C API calls via FFI. All pointer arguments are stack variables.
     // Return codes are checked before any output values are read.
     unsafe {
@@ -65,11 +65,31 @@ pub fn new_pdh_gpu_query() -> Option<(isize, isize, Option<isize>, Option<isize>
                 None
             };
 
+        let path_disk_read = windows::core::w!(r"\PhysicalDisk(*)\Disk Read Bytes/sec");
+        let mut counter_disk_read: isize = 0;
+        let counter_disk_read_opt =
+            if PdhAddEnglishCounterW(query, path_disk_read, 0, &mut counter_disk_read) == 0 {
+                Some(counter_disk_read)
+            } else {
+                eprintln!("[PDH] Failed to add disk read bytes/sec counter.");
+                None
+            };
+
+        let path_disk_write = windows::core::w!(r"\PhysicalDisk(*)\Disk Write Bytes/sec");
+        let mut counter_disk_write: isize = 0;
+        let counter_disk_write_opt =
+            if PdhAddEnglishCounterW(query, path_disk_write, 0, &mut counter_disk_write) == 0 {
+                Some(counter_disk_write)
+            } else {
+                eprintln!("[PDH] Failed to add disk write bytes/sec counter.");
+                None
+            };
+
         // First collect — establishes the baseline (value₁). Real readings
         // start on the second poll. The first result is always 0%, by design.
         let _ = PdhCollectQueryData(query);
         eprintln!("[PDH] GPU/disk counters initialized successfully.");
-        Some((query, counter_3d, counter_video_opt, counter_disk_opt))
+        Some((query, counter_3d, counter_video_opt, counter_disk_opt, counter_disk_read_opt, counter_disk_write_opt))
     }
 }
 
@@ -104,6 +124,24 @@ pub fn extract_luid_from_name(name: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Strip brand prefix from GPU caption for display (e.g. "NVIDIA GeForce RTX 4050" → "GeForce RTX 4050").
+fn strip_brand_prefix(caption: &str) -> String {
+    let c = caption.trim();
+    let lower = c.to_lowercase();
+    let stripped = if lower.starts_with("nvidia ") {
+        c[7..].trim_start()
+    } else if lower.starts_with("intel(r) ") {
+        c[9..].trim_start()
+    } else if lower.starts_with("intel ") {
+        c[6..].trim_start()
+    } else if lower.starts_with("amd ") {
+        c[4..].trim_start()
+    } else {
+        c
+    };
+    stripped.to_string()
 }
 
 /// Classify a LUID as iGPU or dGPU.
@@ -289,7 +327,10 @@ pub fn query_gpu_perf_counters(
 
 // ── GPU PDH UTILIZATION ──────────────────────────────────────────────────────
 
-/// Read GPU 3D-engine utilization from PDH. Returns (igpu_util%, dgpu_util%).
+/// Per-GPU result: (luid, display_name, utilization%).
+pub type GpuUtilEntry = (String, String, f64);
+
+/// Read GPU 3D-engine utilization from PDH. Returns list of (luid, display_name, util%) per GPU.
 ///
 /// PdhCollectQueryData is called once per poll in refresh_all() before this
 /// function runs. This function only reads the already-collected data.
@@ -300,13 +341,14 @@ pub fn query_gpu_perf_counters(
 pub fn query_gpu_utilization_pdh(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
-) -> (f64, f64) {
+) -> Vec<GpuUtilEntry> {
+    let mut result = Vec::new();
     if app.pdh_query.is_none() {
-        return (0.0, 0.0);
+        return result;
     }
     let counter_3d = match app.pdh_gpu_3d_counter {
         Some(c) => c,
-        None => return (0.0, 0.0),
+        None => return result,
     };
 
     let vendor_map = match wmi_con {
@@ -324,7 +366,6 @@ pub fn query_gpu_utilization_pdh(
         let mut buf_size: u32 = 0;
         let mut item_count: u32 = 0;
 
-        // Probe call — returns PDH_MORE_DATA but sets buf_size and item_count.
         let _ = PdhGetFormattedCounterArrayW(
             counter_3d,
             PDH_FMT_DOUBLE,
@@ -334,12 +375,9 @@ pub fn query_gpu_utilization_pdh(
         );
 
         if item_count == 0 {
-            return (0.0, 0.0);
+            return result;
         }
 
-        // Vec<u64> guarantees 8-byte alignment required by the f64 union inside
-        // PDH_FMT_COUNTERVALUE_ITEM_W. 3× safety margin covers new processes
-        // that may have started between the probe and data calls.
         let u64_count = (buf_size as usize * 3 + 7) / 8;
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;
@@ -354,61 +392,82 @@ pub fn query_gpu_utilization_pdh(
         );
 
         if status != 0 {
-            return (0.0, 0.0);
+            return result;
         }
 
         for i in 0..item_count as usize {
             let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
-
-            // PDH_CSTATUS_VALID_DATA = 0x0, PDH_CSTATUS_NEW_DATA = 0x1
             if item.FmtValue.CStatus > 1 {
                 continue;
             }
-
             let name = match item.szName.to_string() {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-
             if app.gpu_debug {
                 eprintln!("[PDH DEBUG] instance: {}", name);
             }
-
             let luid = match extract_luid_from_name(&name) {
                 Some(l) => l,
                 None => continue,
             };
-
-            // doubleValue valid because we requested PDH_FMT_DOUBLE.
             let util = item.FmtValue.Anonymous.doubleValue.clamp(0.0, 100.0);
             *luid_3d_totals.entry(luid).or_insert(0.0) += util;
         }
     }
 
-    let mut igpu_max = 0.0f64;
-    let mut dgpu_max = 0.0f64;
-
-    for (luid, total) in luid_3d_totals {
-        let capped = total.min(100.0);
-        match classify_luid(&luid, &vendor_map) {
-            GpuClass::IGpu => igpu_max = igpu_max.max(capped),
-            GpuClass::DGpu => dgpu_max = dgpu_max.max(capped),
-            GpuClass::Unknown => {
-                if !app.gpu_error_logged {
-                    eprintln!("[PDH] Unclassified LUID: {} (util={:.1}%)", luid, capped);
-                }
+    // Build list from vendor_map so we include GPUs with 0% util.
+    let mut entries: Vec<(String, String, f64)> = Vec::new();
+    for (luid, caption) in &vendor_map {
+        let class = classify_luid(luid, &vendor_map);
+        if matches!(class, GpuClass::Unknown) {
+            if !app.gpu_error_logged {
+                eprintln!("[PDH] Unclassified LUID: {}", luid);
             }
+            continue;
         }
+        let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
+        let display_name = strip_brand_prefix(caption);
+        if display_name.is_empty() {
+            continue;
+        }
+        entries.push((luid.clone(), display_name, util));
+    }
+
+    // Sort: iGPU first, then dGPU; within each class by LUID.
+    entries.sort_by(|a, b| {
+        let class_a = classify_luid(&a.0, &vendor_map);
+        let class_b = classify_luid(&b.0, &vendor_map);
+        let ord = match (class_a, class_b) {
+            (GpuClass::IGpu, GpuClass::DGpu) => std::cmp::Ordering::Less,
+            (GpuClass::DGpu, GpuClass::IGpu) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        };
+        ord.then_with(|| a.0.cmp(&b.0))
+    });
+
+    // For duplicate display names (same model), add " 1", " 2" suffix.
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for (_, name, _) in &entries {
+        *name_counts.entry(name.clone()).or_insert(0) += 1;
+    }
+    let mut name_indices: HashMap<String, usize> = HashMap::new();
+    for (luid, display_name, util) in entries {
+        let suffix = if *name_counts.get(&display_name).unwrap_or(&0) > 1 {
+            let idx = *name_indices.entry(display_name.clone()).or_insert(0);
+            name_indices.insert(display_name.clone(), idx + 1);
+            format!(" {}", idx + 1)
+        } else {
+            String::new()
+        };
+        result.push((luid, format!("{}{}", display_name, suffix), util));
     }
 
     if app.gpu_debug {
-        eprintln!(
-            "[PDH DEBUG] Final: igpu_max={:.1}%, dgpu_max={:.1}%",
-            igpu_max, dgpu_max
-        );
+        eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
-    (igpu_max, dgpu_max)
+    result
 }
 
 // ── DISK HELPERS ─────────────────────────────────────────────────────────────
@@ -491,6 +550,91 @@ pub fn query_disk_active_time(
     }
 }
 
+/// Read \PhysicalDisk(*)\Disk Read Bytes/sec and Disk Write Bytes/sec.
+/// Returns (instance_name -> (read_mb_s, write_mb_s)). Skips _Total.
+fn query_disk_read_write(
+    app: &crate::state::AppState,
+) -> HashMap<String, (f64, f64)> {
+    let mut result = HashMap::new();
+    let counter_read = match app.pdh_disk_read_counter {
+        Some(c) => c,
+        None => return result,
+    };
+    let counter_write = match app.pdh_disk_write_counter {
+        Some(c) => c,
+        None => return result,
+    };
+
+    const BYTES_TO_MB: f64 = 1.0 / (1024.0 * 1024.0);
+
+    let read_map = query_pdh_counter_array(counter_read);
+    let write_map = query_pdh_counter_array(counter_write);
+
+    for (name, read_bps) in read_map {
+        if name == "_Total" {
+            continue;
+        }
+        let write_bps = write_map.get(&name).copied().unwrap_or(0.0);
+        result.insert(
+            name,
+            (read_bps * BYTES_TO_MB, write_bps * BYTES_TO_MB),
+        );
+    }
+    for (name, write_bps) in write_map {
+        if name == "_Total" {
+            continue;
+        }
+        if !result.contains_key(&name) {
+            result.insert(name, (0.0, write_bps * BYTES_TO_MB));
+        }
+    }
+
+    result
+}
+
+/// Read a PDH counter array into instance_name -> value map.
+fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
+    let mut result = HashMap::new();
+    unsafe {
+        let mut buf_size: u32 = 0;
+        let mut item_count: u32 = 0;
+        let _ = PdhGetFormattedCounterArrayW(
+            counter,
+            PDH_FMT_DOUBLE,
+            &mut buf_size,
+            &mut item_count,
+            None,
+        );
+        if item_count == 0 {
+            return result;
+        }
+        let u64_count = (buf_size as usize * 3 + 7) / 8;
+        let mut backing: Vec<u64> = vec![0u64; u64_count];
+        let mut actual_buf_size: u32 = (u64_count * 8) as u32;
+        let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
+        let status = PdhGetFormattedCounterArrayW(
+            counter,
+            PDH_FMT_DOUBLE,
+            &mut actual_buf_size,
+            &mut item_count,
+            Some(buf_ptr),
+        );
+        if status != 0 {
+            return result;
+        }
+        for i in 0..item_count as usize {
+            let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
+            if item.FmtValue.CStatus > 1 {
+                continue;
+            }
+            let name = item.szName.to_string().unwrap_or_default();
+            let value = item.FmtValue.Anonymous.doubleValue;
+            result.insert(name, value);
+        }
+    }
+    result
+}
+
 pub fn refresh_disk(app: &mut crate::state::AppState) {
     app.disks.refresh(false);
 
@@ -502,6 +646,10 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
             known_drive_letters.insert(mount_upper[..2].to_string(), mount);
         }
     }
+
+    let read_write = query_disk_read_write(app);
+    app.disk_read_mb_s.clear();
+    app.disk_write_mb_s.clear();
 
     for (instance_name, pct_active) in query_disk_active_time(app) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
@@ -521,7 +669,12 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
         }
 
         if let Some(history) = app.disk_active_histories.get_mut(&disk_key) {
-            push_history(history, pct_active, 3600);
+            push_history(history, pct_active.clamp(0.0, 100.0), 3600);
+        }
+
+        if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
+            app.disk_read_mb_s.insert(disk_key.clone(), *read_mb);
+            app.disk_write_mb_s.insert(disk_key.clone(), *write_mb);
         }
     }
 }
@@ -530,7 +683,7 @@ pub fn refresh_disk(app: &mut crate::state::AppState) {
 
 pub fn refresh_cpu(app: &mut crate::state::AppState) {
     app.system.refresh_cpu_usage();
-    let cpu_pct = app.system.global_cpu_usage() as f64;
+    let cpu_pct = app.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
     app.cpu_history.push_back(cpu_pct);
     if app.cpu_history.len() > 3600 {
         app.cpu_history.pop_front();
@@ -546,7 +699,7 @@ pub fn refresh_memory(app: &mut crate::state::AppState) {
     } else {
         0.0
     };
-    app.mem_history.push_back(mem_pct);
+    app.mem_history.push_back(mem_pct.clamp(0.0, 100.0));
     if app.mem_history.len() > 3600 {
         app.mem_history.pop_front();
     }
@@ -566,10 +719,46 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
         total_sent_bytes += data.transmitted();
     }
 
-    let recv_kbs = total_recv_bytes as f64 / 1024.0;
-    let sent_kbs = total_sent_bytes as f64 / 1024.0;
+    let recv_kbs = (total_recv_bytes as f64 / 1024.0).max(0.0);
+    let sent_kbs = (total_sent_bytes as f64 / 1024.0).max(0.0);
     push_history(&mut app.net_recv_history, recv_kbs, 3600);
     push_history(&mut app.net_sent_history, sent_kbs, 3600);
+}
+
+// ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
+
+/// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
+pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
+    let temp_c = (tenths_kelvin / 10.0) - 273.15;
+    if temp_c >= -50.0 && temp_c <= 150.0 {
+        Some(temp_c)
+    } else {
+        None
+    }
+}
+
+/// Query CPU temperature from ACPI thermal zone (ROOT\WMI).
+/// CurrentTemperature is in tenths of Kelvin; returns temp in Celsius or None.
+pub fn query_cpu_temp_c(wmi_thermal: Option<&wmi::WMIConnection>) -> Option<f64> {
+    let con = wmi_thermal?;
+    let rows = con
+        .raw_query::<HashMap<String, wmi::Variant>>("SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature")
+        .ok()?;
+    let row = rows.first()?;
+    let tenths_kelvin = match row.get("CurrentTemperature") {
+        Some(wmi::Variant::UI4(n)) => *n as f64,
+        Some(wmi::Variant::I4(n)) => (*n).max(0) as f64,
+        _ => return None,
+    };
+    tenths_kelvin_to_celsius_checked(tenths_kelvin)
+}
+
+// ── CPU NAME (WMI FALLBACK HELPER) ───────────────────────────────────────────
+
+/// True if we should try WMI fallback for CPU name (empty, generic, or too short).
+pub fn is_generic_or_empty_cpu_name(name: &str) -> bool {
+    let t = name.trim();
+    t.is_empty() || t == "CPU" || t.len() < 4
 }
 
 // ── MAIN POLL FUNCTION ───────────────────────────────────────────────────────
@@ -585,8 +774,10 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
 pub fn refresh_all(
     app: &mut crate::state::AppState,
     wmi_con: Option<&wmi::WMIConnection>,
+    wmi_thermal: Option<&wmi::WMIConnection>,
 ) {
     refresh_cpu(app);
+    app.cpu_temp_c = query_cpu_temp_c(wmi_thermal);
     refresh_memory(app);
     refresh_network(app);
 
@@ -600,9 +791,20 @@ pub fn refresh_all(
         refresh_disk(app);
     }
 
-    let (igpu_util, dgpu_util) = query_gpu_utilization_pdh(app, wmi_con);
-    push_history(&mut app.igpu_history, igpu_util, 3600);
-    push_history(&mut app.dgpu_history, dgpu_util, 3600);
+    let gpu_list = query_gpu_utilization_pdh(app, wmi_con);
+    let mut existing: HashMap<String, VecDeque<f64>> = app
+        .gpu_histories
+        .drain(..)
+        .map(|(luid, _, hist)| (luid, hist))
+        .collect();
+    app.gpu_histories = gpu_list
+        .into_iter()
+        .map(|(luid, display_name, util)| {
+            let mut hist = existing.remove(&luid).unwrap_or_else(|| VecDeque::with_capacity(3600));
+            push_history(&mut hist, util.clamp(0.0, 100.0), 3600);
+            (luid, display_name, hist)
+        })
+        .collect();
 }
 
 #[cfg(test)]
@@ -722,6 +924,86 @@ mod tests {
         assert_eq!(classify_luid("0xDEADBEEF", &map), GpuClass::Unknown);
     }
 
+    // --- tenths_kelvin_to_celsius_checked ---
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_zero() {
+        // 2732 tenths of K = 273.2 K ≈ 0.05 °C (water freezing)
+        let r = tenths_kelvin_to_celsius_checked(2732.0).unwrap();
+        assert!((r - 0.05).abs() < 1e-9, "expected ~0.05, got {}", r);
+        // 2731.5 → 0 °C exactly
+        assert_eq!(tenths_kelvin_to_celsius_checked(2731.5), Some(0.0));
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_50c() {
+        let r = tenths_kelvin_to_celsius_checked(3232.0).unwrap();
+        assert!((r - 50.05).abs() < 1e-9, "expected ~50.05, got {}", r);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_below_range_returns_none() {
+        // -51 °C: tenths = (-51 + 273.15) * 10 = 2221.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(2221.5), None);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_above_range_returns_none() {
+        // 151 °C: tenths = (151 + 273.15) * 10 = 4241.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(4241.5), None);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_boundary_minus_50() {
+        // -50 °C: tenths = (-50 + 273.15) * 10 = 2231.5
+        let r = tenths_kelvin_to_celsius_checked(2231.5).unwrap();
+        assert!((r - (-50.0)).abs() < 1e-9, "expected ~-50.0, got {}", r);
+    }
+
+    #[test]
+    fn test_tenths_kelvin_to_celsius_boundary_150() {
+        // 150 °C: tenths = (150 + 273.15) * 10 = 4231.5
+        assert_eq!(tenths_kelvin_to_celsius_checked(4231.5), Some(150.0));
+    }
+
+    // --- is_generic_or_empty_cpu_name ---
+
+    #[test]
+    fn test_is_generic_cpu_name_empty() {
+        assert!(is_generic_or_empty_cpu_name(""));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_whitespace_only() {
+        assert!(is_generic_or_empty_cpu_name("   "));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_cpu() {
+        assert!(is_generic_or_empty_cpu_name("CPU"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_cpu_lowercase_still_generic_by_length() {
+        // "cpu" has len 3, so treated as generic (too short) even though not exact "CPU"
+        assert!(is_generic_or_empty_cpu_name("cpu"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_three_chars() {
+        assert!(is_generic_or_empty_cpu_name("ABC"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_four_chars() {
+        assert!(!is_generic_or_empty_cpu_name("ABCD"));
+    }
+
+    #[test]
+    fn test_is_generic_cpu_name_real_name() {
+        assert!(!is_generic_or_empty_cpu_name("Intel(R) Core(TM) i7-12700H"));
+    }
+
     // --- push_history ---
 
     #[test]
@@ -750,5 +1032,16 @@ mod tests {
         let mut d: VecDeque<f64> = [99.0].into();
         push_history(&mut d, 7.0, 1);
         assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![7.0]);
+    }
+
+    #[test]
+    fn test_push_history_multiple_pushes_at_capacity() {
+        let mut d: VecDeque<f64> = [1.0, 2.0, 3.0].into();
+        push_history(&mut d, 4.0, 3);
+        push_history(&mut d, 5.0, 3);
+        push_history(&mut d, 6.0, 3);
+        push_history(&mut d, 7.0, 3);
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![5.0, 6.0, 7.0]);
     }
 }

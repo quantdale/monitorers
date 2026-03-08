@@ -13,16 +13,32 @@ const TIME_OPTIONS = [
 ];
 
 const DISK_COLORS = ['#e88246', '#c46be8', '#e8d446', '#46e8d4'];
+const GPU_COLORS = ['#64b4ff', '#78c888', '#e8a050', '#c080e0'];
 
-function formatKbps(kb: number): string {
-  if (kb >= 1024 * 1024) return `${(kb / (1024 * 1024)).toFixed(1)} GB/s`;
-  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB/s`;
+function formatThroughput(kb: number): string {
+  if (kb >= 1000 * 1000) return `${(kb / 1e6).toFixed(1)} GB/s`;
+  if (kb >= 1000) return `${(kb / 1000).toFixed(1)} MB/s`;
   return `${kb.toFixed(0)} KB/s`;
 }
 
 function formatPercent(v: number | undefined): string {
-  return `${(v ?? 0).toFixed(1)}%`;
+  const x = Math.max(0, v ?? 0);
+  return `${x.toFixed(1)}%`;
 }
+
+function formatTempC(temp: number | null | undefined): string {
+  if (temp == null || Number.isNaN(temp)) return '— °C';
+  return `${Math.round(temp)} °C`;
+}
+
+const badgeStyle: React.CSSProperties = {
+  border: '1px solid #444',
+  padding: '4px 8px',
+  borderRadius: 4,
+  fontSize: 11,
+  fontFamily: 'monospace',
+  color: '#aaa',
+};
 
 export default function App() {
   const [windowSecs, setWindowSecs] = useState(60);
@@ -67,15 +83,45 @@ export default function App() {
       ) : (
         <>
           <MetricCard
-            title="CPU"
+            title={metrics.cpu_name || 'CPU'}
             value={formatPercent(metrics.cpu.at(-1))}
             history={metrics.cpu}
             color="#4699e8"
+            badge={<span style={badgeStyle}>{formatTempC(metrics.cpu_temp_c)}</span>}
           />
 
           <MetricCard
             title="Memory"
-            value={`${formatPercent(metrics.mem.at(-1))}  ${metrics.mem_used_gb.toFixed(1)} / ${metrics.mem_total_gb.toFixed(1)} GB`}
+            value={
+              <>
+                <span
+                  style={{
+                    border: '1px solid #444',
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    color: '#fff',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {formatPercent(metrics.mem.at(-1))}
+                </span>
+                <span
+                  style={{
+                    border: '1px solid #444',
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    color: '#fff',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {`${metrics.mem_used_gb.toFixed(1)} / ${metrics.mem_total_gb.toFixed(1)} GB`}
+                </span>
+              </>
+            }
             history={metrics.mem}
             color="#4ed87a"
           />
@@ -87,38 +133,40 @@ export default function App() {
               value={formatPercent(disk.values.at(-1))}
               history={disk.values}
               color={DISK_COLORS[idx % DISK_COLORS.length]}
+              badge={
+                <>
+                  <span style={badgeStyle}>
+                    R: {disk.read_mb_s.toFixed(1)} MB/s · W: {disk.write_mb_s.toFixed(1)} MB/s
+                  </span>
+                  <span style={badgeStyle}>{formatTempC(disk.temp_c)}</span>
+                </>
+              }
             />
           ))}
 
           <MetricCard
-            title="Network ↓ Recv"
-            value={formatKbps(metrics.net_recv.at(-1) ?? 0)}
+            title="Network"
+            value={formatThroughput(metrics.net_recv.at(-1) ?? 0)}
             history={metrics.net_recv}
             color="#50d8f0"
             yDomain={[0, 'auto']}
+            badge={
+              <span style={badgeStyle}>
+                ↓ {formatThroughput(metrics.net_recv.at(-1) ?? 0)} · ↑ {formatThroughput(metrics.net_sent.at(-1) ?? 0)}
+              </span>
+            }
           />
 
-          <MetricCard
-            title="Network ↑ Sent"
-            value={formatKbps(metrics.net_sent.at(-1) ?? 0)}
-            history={metrics.net_sent}
-            color="#f082c8"
-            yDomain={[0, 'auto']}
-          />
-
-          <MetricCard
-            title="iGPU"
-            value={formatPercent(metrics.igpu.at(-1))}
-            history={metrics.igpu}
-            color="#64b4ff"
-          />
-
-          <MetricCard
-            title="dGPU"
-            value={formatPercent(metrics.dgpu.at(-1))}
-            history={metrics.dgpu}
-            color="#78c888"
-          />
+          {metrics.gpus.map((gpu, idx) => (
+            <MetricCard
+              key={gpu.name}
+              title={gpu.name}
+              value={formatPercent(gpu.values.at(-1))}
+              history={gpu.values}
+              color={GPU_COLORS[idx % GPU_COLORS.length]}
+              badge={<span style={badgeStyle}>{formatTempC(gpu.temp_c)}</span>}
+            />
+          ))}
         </>
       )}
     </div>

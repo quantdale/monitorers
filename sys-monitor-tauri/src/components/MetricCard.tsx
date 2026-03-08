@@ -8,10 +8,11 @@ import {
 
 interface Props {
   title: string;
-  value: string;
-  history: number[];
+  value: string | React.ReactNode;
+  history?: number[];
   color: string;
   yDomain?: [number, number | 'auto'];
+  badge?: React.ReactNode;
 }
 
 export function MetricCard({
@@ -20,8 +21,12 @@ export function MetricCard({
   history,
   color,
   yDomain = [0, 100],
+  badge,
 }: Props) {
-  const data = history.map((v, i) => ({ i, v }));
+  const hasChart = history != null && history.length > 0;
+  const data = hasChart ? history.map((v, i) => ({ i, v: Math.max(0, v) })) : [];
+
+  const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
   return (
     <div
@@ -35,18 +40,52 @@ export function MetricCard({
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          marginBottom: 6,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: hasChart ? 6 : 0,
         }}
       >
-        <span style={{ color: '#999', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <span
+          style={{
+            color: '#999',
+            fontSize: 12,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            ...borderStyle,
+          }}
+        >
           {title}
         </span>
-        <span style={{ color: '#fff', fontSize: 13, fontWeight: 600, fontFamily: 'monospace' }}>
-          {value}
-        </span>
+        {typeof value === 'string' ? (
+          <span
+            style={{
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: 'monospace',
+              ...borderStyle,
+            }}
+          >
+            {value}
+          </span>
+        ) : (
+          value
+        )}
+        {badge && (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              flexShrink: 0,
+            }}
+          >
+            {badge}
+          </div>
+        )}
       </div>
+      {hasChart && (
       <ResponsiveContainer width="100%" height={100}>
         <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
           <YAxis domain={yDomain} hide />
@@ -63,6 +102,7 @@ export function MetricCard({
           />
         </AreaChart>
       </ResponsiveContainer>
+      )}
     </div>
   );
 }

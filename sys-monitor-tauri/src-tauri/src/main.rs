@@ -12,37 +12,59 @@ use tauri::Manager;
 #[derive(serde::Serialize, Clone)]
 pub struct MetricsSnapshot {
     pub cpu: f64,
+    pub cpu_name: String,
+    pub cpu_temp_c: Option<f64>,
     pub mem: f64,
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
     pub disks: Vec<DiskSnapshot>,
     pub net_recv_kb: f64,
     pub net_sent_kb: f64,
-    pub igpu: f64,
-    pub dgpu: f64,
+    pub gpus: Vec<GpuSnapshot>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct GpuSnapshot {
+    pub name: String,
+    pub util: f64,
+    pub temp_c: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
 pub struct DiskSnapshot {
     pub key: String,
     pub active: f64,
+    pub read_mb_s: f64,
+    pub write_mb_s: f64,
+    pub temp_c: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
 pub struct HistoryPayload {
     pub cpu: Vec<f64>,
+    pub cpu_name: String,
+    pub cpu_temp_c: Option<f64>,
     pub mem: Vec<f64>,
     pub disks: Vec<DiskHistory>,
     pub net_recv: Vec<f64>,
     pub net_sent: Vec<f64>,
-    pub igpu: Vec<f64>,
-    pub dgpu: Vec<f64>,
+    pub gpus: Vec<GpuHistory>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct GpuHistory {
+    pub name: String,
+    pub values: Vec<f64>,
+    pub temp_c: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
 pub struct DiskHistory {
     pub key: String,
     pub values: Vec<f64>,
+    pub read_mb_s: f64,
+    pub write_mb_s: f64,
+    pub temp_c: Option<f64>,
 }
 
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
@@ -65,19 +87,33 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
                 .get(k)
                 .and_then(|h| h.back().copied())
                 .unwrap_or(0.0),
+            read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
+            write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+            temp_c: None,
+        })
+        .collect();
+
+    let gpus = s
+        .gpu_histories
+        .iter()
+        .map(|(_, name, hist)| GpuSnapshot {
+            name: name.clone(),
+            util: hist.back().copied().unwrap_or(0.0),
+            temp_c: None,
         })
         .collect();
 
     MetricsSnapshot {
         cpu,
+        cpu_name: s.cpu_name.clone(),
+        cpu_temp_c: s.cpu_temp_c,
         mem,
         mem_used_gb,
         mem_total_gb,
         disks,
         net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
         net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
-        igpu: s.igpu_history.back().copied().unwrap_or(0.0),
-        dgpu: s.dgpu_history.back().copied().unwrap_or(0.0),
+        gpus,
     }
 }
 
@@ -90,6 +126,8 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
     let s = state.lock().unwrap();
     HistoryPayload {
         cpu: s.cpu_history.iter().copied().collect(),
+        cpu_name: s.cpu_name.clone(),
+        cpu_temp_c: s.cpu_temp_c,
         mem: s.mem_history.iter().copied().collect(),
         disks: s
             .disk_display_order
@@ -103,12 +141,22 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                         h.iter().copied().collect::<Vec<f64>>()
                     })
                     .unwrap_or_default(),
+                read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
+                write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
+                temp_c: None,
             })
             .collect(),
         net_recv: s.net_recv_history.iter().copied().collect(),
         net_sent: s.net_sent_history.iter().copied().collect(),
-        igpu: s.igpu_history.iter().copied().collect(),
-        dgpu: s.dgpu_history.iter().copied().collect(),
+        gpus: s
+            .gpu_histories
+            .iter()
+            .map(|(_, name, hist)| GpuHistory {
+                name: name.clone(),
+                values: hist.iter().copied().collect(),
+                temp_c: None,
+            })
+            .collect(),
     }
 }
 
@@ -150,6 +198,16 @@ fn main() {
                         None
                     }
                 };
+                let wmi_thermal: Option<wmi::WMIConnection> = match wmi::COMLibrary::new() {
+                    Ok(com) => match wmi::WMIConnection::with_namespace_path("ROOT\\WMI", com) {
+                        Ok(con) => {
+                            eprintln!("[WMI] Thermal (ROOT\\WMI) connection initialized.");
+                            Some(con)
+                        }
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                };
 
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -158,7 +216,7 @@ fn main() {
                     let snapshot = {
                         let state = app_handle.state::<SafeAppState>();
                         let mut s = state.lock().unwrap();
-                        collector::refresh_all(&mut s, wmi_con.as_ref());
+                        collector::refresh_all(&mut s, wmi_con.as_ref(), wmi_thermal.as_ref());
                         build_snapshot(&s)
                     };
 
