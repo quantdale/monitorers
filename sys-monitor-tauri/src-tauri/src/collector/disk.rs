@@ -188,10 +188,7 @@ pub type PollDiskResult = (
 );
 
 /// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
-pub fn poll_disk(
-    disks: &mut sysinfo::Disks,
-    pdh: &crate::state::PdhHandles,
-) -> PollDiskResult {
+pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> PollDiskResult {
     disks.refresh(false);
 
     let mut known_drive_letters: HashMap<String, String> = HashMap::new();
