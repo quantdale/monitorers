@@ -23,8 +23,8 @@ pub enum GpuClass {
 pub fn extract_luid_from_name(name: &str) -> Option<String> {
     let after_luid = if let Some(pos) = name.find("_luid_") {
         &name[pos + 6..]
-    } else if name.starts_with("luid_") {
-        &name[5..]
+    } else if let Some(stripped) = name.strip_prefix("luid_") {
+        stripped
     } else {
         return None;
     };
@@ -211,7 +211,7 @@ pub fn query_gpu_utilization_pdh(
             return result;
         }
 
-        let u64_count = (buf_size as usize * 3 + 7) / 8;
+        let u64_count = (buf_size as usize * 3).div_ceil(8);
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;
         let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;

@@ -34,9 +34,12 @@ pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
         let mut thermal: NV_GPU_THERMAL_SETTINGS = std::mem::zeroed();
         thermal.version = NV_GPU_THERMAL_SETTINGS_VER;
 
-        for i in 0..(gpu_count as usize).min(NVAPI_MAX_PHYSICAL_GPUS) {
+        for handle in gpu_handles
+            .iter()
+            .take((gpu_count as usize).min(NVAPI_MAX_PHYSICAL_GPUS))
+        {
             let status = NvAPI_GPU_GetThermalSettings(
-                gpu_handles[i],
+                *handle,
                 NVAPI_THERMAL_TARGET_ALL as u32,
                 &mut thermal,
             );
@@ -44,15 +47,14 @@ pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
                 // Find GPU core sensor (target == 1 = NVAPI_THERMAL_TARGET_GPU)
                 for s in &thermal.sensor {
                     if s.target == nvapi_sys::gpu::thermal::NVAPI_THERMAL_TARGET_GPU
-                        && s.currentTemp >= 0
-                        && s.currentTemp <= 150
+                        && (0..=150).contains(&s.currentTemp)
                     {
                         return Some(s.currentTemp as f32);
                     }
                 }
                 // Fallback: sensor[0] if no explicit GPU target
                 let temp = thermal.sensor[0].currentTemp;
-                if temp >= 0 && temp <= 150 {
+                if (0..=150).contains(&temp) {
                     return Some(temp as f32);
                 }
             }

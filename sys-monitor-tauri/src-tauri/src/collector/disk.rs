@@ -40,7 +40,7 @@ pub fn query_disk_active_time(pdh: &crate::state::PdhHandles) -> HashMap<String,
             return HashMap::new();
         }
 
-        let u64_count = (buffer_size as usize * 3 + 7) / 8;
+        let u64_count = (buffer_size as usize * 3).div_ceil(8);
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;
         let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
@@ -110,9 +110,9 @@ fn query_disk_read_write(pdh: &crate::state::PdhHandles) -> HashMap<String, (f64
         if name == "_Total" {
             continue;
         }
-        if !result.contains_key(&name) {
-            result.insert(name, (0.0, write_bps * BYTES_TO_MB));
-        }
+        result
+            .entry(name)
+            .or_insert_with(|| (0.0, write_bps * BYTES_TO_MB));
     }
 
     result
@@ -151,7 +151,7 @@ fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
         if item_count == 0 {
             return result;
         }
-        let u64_count = (buf_size as usize * 3 + 7) / 8;
+        let u64_count = (buf_size as usize * 3).div_ceil(8);
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;
         let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
@@ -178,17 +178,20 @@ fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
     result
 }
 
-/// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
-pub fn poll_disk(
-    disks: &mut sysinfo::Disks,
-    pdh: &crate::state::PdhHandles,
-) -> (
+/// Return type for `poll_disk`: active %, read MB/s, write MB/s, response ms, display order.
+pub type PollDiskResult = (
     HashMap<String, f64>,
     HashMap<String, f64>,
     HashMap<String, f64>,
     HashMap<String, f64>,
     Vec<String>,
-) {
+);
+
+/// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
+pub fn poll_disk(
+    disks: &mut sysinfo::Disks,
+    pdh: &crate::state::PdhHandles,
+) -> PollDiskResult {
     disks.refresh(false);
 
     let mut known_drive_letters: HashMap<String, String> = HashMap::new();

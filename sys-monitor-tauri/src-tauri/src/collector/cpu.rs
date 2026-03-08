@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
 pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
     let temp_c = (tenths_kelvin / 10.0) - 273.15;
-    if temp_c >= -50.0 && temp_c <= 150.0 {
+    if (-50.0..=150.0).contains(&temp_c) {
         Some(temp_c)
     } else {
         None

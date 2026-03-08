@@ -213,18 +213,47 @@ fn main() {
                 // The WMI connection stays local to this thread so COM thread
                 // affinity is respected (no RPC_E_WRONG_THREAD errors).
                 // Retry with exponential backoff on transient COM/WMI failures.
-                let wmi_con: Option<wmi::WMIConnection> = 'wmi_init: loop {
-                    for attempt in 1..=WMI_MAX_ATTEMPTS {
-                        match wmi::COMLibrary::new() {
+                let mut wmi_con: Option<wmi::WMIConnection> = None;
+                for attempt in 1..=WMI_MAX_ATTEMPTS {
+                    match wmi::COMLibrary::new() {
+                        Err(e) => {
+                            if attempt == 1 {
+                                eprintln!("[WMI] COM init failed on background thread: {:?}", e);
+                            }
+                            if attempt < WMI_MAX_ATTEMPTS {
+                                let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
+                                    .min(WMI_BACKOFF_MAX_SECS);
+                                eprintln!(
+                                    "[WMI] Retry {}/{} in {}s (COM init failed: {:?})",
+                                    attempt, WMI_MAX_ATTEMPTS, delay, e
+                                );
+                                std::thread::sleep(std::time::Duration::from_secs(delay));
+                            } else {
+                                eprintln!(
+                                    "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
+                                    WMI_MAX_ATTEMPTS
+                                );
+                                break;
+                            }
+                        }
+                        Ok(com) => match wmi::WMIConnection::new(com) {
+                            Ok(con) => {
+                                eprintln!("[WMI] Background thread connection initialized (MTA).");
+                                wmi_con = Some(con);
+                                break;
+                            }
                             Err(e) => {
                                 if attempt == 1 {
-                                    eprintln!("[WMI] COM init failed on background thread: {:?}", e);
+                                    eprintln!(
+                                        "[WMI] WMI connection failed: {:?}. GPU classification unavailable.",
+                                        e
+                                    );
                                 }
                                 if attempt < WMI_MAX_ATTEMPTS {
                                     let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
                                         .min(WMI_BACKOFF_MAX_SECS);
                                     eprintln!(
-                                        "[WMI] Retry {}/{} in {}s (COM init failed: {:?})",
+                                        "[WMI] Retry {}/{} in {}s (WMI connection failed: {:?})",
                                         attempt, WMI_MAX_ATTEMPTS, delay, e
                                     );
                                     std::thread::sleep(std::time::Duration::from_secs(delay));
@@ -233,42 +262,13 @@ fn main() {
                                         "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
                                         WMI_MAX_ATTEMPTS
                                     );
-                                    break 'wmi_init None;
+                                    break;
                                 }
                             }
-                            Ok(com) => match wmi::WMIConnection::new(com) {
-                                Ok(con) => {
-                                    eprintln!("[WMI] Background thread connection initialized (MTA).");
-                                    break 'wmi_init Some(con);
-                                }
-                                Err(e) => {
-                                    if attempt == 1 {
-                                        eprintln!(
-                                            "[WMI] WMI connection failed: {:?}. GPU classification unavailable.",
-                                            e
-                                        );
-                                    }
-                                    if attempt < WMI_MAX_ATTEMPTS {
-                                        let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
-                                            .min(WMI_BACKOFF_MAX_SECS);
-                                        eprintln!(
-                                            "[WMI] Retry {}/{} in {}s (WMI connection failed: {:?})",
-                                            attempt, WMI_MAX_ATTEMPTS, delay, e
-                                        );
-                                        std::thread::sleep(std::time::Duration::from_secs(delay));
-                                    } else {
-                                        eprintln!(
-                                            "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
-                                            WMI_MAX_ATTEMPTS
-                                        );
-                                        break 'wmi_init None;
-                                    }
-                                }
-                            },
-                        }
+                        },
                     }
-                    break None;
-                };
+                }
+                let wmi_con = wmi_con;
 
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
