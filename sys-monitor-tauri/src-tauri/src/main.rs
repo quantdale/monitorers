@@ -14,10 +14,13 @@ const WMI_BACKOFF_BASE_SECS: u64 = 1;
 const WMI_BACKOFF_MAX_SECS: u64 = 30;
 const WMI_MAX_ATTEMPTS: u32 = 8;
 
+const SCHEMA_VERSION: u32 = 1;
+
 // ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 pub struct MetricsSnapshot {
+    pub schema_version: u32,
     pub cpu: f64,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -50,6 +53,7 @@ pub struct DiskSnapshot {
 
 #[derive(serde::Serialize, Clone)]
 pub struct HistoryPayload {
+    pub schema_version: u32,
     pub cpu: Vec<f64>,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -130,6 +134,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
         .collect();
 
     MetricsSnapshot {
+        schema_version: SCHEMA_VERSION,
         cpu,
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
@@ -148,6 +153,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
 
 fn build_history_payload(s: &state::HistoryStore, window_secs: u64) -> HistoryPayload {
     HistoryPayload {
+        schema_version: SCHEMA_VERSION,
         cpu: slice_history(&s.cpu_history, window_secs),
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
