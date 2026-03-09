@@ -4,8 +4,8 @@
 mod collector;
 mod state;
 
-use std::collections::VecDeque;
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
+use std::collections::VecDeque;
 use tauri::Manager;
 
 // ── WMI CONNECTION RETRY ─────────────────────────────────────────────────────
