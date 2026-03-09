@@ -19,3 +19,21 @@ export function historyMinMax(history: number[]): { min: number; max: number } {
     max: Math.max(...history),
   };
 }
+
+/**
+ * Downsample an array to at most maxPoints using stride sampling.
+ * Always includes the last element so the chart shows the latest value.
+ * Returns the original array if it is already within the limit.
+ */
+export function downsample(data: number[], maxPoints: number): number[] {
+  if (data.length <= maxPoints) return data;
+  const stride = Math.ceil(data.length / maxPoints);
+  const result: number[] = [];
+  for (let i = 0; i < data.length; i += stride) {
+    result.push(data[i]);
+  }
+  if (result[result.length - 1] !== data[data.length - 1]) {
+    result.push(data[data.length - 1]);
+  }
+  return result;
+}

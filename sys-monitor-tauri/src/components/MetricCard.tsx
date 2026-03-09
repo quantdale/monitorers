@@ -8,7 +8,9 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { ViewMode } from '../utils';
-import { historyMinMax } from '../utils';
+import { historyMinMax, downsample } from '../utils';
+
+const MAX_CHART_POINTS = 300;
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -51,11 +53,13 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
+  const primary = hasChart ? downsample(history!, MAX_CHART_POINTS) : [];
+  const secondary = hasSecondary ? downsample(secondaryHistory!, MAX_CHART_POINTS) : null;
   const data = hasChart
-    ? history!.map((v, i) => ({
+    ? primary.map((v, i) => ({
         i,
         v: Math.max(0, v),
-        v2: hasSecondary ? Math.max(0, secondaryHistory![i] ?? 0) : undefined,
+        v2: secondary !== null ? Math.max(0, secondary[i] ?? 0) : undefined,
       }))
     : [];
 

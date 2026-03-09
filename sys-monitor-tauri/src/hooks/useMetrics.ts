@@ -54,12 +54,16 @@ function mockMetricsSnapshot(): MetricsSnapshot {
   };
 }
 
-function appendToHistory(arr: number[], value: number): number[] {
-  const next = [...arr, value];
-  return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next;
+export function appendToHistory(arr: number[], value: number, maxLen: number): number[] {
+  if (arr.length < maxLen) {
+    return [...arr, value];
+  }
+  const next = arr.slice(-(maxLen - 1));
+  next.push(value);
+  return next;
 }
 
-function mergeDiskHistory(
+export function mergeDiskHistory(
   prev: DiskHistory[],
   snapshotDisks: MetricsSnapshot['disks']
 ): DiskHistory[] {
@@ -70,7 +74,7 @@ function mergeDiskHistory(
     if (!update) return d;
     return {
       key: d.key,
-      values: appendToHistory(d.values, update.active),
+      values: appendToHistory(d.values, update.active, MAX_HISTORY),
       read_mb_s: update.read_mb_s,
       write_mb_s: update.write_mb_s,
       avg_response_ms: update.avg_response_ms,
@@ -88,7 +92,7 @@ function mergeDiskHistory(
   return updated;
 }
 
-function mergeGpuHistory(
+export function mergeGpuHistory(
   prev: GpuHistory[],
   snapshotGpus: MetricsSnapshot['gpus']
 ): GpuHistory[] {
@@ -97,7 +101,7 @@ function mergeGpuHistory(
     if (!update) return g;
     return {
       name: g.name,
-      values: appendToHistory(g.values, update.util),
+      values: appendToHistory(g.values, update.util, MAX_HISTORY),
       temp_c: update.temp_c ?? g.temp_c ?? null,
     };
   });
@@ -110,7 +114,7 @@ function mergeGpuHistory(
 }
 
 /** Slice the rightmost `windowSeconds` points from a history array. */
-function sliceWindow(arr: number[], windowSeconds: number): number[] {
+export function sliceWindow(arr: number[], windowSeconds: number): number[] {
   if (arr.length <= windowSeconds) return arr;
   return arr.slice(arr.length - windowSeconds);
 }
@@ -136,17 +140,17 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     total: 0,
   });
 
-  // Load the full history once on mount.
+  // Load history on mount and when the time window changes.
   useEffect(() => {
     if (isTauri()) {
-      invoke<HistoryPayload>('get_history')
+      invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
         .then(setHistory)
         .catch((err) => console.warn('[useMetrics] get_history failed:', err));
       return;
     }
     setHistory(mockHistoryPayload());
     setMemGb({ used: 8, total: 16 });
-  }, []);
+  }, [windowSeconds]);
 
   // Listen for live metric updates and append to history.
   useEffect(() => {
@@ -157,13 +161,13 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         setHistory((prev) => {
           if (!prev) return prev;
           return {
-            cpu: appendToHistory(prev.cpu, snap.cpu),
+            cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
             cpu_name: snap.cpu_name ?? prev.cpu_name,
             cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
-            mem: appendToHistory(prev.mem, snap.mem),
+            mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
             disks: mergeDiskHistory(prev.disks, snap.disks),
-            net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
-            net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
+            net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
+            net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
             gpus: mergeGpuHistory(prev.gpus, snap.gpus),
           };
         });
@@ -178,13 +182,13 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       setHistory((prev) => {
         if (!prev) return prev;
         return {
-          cpu: appendToHistory(prev.cpu, snap.cpu),
+          cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
           cpu_name: snap.cpu_name ?? prev.cpu_name,
           cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
-          mem: appendToHistory(prev.mem, snap.mem),
+          mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
           disks: mergeDiskHistory(prev.disks, snap.disks),
-          net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
-          net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
+          net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
+          net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
           gpus: mergeGpuHistory(prev.gpus, snap.gpus),
         };
       });
