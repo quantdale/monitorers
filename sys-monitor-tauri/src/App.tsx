@@ -15,7 +15,8 @@ import { SortableCard } from './components/SortableCard';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
 import { MetricCardSelector } from './components/MetricCardSelector';
-import type { ViewMode } from './utils';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { gpuId, historyMinMax, type ViewMode } from './utils';
 
 const TIME_OPTIONS = [
   { label: '30s', value: 30 },
@@ -80,7 +81,7 @@ export default function App() {
       'memory',
       ...metrics.disks.map(d => `disk_${d.key}`),
       'network',
-      ...metrics.gpus.map((_, i) => `gpu_${i}`),
+      ...metrics.gpus.map(g => gpuId(g.name)),
     ];
     setCardOrder(prev => {
       const prevSet = new Set(prev);
@@ -107,8 +108,7 @@ export default function App() {
     if (id === 'network') return 'Network';
     if (id.startsWith('disk_')) return `Disk ${id.slice('disk_'.length)}`;
     if (id.startsWith('gpu_')) {
-      const idx = parseInt(id.slice('gpu_'.length), 10);
-      return metrics.gpus[idx]?.name ?? id;
+      return metrics.gpus.find(g => gpuId(g.name) === id)?.name ?? id;
     }
     return id;
   }
@@ -199,20 +199,12 @@ export default function App() {
     if (id === 'network') {
       const recv = metrics.net_recv.at(-1) ?? 0;
       const sent = metrics.net_sent.at(-1) ?? 0;
-      const { min: minR, max: maxR } = (() => {
-        const h = metrics.net_recv;
-        if (h.length === 0) return { min: 0, max: 0 };
-        const rawMin = Math.min(...h);
-        const rawMax = Math.max(...h);
-        return { min: Math.max(0, rawMin), max: Math.max(0, rawMax) };
-      })();
-      const { min: minS, max: maxS } = (() => {
-        const h = metrics.net_sent;
-        if (h.length === 0) return { min: 0, max: 0 };
-        const rawMin = Math.min(...h);
-        const rawMax = Math.max(...h);
-        return { min: Math.max(0, rawMin), max: Math.max(0, rawMax) };
-      })();
+      const { min: rawMinR, max: rawMaxR } = historyMinMax(metrics.net_recv);
+      const minR = Math.max(0, rawMinR);
+      const maxR = Math.max(0, rawMaxR);
+      const { min: rawMinS, max: rawMaxS } = historyMinMax(metrics.net_sent);
+      const minS = Math.max(0, rawMinS);
+      const maxS = Math.max(0, rawMaxS);
       return (
         <SortableCard
           key={id}
@@ -252,8 +244,8 @@ export default function App() {
     }
 
     if (id.startsWith('gpu_')) {
-      const gpuIdx = parseInt(id.slice('gpu_'.length), 10);
-      if (isNaN(gpuIdx) || gpuIdx >= metrics.gpus.length) return null;
+      const gpuIdx = metrics.gpus.findIndex(g => gpuId(g.name) === id);
+      if (gpuIdx === -1) return null;
       const gpu = metrics.gpus[gpuIdx];
       return (
         <SortableCard
@@ -331,7 +323,11 @@ export default function App() {
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visibleCardOrder} strategy={strategy}>
             <div style={containerStyle}>
-              {visibleCardOrder.map(id => renderCard(id))}
+              {visibleCardOrder.map(id => (
+                <ErrorBoundary key={id + '_boundary'}>
+                  {renderCard(id)}
+                </ErrorBoundary>
+              ))}
             </div>
           </SortableContext>
         </DndContext>
