@@ -151,6 +151,10 @@ monitorers/
 - `invoke("get_history", { window_secs })` — returns `HistoryPayload` sliced to window
 - `types/metrics.ts` ↔ Rust payload structs in `main.rs` must stay in sync (manual)
 
+**tauri-plugin-store (Tauri v1):**
+- Cargo.toml: use `branch = "v1"` from plugins-workspace
+- npm package: `tauri-plugin-store-api` (NOT `@tauri-apps/plugin-store`, which is v2 only)
+
 ### Anti-patterns to avoid
 
 - **Never** hold `SafeHistoryStore` lock during I/O (PDH, WMI, sysinfo refresh)
