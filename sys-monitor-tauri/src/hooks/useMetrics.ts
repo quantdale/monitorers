@@ -54,12 +54,12 @@ function mockMetricsSnapshot(): MetricsSnapshot {
   };
 }
 
-function appendToHistory(arr: number[], value: number): number[] {
+export function appendToHistory(arr: number[], value: number): number[] {
   const next = [...arr, value];
   return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next;
 }
 
-function mergeDiskHistory(
+export function mergeDiskHistory(
   prev: DiskHistory[],
   snapshotDisks: MetricsSnapshot['disks']
 ): DiskHistory[] {
@@ -88,7 +88,7 @@ function mergeDiskHistory(
   return updated;
 }
 
-function mergeGpuHistory(
+export function mergeGpuHistory(
   prev: GpuHistory[],
   snapshotGpus: MetricsSnapshot['gpus']
 ): GpuHistory[] {
@@ -110,7 +110,7 @@ function mergeGpuHistory(
 }
 
 /** Slice the rightmost `windowSeconds` points from a history array. */
-function sliceWindow(arr: number[], windowSeconds: number): number[] {
+export function sliceWindow(arr: number[], windowSeconds: number): number[] {
   if (arr.length <= windowSeconds) return arr;
   return arr.slice(arr.length - windowSeconds);
 }
@@ -136,17 +136,17 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     total: 0,
   });
 
-  // Load the full history once on mount.
+  // Load history on mount and when the time window changes.
   useEffect(() => {
     if (isTauri()) {
-      invoke<HistoryPayload>('get_history')
+      invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
         .then(setHistory)
         .catch((err) => console.warn('[useMetrics] get_history failed:', err));
       return;
     }
     setHistory(mockHistoryPayload());
     setMemGb({ used: 8, total: 16 });
-  }, []);
+  }, [windowSeconds]);
 
   // Listen for live metric updates and append to history.
   useEffect(() => {

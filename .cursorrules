@@ -1,0 +1,277 @@
+# sys-monitor-tauri — Cursor Rules & Architectural Source of Truth
+
+## 1. Project Overview & Core Stack
+
+Real-time Windows desktop system monitor built with Tauri v1. A single Rust backend collects CPU, memory, disk, network, and GPU metrics via Win32 PDH/WMI/NVAPI, streams them at 1 Hz over Tauri IPC, and a React/TypeScript frontend renders live area charts with drag-to-reorder cards. **Windows only** — every collector depends on Win32-exclusive APIs.
+
+| Layer | Technology | Version |
+|---|---|---|
+| App shell | Tauri v1 (WebView2) | `tauri = "1"` |
+| Backend | Rust 2021, `sysinfo 0.33`, `windows 0.52` (PDH), `wmi 0.13`, `nvapi-sys 0.1.3` (opt) | edition 2021 |
+| Frontend | React 18, TypeScript 5, Vite 5 | `"react": "^18.2.0"`, `"vite": "^5.0.0"` |
+| Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.8.0"` |
+| Drag-and-drop | @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities | `"@dnd-kit/core": "^6.3.1"` |
+| Serialization | serde + serde_json | `"1"` |
+
+**Cargo features:**
+- `nvapi` (default ON) — Nvidia GPU temp via NVAPI. Guard all Nvidia code with `#[cfg(feature = "nvapi")]`.
+- `custom-protocol` — production bundles; never remove.
+
+---
+
+## 2. Architecture & Directory Structure
+
+Single app, not a monorepo. Root is `monitorers/`, app lives in `sys-monitor-tauri/`.
+
+```
+monitorers/
+├── .cursorrules                    ← this file
+├── .github/workflows/rust.yml     ← CI: build, test, fmt --check, clippy -D warnings
+└── sys-monitor-tauri/
+    ├── package.json                ← npm scripts, React/Vite/dnd-kit deps
+    ├── vite.config.ts              ← strict port 5180, ignores src-tauri
+    ├── tsconfig.json               ← strict mode, ES2022, noUnusedLocals/Params
+    ├── index.html                  ← Vite HTML entry
+    ├── src/                        ← FRONTEND (React + TypeScript)
+    │   ├── main.tsx                ← ReactDOM.createRoot, StrictMode
+    │   ├── App.tsx                 ← card layout, dnd-kit drag-to-reorder, viewMode, hiddenCardIds
+    │   ├── styles.css              ← global reset, dark theme, scrollbar, drag-handle hover
+    │   ├── App.css                 ← unused legacy logo hover effects
+    │   ├── utils.ts                ← ViewMode type, historyMinMax()
+    │   ├── types/metrics.ts        ← TS interfaces mirroring Rust serde structs
+    │   ├── hooks/useMetrics.ts     ← Tauri IPC + state (single source of truth)
+    │   └── components/
+    │       ├── MetricCard.tsx       ← main card (default/tile/list views, Recharts AreaChart)
+    │       ├── SortableCard.tsx     ← dnd-kit useSortable wrapper around MetricCard
+    │       ├── TimeRangeSelector.tsx
+    │       ├── ViewModeSelector.tsx
+    │       └── MetricCardSelector.tsx
+    └── src-tauri/                  ← BACKEND (Rust)
+        ├── Cargo.toml
+        ├── tauri.conf.json         ← window: 900×1100, bundle id: com.sysmonitor.app
+        ├── build.rs
+        └── src/
+            ├── main.rs             ← Tauri setup, payload structs, get_history command, slice_history
+            ├── state.rs            ← PdhHandles, CollectorState, RawPoll, HistoryStore, SafeHistoryStore
+            └── collector/
+                ├── mod.rs           ← new_pdh_gpu_query(), poll(), commit(), push_history(), MAX_HISTORY
+                ├── cpu.rs           ← WMI CPU thermal (tenths-Kelvin → Celsius)
+                ├── disk.rs          ← PDH disk active%, read/write MB/s, response ms
+                ├── gpu.rs           ← PDH GPU 3D util, WMI LUID→vendor classification, is_nvidia_gpu()
+                └── nvidia.rs        ← NvAPI GPU temp (feature-gated)
+```
+
+### File placement rules
+- **New Rust collector**: add `{metric}.rs` in `collector/`, re-export from `collector/mod.rs`, wire into `poll()` and `commit()`
+- **New IPC payload field**: add to struct in `main.rs`, update `build_snapshot()` and `build_history_payload()`, mirror in `types/metrics.ts`
+- **New React component**: `src/components/{ComponentName}.tsx` — named export only
+- **New hook**: `src/hooks/use{Name}.ts`
+- **New type**: `src/types/{domain}.ts`
+- **Utilities**: `src/utils.ts` (keep flat, one file)
+
+---
+
+## 3. State Management & Data Flow
+
+### Backend (Rust)
+
+**Lock-scope discipline — DO NOT violate:**
+- `CollectorState` owns all OS handles, lives on the background thread, **never behind a Mutex**.
+- `HistoryStore` is the **only** type behind `Mutex<HistoryStore>` (aliased as `SafeHistoryStore` / `SafeAppState`).
+- Poll loop (1 Hz):
+  1. `collector::poll()` — all slow Win32 I/O, **no lock held** → produces `RawPoll`
+  2. Lock → `collector::commit()` (pure memory writes, microseconds) → `build_snapshot()` → Unlock
+  3. `app_handle.emit_all("metrics-update", snapshot)`
+
+**Violating this by holding the lock during PDH/WMI calls will cause UI jank.**
+
+**PDH handles opened once**: `PdhHandles` created in `CollectorState::new()`, never recreated. Recreating resets rate-counter baselines (first reading always 0%).
+
+**WMI on MTA background thread**: winit/Tauri initializes COM as STA on main thread. `WMIConnection::new()` must run on the spawned background thread. Never move `WMIConnection` to main thread.
+
+**OnceLock for one-time error logging**: `OnceLock<()>` on `CollectorState` for noisy per-poll errors. `get_or_init(|| eprintln!(...))` prints once, then silent.
+
+**Ring buffers**: `VecDeque<f64>` capacity 3600 (1 hour × 1 Hz). Always use `push_history(deque, value, MAX_HISTORY)` — never push directly. `MAX_HISTORY = 3600` in `collector/mod.rs`.
+
+### Frontend (React + TypeScript)
+
+**No external state library** — all state is React `useState`/`useEffect` inside `useMetrics` hook and `App.tsx`.
+
+`useMetrics(windowSeconds)` is the **single source of truth**:
+- `invoke("get_history", { window_secs })` on mount and on window change → full history snapshot
+- `listen("metrics-update")` → incremental appends via `appendToHistory` / `mergeDiskHistory` / `mergeGpuHistory`
+- Returns `SlicedHistory` (windowed view) or `null` while loading
+- `sliceWindow()` clips to the active time range before returning
+
+**Browser dev mode**: `isTauri()` detects `window.__TAURI__`. When absent, `useMetrics` generates sine-wave mock data with `setInterval(1000)`. Mock data must cover all card types realistically.
+
+**No server-state caching library** (no React Query / SWR) — data is push-based via Tauri events.
+
+---
+
+## 4. Coding Standards & Conventions
+
+### Rust
+
+| Rule | Convention |
+|---|---|
+| Case | `snake_case` everywhere (Rust standard); struct fields match serde JSON keys |
+| Section banners | `// ── SECTION TITLE ─────────` for major sections (match existing) |
+| Diagnostics | `eprintln!("[Module] message")` for operational logs (Tauri dev console) |
+| Unsafe blocks | Must have `// SAFETY:` comment explaining pointer validity and lifetime |
+| Error handling | Prefer `Option<T>` over panics for fallible OS queries; callers use `.unwrap_or(0.0)` |
+| Payload derives | `#[derive(serde::Serialize, Clone)]` on IPC structs; no `Deserialize` needed |
+| Feature gates | All NVAPI code behind `#[cfg(feature = "nvapi")]`, including the stub fallback |
+| Formatting | `cargo fmt` enforced in CI |
+| Linting | `cargo clippy -- -D warnings` enforced in CI — zero warnings allowed |
+| Mutex recovery | `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poisoned mutex |
+
+### TypeScript / React
+
+| Rule | Convention |
+|---|---|
+| Exports | **Named exports only** — no `export default` from component/hook files |
+| Exception | `App.tsx` uses `export default function App()` (Vite convention) |
+| Styling | **Inline React styles** — no CSS modules, no Tailwind, no styled-components |
+| CSS files | `styles.css` for global resets/scrollbar only; `App.css` is legacy (unused except logo hover) |
+| Color palette | `#141414` background, `#1e1e1e` cards, `#4699e8` blue accent, `#4ed87a` green memory |
+| Charts | `<Area isAnimationActive={false}>` always — live data at 1-second updates cannot animate |
+| Components | `PascalCase` filenames and export names (e.g. `MetricCard.tsx` → `export function MetricCard`) |
+| Hooks | `camelCase` with `use` prefix (e.g. `useMetrics.ts` → `export function useMetrics`) |
+| Types file | `types/metrics.ts` — interfaces mirroring Rust serde structs; keep in sync manually (no codegen) |
+| Strict TS | `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch` |
+| Module system | ESM (`"type": "module"` in package.json), ES2022 target |
+
+### IPC Contract
+
+- Rust command parameters are snake_case (e.g. `window_secs: u64`)
+- Tauri 1 serializes these as camelCase in JS: invoke('cmd', { windowSecs: value })
+- Mismatch between the two causes silent invoke failure — history stays null, UI hangs
+- `emit_all("metrics-update", MetricsSnapshot)` — one event per second
+- `invoke("get_history", { window_secs })` — returns `HistoryPayload` sliced to window
+- `types/metrics.ts` ↔ Rust payload structs in `main.rs` must stay in sync (manual)
+
+### Anti-patterns to avoid
+
+- **Never** hold `SafeHistoryStore` lock during I/O (PDH, WMI, sysinfo refresh)
+- **Never** recreate `PdhHandles` after init — rate counters lose their baseline
+- **Never** move `WMIConnection` off its creation thread (COM thread affinity)
+- **Never** push directly to a history `VecDeque` — always use `push_history()`
+- **Never** add CSS class-based styling to components — use inline `style` props
+- **Never** use `export default` in component files (exception: `App.tsx`)
+- **Never** enable Recharts animation on live-updating charts
+- **Never** add `Deserialize` derive to IPC payload structs (they only go backend → frontend)
+
+---
+
+## 5. Error Handling & Validation
+
+### Rust error handling
+
+- **OS query failures**: return `Option<T>` / `None`; callers supply fallbacks (`.unwrap_or(0.0)`, `.unwrap_or_default()`)
+- **PDH API status codes**: check `!= 0` before reading output; return empty `HashMap` on failure
+- **WMI connection**: exponential backoff retry (base 1s, max 30s, 8 attempts) with per-attempt `eprintln!`
+- **Noisy per-poll errors**: `OnceLock<()>` + `get_or_init(|| eprintln!(...))` to log once
+- **Mutex poisoning**: `unwrap_or_else(|e| e.into_inner())` to recover and continue
+- **Unsafe FFI**: every `unsafe` block must have `// SAFETY:` comment; check return codes before dereferencing
+
+### Frontend error handling
+
+- `invoke()` / `listen()` failures: `.catch()` with `console.warn`; UI shows "Collecting metrics…" while `null`
+- No validation library (Zod/Yup) — data comes from trusted Rust backend over IPC, not user input
+- Null/NaN guards in formatters: `formatTempC` handles `null | undefined | NaN`, `formatResponseMs` handles `0 | Infinity`
+
+---
+
+## 6. Testing Strategy
+
+### Rust tests
+
+**Framework**: built-in `#[cfg(test)]` + `cargo test` (no external test framework).
+
+**Location**: co-located at the bottom of each source file in `#[cfg(test)] mod tests { use super::*; ... }`.
+
+**Pattern**: Arrange-Act-Assert with `assert_eq!` / `assert!` / `assert!(matches!(...))`.
+
+**What to test**:
+- Pure functions with deterministic outputs: string parsing, math conversions, ring-buffer logic
+- Boundary conditions: empty input, overflow, off-by-one, range edges
+- PDH/WMI functions requiring real Windows handles are **not** unit-tested; their pure parsing helpers are
+- NVAPI smoke test: `query_nvidia_gpu_temp` returns `None` gracefully when unavailable
+
+**Run**:
+```powershell
+cd sys-monitor-tauri/src-tauri
+cargo test                        # all tests
+cargo test test_name              # single test
+cargo test collector::disk::tests # one module
+```
+
+### Frontend tests
+
+**No frontend tests exist yet.** When added:
+- Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
+- Use **Vitest** (matches Vite toolchain) — add `vitest` as devDependency
+- Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, formatters in `App.tsx`)
+- Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)
+
+### CI
+
+GitHub Actions (`.github/workflows/rust.yml`) on `windows-latest`:
+1. `cargo build --verbose`
+2. `cargo test --verbose`
+3. `cargo fmt -- --check`
+4. `cargo clippy --verbose -- -D warnings`
+
+---
+
+## 7. Build, Dev & Deployment
+
+All commands from `sys-monitor-tauri/`:
+
+```powershell
+# Install frontend deps
+npm install
+
+# Full dev (Vite + Tauri hot-reload)
+npm run tauri dev
+
+# Production bundle (.msi / .exe)
+npm run tauri build
+
+# Frontend only in browser (mock data, no Rust)
+npm run dev                       # http://127.0.0.1:5180
+
+# Rust unit tests
+cd src-tauri && cargo test
+
+# Rust lint
+cd src-tauri && cargo clippy -- -D warnings
+
+# Rust format check
+cd src-tauri && cargo fmt -- --check
+
+# TypeScript type check
+npx tsc --noEmit
+```
+
+**Critical config values**:
+- Vite dev server: port **5180** (strict port; in `vite.config.ts` and `tauri.conf.json`)
+- Tauri window: 900×1100 default, 400×300 minimum
+- Bundle identifier: `com.sysmonitor.app`
+- Release profile: `opt-level = 3`, `lto = true`, `codegen-units = 1`, `strip = true`
+
+**No environment variables required** — all configuration is compile-time.
+
+---
+
+## 8. Key Domain Knowledge
+
+- `nvidia_temp` on `MetricsSnapshot` is a legacy top-level field; GPU-specific temp is now on `GpuSnapshot.temp_c`
+- First PDH reading after init is always `0%` — by design (baseline establishment)
+- Card order in `App.tsx` resets on launch — no persistence by design
+- Disk keys are drive-letter combos (`"C:"`, `"C: D:"`) parsed from PDH instance names like `"0 C: D:"`
+- GPU display names are brand-stripped (`"NVIDIA GeForce RTX 4050"` → `"GeForce RTX 4050"`) via `strip_brand_prefix`
+- GPU LUIDs are machine-specific, change across reboots — never hardcode them
+- `WMI retry`: exponential backoff, base 1s, max 30s, 8 attempts
+- `SafeAppState = SafeHistoryStore = Mutex<HistoryStore>` — all the same type alias

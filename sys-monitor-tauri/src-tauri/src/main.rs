@@ -4,6 +4,7 @@
 mod collector;
 mod state;
 
+use std::collections::VecDeque;
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use tauri::Manager;
 
@@ -76,6 +77,17 @@ pub struct DiskHistory {
     pub temp_c: Option<f64>,
 }
 
+/// Returns the last `window_secs` points from the deque, or all if window_secs is 0 or >= len.
+fn slice_history(deque: &VecDeque<f64>, window_secs: u64) -> Vec<f64> {
+    let n = window_secs as usize;
+    let len = deque.len();
+    if n == 0 || n >= len {
+        deque.iter().copied().collect()
+    } else {
+        deque.iter().skip(len - n).copied().collect()
+    }
+}
+
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
 fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
@@ -132,18 +144,14 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
     }
 }
 
-// ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
+// ── HISTORY PAYLOAD BUILDER (SLICED) ─────────────────────────────────────────
 
-/// Called by the frontend once on mount to get the full 3600-point history.
-/// After that, incremental updates arrive via the "metrics-update" event.
-#[tauri::command]
-fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
-    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+fn build_history_payload(s: &state::HistoryStore, window_secs: u64) -> HistoryPayload {
     HistoryPayload {
-        cpu: s.cpu_history.iter().copied().collect(),
+        cpu: slice_history(&s.cpu_history, window_secs),
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
-        mem: s.mem_history.iter().copied().collect(),
+        mem: slice_history(&s.mem_history, window_secs),
         disks: s
             .disk_display_order
             .iter()
@@ -152,7 +160,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                 values: s
                     .disk_active_histories
                     .get(k)
-                    .map(|h| h.iter().copied().collect::<Vec<f64>>())
+                    .map(|h| slice_history(h, window_secs))
                     .unwrap_or_default(),
                 read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
                 write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
@@ -160,8 +168,8 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                 temp_c: None,
             })
             .collect(),
-        net_recv: s.net_recv_history.iter().copied().collect(),
-        net_sent: s.net_sent_history.iter().copied().collect(),
+        net_recv: slice_history(&s.net_recv_history, window_secs),
+        net_sent: slice_history(&s.net_sent_history, window_secs),
         gpus: s
             .gpu_entries
             .iter()
@@ -173,7 +181,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                 };
                 GpuHistory {
                     name: name.clone(),
-                    values: hist.iter().copied().collect(),
+                    values: slice_history(hist, window_secs),
                     temp_c,
                 }
             })
@@ -181,7 +189,67 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
     }
 }
 
+// ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
+
+/// Called by the frontend on mount and when the time window changes.
+/// Returns only the last `window_secs` points per metric; incremental updates arrive via "metrics-update".
+#[tauri::command]
+fn get_history(state: tauri::State<SafeAppState>, window_secs: u64) -> HistoryPayload {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    build_history_payload(&s, window_secs)
+}
+
 // ── ENTRY POINT ──────────────────────────────────────────────────────────────
+
+// ── TESTS ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn deque(vals: &[f64]) -> VecDeque<f64> {
+        vals.iter().copied().collect()
+    }
+
+    // --- slice_history ---
+
+    #[test]
+    fn test_slice_history_window_smaller_than_len() {
+        let d = deque(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(slice_history(&d, 3), vec![3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_slice_history_window_equals_len() {
+        let d = deque(&[1.0, 2.0, 3.0]);
+        assert_eq!(slice_history(&d, 3), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_slice_history_window_larger_than_len_returns_all() {
+        let d = deque(&[10.0, 20.0]);
+        assert_eq!(slice_history(&d, 100), vec![10.0, 20.0]);
+    }
+
+    #[test]
+    fn test_slice_history_window_zero_returns_all() {
+        let d = deque(&[1.0, 2.0, 3.0]);
+        assert_eq!(slice_history(&d, 0), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_slice_history_empty_deque() {
+        let d: VecDeque<f64> = VecDeque::new();
+        assert_eq!(slice_history(&d, 10), Vec::<f64>::new());
+    }
+
+    #[test]
+    fn test_slice_history_window_one() {
+        let d = deque(&[7.0, 8.0, 9.0]);
+        assert_eq!(slice_history(&d, 1), vec![9.0]);
+    }
+}
 
 fn main() {
     tauri::Builder::default()
