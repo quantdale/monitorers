@@ -14,6 +14,7 @@ export interface GpuSnapshot {
 }
 
 export interface MetricsSnapshot {
+  schema_version: number;
   cpu: number;
   cpu_name: string;
   cpu_temp_c?: number | null;
@@ -43,6 +44,7 @@ export interface GpuHistory {
 }
 
 export interface HistoryPayload {
+  schema_version: number;
   cpu: number[];
   cpu_name: string;
   cpu_temp_c?: number | null;

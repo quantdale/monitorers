@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
 
 const MAX_HISTORY = 3600;
 
+const EXPECTED_SCHEMA_VERSION = 1;
+
+function assertSchemaVersion(actual: number, payloadName: string): void {
+  if (actual !== EXPECTED_SCHEMA_VERSION) {
+    console.error(
+      `[IPC] ${payloadName} schema version mismatch: ` +
+      `expected ${EXPECTED_SCHEMA_VERSION}, got ${actual}. ` +
+      `Rebuild both frontend and backend.`
+    );
+  }
+}
+
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined';
+  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 }
 
 /** Plausible fake history for browser dev (no Tauri backend). */
@@ -14,6 +26,7 @@ function mockHistoryPayload(): HistoryPayload {
   const n = 300;
   const t = (i: number) => (i / n) * Math.PI * 4;
   return {
+    schema_version: 1,
     cpu: Array.from({ length: n }, (_, i) => 30 + 40 * Math.sin(t(i))),
     cpu_name: 'CPU',
     cpu_temp_c: 52,
@@ -35,6 +48,7 @@ function mockHistoryPayload(): HistoryPayload {
 function mockMetricsSnapshot(): MetricsSnapshot {
   const t = Date.now() / 1000;
   return {
+    schema_version: 1,
     cpu: 30 + 40 * Math.sin(t * 0.3),
     cpu_name: 'CPU',
     mem: 50 + 35 * Math.sin(t * 0.3 + 0.5),
@@ -144,7 +158,10 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
   useEffect(() => {
     if (isTauri()) {
       invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
-        .then(setHistory)
+        .then((payload) => {
+          assertSchemaVersion(payload.schema_version, 'HistoryPayload');
+          setHistory(payload);
+        })
         .catch((err) => console.warn('[useMetrics] get_history failed:', err));
       return;
     }
@@ -157,10 +174,12 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     if (isTauri()) {
       const unlistenPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         const snap = event.payload;
+        assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
         setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
         setHistory((prev) => {
           if (!prev) return prev;
           return {
+            schema_version: prev.schema_version,
             cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
             cpu_name: snap.cpu_name ?? prev.cpu_name,
             cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
@@ -182,6 +201,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       setHistory((prev) => {
         if (!prev) return prev;
         return {
+          schema_version: prev.schema_version,
           cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
           cpu_name: snap.cpu_name ?? prev.cpu_name,
           cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
