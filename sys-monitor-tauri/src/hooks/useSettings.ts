@@ -1,4 +1,4 @@
-import { Store } from 'tauri-plugin-store-api';
+import { Store } from '@tauri-apps/plugin-store';
 import { useState, useEffect, useCallback } from 'react';
 import type { ViewMode } from '../utils';
 
@@ -24,13 +24,13 @@ export function useSettings() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !(window as unknown as { __TAURI__?: unknown }).__TAURI__) {
+    if (typeof window === 'undefined' || !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
       setLoaded(true);
       return;
     }
-    const s = new Store(STORE_PATH);
-    setStore(s);
     (async () => {
+      const s = await Store.load(STORE_PATH);
+      setStore(s);
       const cardOrder = await s.get<string[]>('cardOrder');
       const hiddenCardIds = await s.get<string[]>('hiddenCardIds');
       const viewMode = await s.get<ViewMode>('viewMode');
@@ -47,16 +47,13 @@ export function useSettings() {
 
   const save = useCallback(
     async (patch: Partial<Settings>) => {
-      setSettings((prev) => {
-        const next = { ...prev, ...patch };
-        if (store) {
-          Object.entries(patch).forEach(([k, v]) => {
-            store.set(k, v);
-          });
-          store.save();
+      setSettings((prev) => ({ ...prev, ...patch }));
+      if (store) {
+        for (const [k, v] of Object.entries(patch)) {
+          await store.set(k, v);
         }
-        return next;
-      });
+        await store.save();
+      }
     },
     [store]
   );

@@ -6,7 +6,7 @@ mod state;
 
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use std::collections::VecDeque;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 // ── WMI CONNECTION RETRY ─────────────────────────────────────────────────────
 
@@ -273,7 +273,7 @@ fn main() {
             let history_store = HistoryStore::new(&cpu_name);
             app.manage(SafeHistoryStore::new(history_store));
 
-            let app_handle = app.handle();
+            let app_handle = app.handle().clone();
 
             std::thread::spawn(move || {
                 // Initialize COM for this thread (MTA — not yet initialized here,
@@ -353,7 +353,7 @@ fn main() {
                         build_snapshot(&s)
                     };
 
-                    app_handle.emit_all("metrics-update", snapshot).ok();
+                    app_handle.emit("metrics-update", snapshot).ok();
                 }
             });
 

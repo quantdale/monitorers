@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
 
 const MAX_HISTORY = 3600;
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== 'undefined';
+  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 }
 
 /** Plausible fake history for browser dev (no Tauri backend). */
