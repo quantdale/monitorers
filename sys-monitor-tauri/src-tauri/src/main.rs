@@ -253,6 +253,7 @@ mod tests {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             // CollectorState::new() must run here (after Tauri/winit has initialised
             // COM via CoInitializeEx) for PDH and sysinfo init.
