@@ -9,26 +9,28 @@ import type { DiskHistory, GpuHistory } from '../types/metrics';
 
 // --- appendToHistory ---
 
+const MAX_HISTORY = 3600;
+
 describe('appendToHistory', () => {
   it('appends a value to the array', () => {
-    expect(appendToHistory([1, 2, 3], 4)).toEqual([1, 2, 3, 4]);
+    expect(appendToHistory([1, 2, 3], 4, MAX_HISTORY)).toEqual([1, 2, 3, 4]);
   });
 
-  it('trims to MAX_HISTORY (3600) when exceeding capacity', () => {
+  it('trims to maxLen when exceeding capacity', () => {
     const big = Array.from({ length: 3600 }, (_, i) => i);
-    const result = appendToHistory(big, 9999);
+    const result = appendToHistory(big, 9999, MAX_HISTORY);
     expect(result.length).toBe(3600);
     expect(result[0]).toBe(1);
     expect(result[result.length - 1]).toBe(9999);
   });
 
   it('does not trim when under capacity', () => {
-    const result = appendToHistory([10, 20], 30);
+    const result = appendToHistory([10, 20], 30, MAX_HISTORY);
     expect(result).toEqual([10, 20, 30]);
   });
 
   it('works on an empty array', () => {
-    expect(appendToHistory([], 42)).toEqual([42]);
+    expect(appendToHistory([], 42, MAX_HISTORY)).toEqual([42]);
   });
 });
 
