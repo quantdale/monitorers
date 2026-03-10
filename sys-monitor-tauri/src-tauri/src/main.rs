@@ -431,7 +431,6 @@ fn main() {
                             collector::commit_disk_network(&mut s, r);
                             collector::commit_cpu(&mut s, r);
                             collector::commit_gpu(&mut s, r);
-                        } else {
                             registry.commit_all(&mut s, &reg_raw);
                         }
                         build_snapshot(&s)
