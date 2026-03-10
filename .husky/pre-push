@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "=== pre-push: running full CI checks ==="
+
+# --- Rust checks ---
+echo ""
+echo "--- Rust: cargo build ---"
+cd sys-monitor-tauri/src-tauri
+cargo build --verbose
+if [ $? -ne 0 ]; then echo "FAILED: cargo build"; exit 1; fi
+
+echo ""
+echo "--- Rust: cargo test ---"
+cargo test --verbose
+if [ $? -ne 0 ]; then echo "FAILED: cargo test"; exit 1; fi
+
+echo ""
+echo "--- Rust: cargo fmt check ---"
+cargo fmt -- --check
+if [ $? -ne 0 ]; then
+  echo "FAILED: cargo fmt -- --check"
+  echo "Run: cargo fmt && git add -u && git commit --amend --no-edit"
+  exit 1
+fi
+
+echo ""
+echo "--- Rust: cargo clippy ---"
+cargo clippy --verbose -- -D warnings
+if [ $? -ne 0 ]; then echo "FAILED: cargo clippy"; exit 1; fi
+
+# --- Frontend checks ---
+echo ""
+echo "--- Frontend: tsc ---"
+cd ../../sys-monitor-tauri
+npx tsc --noEmit
+if [ $? -ne 0 ]; then echo "FAILED: tsc --noEmit"; exit 1; fi
+
+echo ""
+echo "--- Frontend: tests ---"
+npm test -- --run
+if [ $? -ne 0 ]; then echo "FAILED: npm test"; exit 1; fi
+
+echo ""
+echo "=== pre-push: all checks passed ==="

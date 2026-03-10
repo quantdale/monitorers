@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "--- pre-commit: running cargo fmt check ---"
+cd sys-monitor-tauri/src-tauri
+cargo fmt -- --check
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "ERROR: Rust formatting check failed."
+  echo "Run: cargo fmt"
+  echo "Then stage the formatted files and commit again."
+  exit 1
+fi
+
+echo "--- pre-commit: passed ---"
