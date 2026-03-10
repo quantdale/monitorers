@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   appendToHistory,
   sliceWindow,
   mergeDiskHistory,
   mergeGpuHistory,
+  assertSchemaVersion,
+  EXPECTED_SCHEMA_VERSION,
 } from './useMetrics';
 import type { DiskHistory, GpuHistory } from '../types/metrics';
 
@@ -118,3 +120,36 @@ describe('mergeGpuHistory', () => {
     expect(result[0].temp_c).toBe(55);
   });
 });
+
+// --- assertSchemaVersion ---
+
+describe('assertSchemaVersion', () => {
+  it('does not log an error when versions match', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    assertSchemaVersion(EXPECTED_SCHEMA_VERSION, 'HistoryPayload');
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('logs an error when schema_version is missing', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    assertSchemaVersion(undefined as unknown as number, 'HistoryPayload');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('logs an error when schema_version is greater than expected', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    assertSchemaVersion(EXPECTED_SCHEMA_VERSION + 1, 'HistoryPayload');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('logs an error when schema_version is lower than expected', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    assertSchemaVersion(EXPECTED_SCHEMA_VERSION - 1, 'HistoryPayload');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});
+

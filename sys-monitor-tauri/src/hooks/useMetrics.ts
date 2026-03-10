@@ -5,9 +5,9 @@ import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '.
 
 const MAX_HISTORY = 3600;
 
-const EXPECTED_SCHEMA_VERSION = 1;
+export const EXPECTED_SCHEMA_VERSION = 1;
 
-function assertSchemaVersion(actual: number, payloadName: string): void {
+export function assertSchemaVersion(actual: number, payloadName: string): void {
   if (actual !== EXPECTED_SCHEMA_VERSION) {
     console.error(
       `[IPC] ${payloadName} schema version mismatch: ` +
