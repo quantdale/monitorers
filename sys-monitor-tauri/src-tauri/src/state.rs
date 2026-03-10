@@ -31,6 +31,7 @@ impl Drop for PdhHandles {
 // Intermediate result produced by the collector after all I/O completes.
 // Passed to the history commit function without holding any lock.
 
+#[derive(Default)]
 pub struct RawPoll {
     pub cpu_usage: f64,
     pub cpu_temp_c: Option<f64>,

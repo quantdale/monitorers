@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod collector;
+mod sensor;
 mod state;
 
+use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use std::collections::VecDeque;
 use tauri::Manager;
@@ -272,6 +274,10 @@ fn main() {
             let history_store = HistoryStore::new(&cpu_name);
             app.manage(SafeHistoryStore::new(history_store));
 
+            let mut registry = SensorRegistry::new();
+            registry.register(CpuSensorProvider);
+            registry.register(GpuSensorProvider);
+
             let app_handle = app.handle();
 
             std::thread::spawn(move || {
@@ -338,21 +344,30 @@ fn main() {
                 }
                 let wmi_con = wmi_con;
 
+                let mut tick: u32 = 0;
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let raw = if tick % 4 == 0 {
+                        Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
+                    } else {
+                        None
+                    };
+                    let reg_raw =
+                        registry.poll_all(&mut collector_state, wmi_con.as_ref());
 
-                    // All slow I/O — no lock held
-                    let raw = collector::poll(&mut collector_state, wmi_con.as_ref());
-
-                    // Lock held for microseconds only
                     let snapshot = {
                         let store = app_handle.state::<SafeHistoryStore>();
                         let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                        collector::commit(&mut s, &raw);
+                        if let Some(ref r) = raw {
+                            collector::commit_disk_network(&mut s, r);
+                        }
+                        registry.commit_all(&mut s, &reg_raw);
                         build_snapshot(&s)
                     };
 
-                    app_handle.emit_all("metrics-update", snapshot).ok();
+                    app_handle.emit("metrics-update", snapshot).ok();
+
+                    tick = tick.wrapping_add(1);
+                    std::thread::sleep(std::time::Duration::from_millis(250));
                 }
             });
 
