@@ -130,6 +130,13 @@ monitorers/
 - push_history() always used for VecDeque appends — never push directly
 - All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
 - schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 1
+- All push_history writes must happen on full ticks (1Hz) only.
+  Providers may poll at 250ms for live snapshot freshness but must
+  never commit to history more than once per second.
+  Violation: chart scroll rate mismatch at long time windows (CPU bug, fixed).
+  Implementation: registry.commit_all is gated inside
+  `if let Some(ref r) = raw` so it only runs on full ticks.
+  Any new sensor provider added in future must follow the same rule.
 
 ---
 
