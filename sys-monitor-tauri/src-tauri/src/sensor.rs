@@ -1,7 +1,9 @@
 // ── SENSOR PROVIDER TRAIT & REGISTRY ──────────────────────────────────────────
 // Per-provider poll intervals; registry schedules providers by elapsed time.
 
-use crate::collector::{self, query_cpu_temp_c, query_gpu_utilization_pdh, query_nvidia_gpu_temp};
+use crate::collector::{self, query_cpu_temp_c, query_gpu_utilization_pdh};
+#[cfg(all(feature = "nvapi", not(feature = "nvml")))]
+use crate::collector::query_nvidia_gpu_temp;
 use crate::state::{CollectorState, HistoryStore, RawPoll};
 use std::time::Instant;
 
@@ -70,11 +72,42 @@ impl SensorProvider for GpuSensorProvider {
         let _ = collector::collect_pdh(state);
         let gpu_updates =
             query_gpu_utilization_pdh(&state.pdh, wmi_con, &state.gpu_error_lock);
-        let nvidia_temp =
-            query_nvidia_gpu_temp(state.nvapi_initialized).map(|t| t as f64);
+
+        #[cfg(feature = "nvml")]
+        let (nvidia_temp, nvidia_power_w, nvidia_mem_used_mb, nvidia_mem_total_mb, nvidia_fan_speed_pct, nvidia_clock_mhz) =
+            if let Some(ref nvml) = state.nvml {
+                let r = collector::nvidia::query_nvml(nvml);
+                (
+                    r.temp_c,
+                    r.power_w,
+                    r.mem_used_mb,
+                    r.mem_total_mb,
+                    r.fan_speed_pct,
+                    r.clock_mhz,
+                )
+            } else {
+                (None, None, None, None, None, None)
+            };
+
+        #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
+        let nvidia_temp = query_nvidia_gpu_temp(state.nvapi_initialized).map(|t| t as f64);
+
+        #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
+        let nvidia_temp: Option<f64> = None;
+
         RawPoll {
             gpu_updates,
             nvidia_temp,
+            #[cfg(feature = "nvml")]
+            nvidia_power_w,
+            #[cfg(feature = "nvml")]
+            nvidia_mem_used_mb,
+            #[cfg(feature = "nvml")]
+            nvidia_mem_total_mb,
+            #[cfg(feature = "nvml")]
+            nvidia_fan_speed_pct,
+            #[cfg(feature = "nvml")]
+            nvidia_clock_mhz,
             ..Default::default()
         }
     }

@@ -65,6 +65,11 @@ function mockMetricsSnapshot(): MetricsSnapshot {
       { name: 'RTX 4050', util: 20 + 40 * Math.sin(t * 0.3 + 1.2), temp_c: 55 },
     ],
     cpu_temp_c: 52,
+    nvidia_power_w: 45,
+    nvidia_mem_used_mb: 2048,
+    nvidia_mem_total_mb: 6144,
+    nvidia_fan_speed_pct: 35,
+    nvidia_clock_mhz: 2100,
   };
 }
 

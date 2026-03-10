@@ -40,6 +40,16 @@ pub struct RawPoll {
     pub mem_pct: f64,
     pub gpu_updates: Vec<(String, String, f64)>, // (history_key, display_name, util%)
     pub nvidia_temp: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_power_w: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_used_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_total_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_fan_speed_pct: Option<u32>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_clock_mhz: Option<u32>,
     pub disk_active: HashMap<String, f64>,
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
@@ -58,9 +68,12 @@ pub struct CollectorState {
     pub system: System,
     pub sysinfo_disks: Disks,
     pub sysinfo_networks: Networks,
+    #[cfg_attr(feature = "nvml", allow(dead_code))]
     pub nvapi_initialized: bool,
     pub gpu_error_lock: OnceLock<()>,
     pub cpu_temp_error_lock: OnceLock<()>,
+    #[cfg(feature = "nvml")]
+    pub nvml: Option<nvml_wrapper::Nvml>,
 }
 
 impl CollectorState {
@@ -100,6 +113,9 @@ impl CollectorState {
         #[cfg(not(feature = "nvapi"))]
         let nvapi_initialized = false;
 
+        #[cfg(feature = "nvml")]
+        let nvml = crate::collector::nvidia::init_nvml();
+
         CollectorState {
             pdh,
             system,
@@ -108,6 +124,8 @@ impl CollectorState {
             nvapi_initialized,
             gpu_error_lock: OnceLock::new(),
             cpu_temp_error_lock: OnceLock::new(),
+            #[cfg(feature = "nvml")]
+            nvml,
         }
     }
 }
@@ -125,6 +143,16 @@ pub struct HistoryStore {
     pub mem_total_gb: f64,
     pub gpu_entries: Vec<(String, String, VecDeque<f64>)>,
     pub nvidia_temp: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_power_w: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_used_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_total_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_fan_speed_pct: Option<u32>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_clock_mhz: Option<u32>,
     pub disk_active_histories: HashMap<String, VecDeque<f64>>,
     pub disk_display_order: Vec<String>,
     pub disk_read_mb_s: HashMap<String, f64>,
@@ -150,6 +178,16 @@ impl HistoryStore {
             mem_total_gb: 0.0,
             gpu_entries: Vec::new(),
             nvidia_temp: None,
+            #[cfg(feature = "nvml")]
+            nvidia_power_w: None,
+            #[cfg(feature = "nvml")]
+            nvidia_mem_used_mb: None,
+            #[cfg(feature = "nvml")]
+            nvidia_mem_total_mb: None,
+            #[cfg(feature = "nvml")]
+            nvidia_fan_speed_pct: None,
+            #[cfg(feature = "nvml")]
+            nvidia_clock_mhz: None,
             disk_active_histories: HashMap::new(),
             disk_display_order: Vec::new(),
             disk_read_mb_s: HashMap::new(),

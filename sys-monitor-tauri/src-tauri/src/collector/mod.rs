@@ -1,11 +1,12 @@
 mod cpu;
 mod disk;
 mod gpu;
-mod nvidia;
+pub mod nvidia;
 
 pub use cpu::query_cpu_temp_c;
 pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
+#[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 pub use nvidia::query_nvidia_gpu_temp;
 
 use std::collections::{HashMap, VecDeque};
@@ -186,7 +187,27 @@ pub fn poll(
     let gpu_updates =
         gpu::query_gpu_utilization_pdh(&collector.pdh, wmi_con, &collector.gpu_error_lock);
 
+    #[cfg(feature = "nvml")]
+    let (nvidia_temp, nvidia_power_w, nvidia_mem_used_mb, nvidia_mem_total_mb, nvidia_fan_speed_pct, nvidia_clock_mhz) =
+        if let Some(ref nvml) = collector.nvml {
+            let r = nvidia::query_nvml(nvml);
+            (
+                r.temp_c,
+                r.power_w,
+                r.mem_used_mb,
+                r.mem_total_mb,
+                r.fan_speed_pct,
+                r.clock_mhz,
+            )
+        } else {
+            (None, None, None, None, None, None)
+        };
+
+    #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
     let nvidia_temp = nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
+
+    #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
+    let nvidia_temp: Option<f64> = None;
 
     crate::state::RawPoll {
         cpu_usage,
@@ -196,6 +217,16 @@ pub fn poll(
         mem_pct,
         gpu_updates,
         nvidia_temp,
+        #[cfg(feature = "nvml")]
+        nvidia_power_w,
+        #[cfg(feature = "nvml")]
+        nvidia_mem_used_mb,
+        #[cfg(feature = "nvml")]
+        nvidia_mem_total_mb,
+        #[cfg(feature = "nvml")]
+        nvidia_fan_speed_pct,
+        #[cfg(feature = "nvml")]
+        nvidia_clock_mhz,
         disk_active,
         disk_read_mb_s,
         disk_write_mb_s,
@@ -286,6 +317,14 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
         })
         .collect();
     store.nvidia_temp = poll.nvidia_temp;
+    #[cfg(feature = "nvml")]
+    {
+        store.nvidia_power_w = poll.nvidia_power_w;
+        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
+        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
+        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
+        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
+    }
 }
 
 /// Commit only disk and network fields from a RawPoll into HistoryStore (slow path, every 4th tick).

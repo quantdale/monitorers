@@ -27,6 +27,16 @@ pub struct MetricsSnapshot {
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
     pub nvidia_temp: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_power_w: Option<f64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_used_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_mem_total_mb: Option<u64>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_fan_speed_pct: Option<u32>,
+    #[cfg(feature = "nvml")]
+    pub nvidia_clock_mhz: Option<u32>,
     pub mem: f64,
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
@@ -141,6 +151,16 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
         nvidia_temp,
+        #[cfg(feature = "nvml")]
+        nvidia_power_w: s.nvidia_power_w,
+        #[cfg(feature = "nvml")]
+        nvidia_mem_used_mb: s.nvidia_mem_used_mb,
+        #[cfg(feature = "nvml")]
+        nvidia_mem_total_mb: s.nvidia_mem_total_mb,
+        #[cfg(feature = "nvml")]
+        nvidia_fan_speed_pct: s.nvidia_fan_speed_pct,
+        #[cfg(feature = "nvml")]
+        nvidia_clock_mhz: s.nvidia_clock_mhz,
         mem,
         mem_used_gb: s.mem_used_gb,
         mem_total_gb: s.mem_total_gb,
