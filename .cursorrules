@@ -19,6 +19,54 @@ Real-time Windows desktop system monitor built with Tauri v1. A single Rust back
 
 ---
 
+## CI Readiness Gate
+
+Every task that modifies Rust or frontend code MUST pass all of the
+following checks before the task is considered complete. Do not
+summarise a task as done until every applicable check below passes.
+
+### When Rust files are changed (src-tauri/**):
+Run from sys-monitor-tauri/src-tauri:
+  cargo build --verbose
+  cargo test --verbose
+  cargo fmt -- --check
+  cargo clippy --verbose -- -D warnings
+
+If cargo fmt -- --check fails:
+  Run: cargo fmt
+  Then re-run: cargo fmt -- --check to confirm clean.
+  Always commit formatted files — never leave unformatted Rust.
+
+If cargo clippy -- -D warnings fails:
+  Fix every warning. Do not add #[allow(...)] to suppress warnings
+  unless the suppression is conditional (#[cfg_attr(...)]) and
+  explicitly justified in a comment.
+
+### When frontend files are changed (src/**):
+Run from sys-monitor-tauri:
+  npx tsc --noEmit
+  npm test -- --run
+
+npm ci is run by CI but not required locally if node_modules exists.
+If node_modules is missing or package.json changed: run npm install.
+
+### When both Rust and frontend files are changed:
+Run all checks from both sections above.
+
+### Commit hygiene:
+- Never commit with cargo fmt -- --check failing
+- Never commit with cargo clippy -- -D warnings failing
+- Never commit with npx tsc --noEmit failing
+- Never commit with npm test -- --run failing
+- Always run the applicable checks after the final code change and
+  before writing the task summary
+
+### Test counts (as of last audit):
+- Rust: 44 tests expected. If count drops, investigate before committing.
+- Frontend: 33 tests expected. If count drops, investigate before committing.
+
+---
+
 ## 2. Architecture & Directory Structure
 
 Single app, not a monorepo. Root is `monitorers/`, app lives in `sys-monitor-tauri/`.
@@ -71,6 +119,20 @@ monitorers/
 
 ---
 
+## Architecture Invariants — do not violate
+
+- CollectorState is NEVER behind a Mutex — background thread owns it directly
+- Single PdhCollectQueryData per tick — called once before all counter reads
+- PDH handles opened once in CollectorState::new() — never recreated mid-run
+- WMIConnection is !Send — must stay on the background thread only
+- Mutex lock held only for commit + build_snapshot — microseconds only
+- Always use .unwrap_or_else(|e| e.into_inner()) on mutex locks (poison-safe)
+- push_history() always used for VecDeque appends — never push directly
+- All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
+- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 1
+
+---
+
 ## 3. State Management & Data Flow
 
 ### Backend (Rust)
@@ -81,7 +143,7 @@ monitorers/
 - Poll loop (1 Hz):
   1. `collector::poll()` — all slow Win32 I/O, **no lock held** → produces `RawPoll`
   2. Lock → `collector::commit()` (pure memory writes, microseconds) → `build_snapshot()` → Unlock
-  3. `app_handle.emit_all("metrics-update", snapshot)`
+  3. `app_handle.emit("metrics-update", snapshot)` — NOT emit_all (removed in Tauri v2)
 
 **Violating this by holding the lock during PDH/WMI calls will cause UI jank.**
 
@@ -142,18 +204,20 @@ monitorers/
 | Strict TS | `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch` |
 | Module system | ESM (`"type": "module"` in package.json), ES2022 target |
 
-### IPC Contract
+## IPC Contract — Tauri v2
 
-- Rust command parameters are snake_case (e.g. `window_secs: u64`)
-- Tauri 1 serializes these as camelCase in JS: invoke('cmd', { windowSecs: value })
-- Mismatch between the two causes silent invoke failure — history stays null, UI hangs
-- `emit_all("metrics-update", MetricsSnapshot)` — one event per second
-- `invoke("get_history", { window_secs })` — returns `HistoryPayload` sliced to window
-- `types/metrics.ts` ↔ Rust payload structs in `main.rs` must stay in sync (manual)
+- Rust command parameters are snake_case (e.g. window_secs: u64)
+- Tauri v2 serialises these as camelCase in JS: invoke('cmd', { windowSecs: value })
+- Mismatch causes silent invoke failure — history stays null, UI hangs
+- Use app_handle.emit("event", &payload) — NOT emit_all (removed in Tauri v2)
+- window.__TAURI_INTERNALS__ detects Tauri v2 runtime (NOT window.__TAURI__)
 
-**tauri-plugin-store (Tauri v1):**
-- Cargo.toml: use `branch = "v1"` from plugins-workspace
-- npm package: `tauri-plugin-store-api` (NOT `@tauri-apps/plugin-store`, which is v2 only)
+## Plugin versions — Tauri v1 vs v2
+
+- Tauri v1 store npm package: tauri-plugin-store-api
+- Tauri v2 store npm package: @tauri-apps/plugin-store
+- This project is on Tauri v2
+- @tauri-apps/api v2 import path: @tauri-apps/api/core (NOT @tauri-apps/api/tauri)
 
 ### Anti-patterns to avoid
 
@@ -213,9 +277,8 @@ cargo test collector::disk::tests # one module
 
 ### Frontend tests
 
-**No frontend tests exist yet.** When added:
+**Vitest** (33 tests in `utils.test.ts`, `useMetrics.test.ts`). When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
-- Use **Vitest** (matches Vite toolchain) — add `vitest` as devDependency
 - Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, formatters in `App.tsx`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)
 
