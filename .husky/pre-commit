@@ -1,6 +1,4 @@
 #!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 echo "--- pre-commit: running cargo fmt check ---"
 cd sys-monitor-tauri/src-tauri
 cargo fmt -- --check
