@@ -1,5 +1,8 @@
-# Rust CI for sys-monitor-tauri (Tauri app with Windows-only backend)
-# Runs build, test, fmt check, and clippy from src-tauri.
+# CI for sys-monitor-tauri (Tauri app with Windows-only backend)
+# Three independent jobs run in parallel:
+#   rust-test    — cargo test (windows-latest)
+#   rust-lint    — fmt + clippy + audit (windows-latest)
+#   frontend     — tsc + vitest (ubuntu-latest)
 
 name: Rust
 
@@ -13,7 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-test:
+  # ------------------------------------------------------------
+  # Job 1: Rust tests
+  # cargo test compiles implicitly — no separate build step needed
+  # ------------------------------------------------------------
+  rust-test:
+    name: Rust — test
     runs-on: windows-latest
     defaults:
       run:
@@ -30,13 +38,38 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             sys-monitor-tauri/src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
-
-      - name: Build
-        run: cargo build --verbose
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
 
       - name: Run tests
         run: cargo test --verbose
+
+  # ------------------------------------------------------------
+  # Job 2: Rust lint (fmt + clippy + audit)
+  # Fast checks — no need to wait for tests to finish
+  # ------------------------------------------------------------
+  rust-lint:
+    name: Rust — fmt, clippy, audit
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri/src-tauri
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sys-monitor-tauri/src-tauri/target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -44,24 +77,36 @@ jobs:
       - name: Clippy
         run: cargo clippy --verbose -- -D warnings
 
+      - name: Audit
+        run: cargo install cargo-audit --quiet && cargo audit
+
+  # ------------------------------------------------------------
+  # Job 3: Frontend (typecheck + tests)
+  # Runs on ubuntu — no Windows needed for pure JS/TS
+  # ------------------------------------------------------------
   frontend:
     name: Frontend — typecheck, test
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: sys-monitor-tauri
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: sys-monitor-tauri/package-lock.json
+
       - name: Install deps
         run: npm ci
+
       - name: Type check
         run: npx tsc --noEmit
+
       - name: Test
         run: npm test -- --run
