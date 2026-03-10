@@ -53,8 +53,14 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
-  const primary = hasChart ? downsample(history!, MAX_CHART_POINTS) : [];
-  const secondary = hasSecondary ? downsample(secondaryHistory!, MAX_CHART_POINTS) : null;
+  const primaryRaw = hasChart ? downsample(history!, MAX_CHART_POINTS) : [];
+  const primary = primaryRaw.map((v) =>
+    v == null || Number.isNaN(v) ? 0 : v
+  );
+  const secondaryRaw = hasSecondary ? downsample(secondaryHistory!, MAX_CHART_POINTS) : null;
+  const secondary = secondaryRaw
+    ? secondaryRaw.map((v) => (v == null || Number.isNaN(v) ? 0 : v))
+    : null;
   const data = hasChart
     ? primary.map((v, i) => ({
         i,

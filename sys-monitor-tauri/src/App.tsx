@@ -63,6 +63,38 @@ const badgeStyle: React.CSSProperties = {
   fontWeight: 600,
 };
 
+function gpuVendorLabel(vendor: string): string {
+  if (vendor === 'nvidia') return 'NVIDIA';
+  if (vendor === 'intel') return 'Intel';
+  if (vendor === 'amd') return 'AMD';
+  return 'GPU';
+}
+
+function gpuVendorBadgeStyle(vendor: string): React.CSSProperties {
+  let border = '#555';
+  let background = 'rgba(255,255,255,0.04)';
+  let color = '#ddd';
+  if (vendor === 'nvidia') {
+    border = 'rgba(46, 204, 113, 0.7)';
+    background = 'rgba(46, 204, 113, 0.08)';
+    color = '#c8f7c5';
+  } else if (vendor === 'intel') {
+    border = 'rgba(52, 152, 219, 0.7)';
+    background = 'rgba(52, 152, 219, 0.08)';
+    color = '#d0e9ff';
+  } else if (vendor === 'amd') {
+    border = 'rgba(231, 76, 60, 0.7)';
+    background = 'rgba(231, 76, 60, 0.08)';
+    color = '#ffd6d3';
+  }
+  return {
+    ...badgeStyle,
+    border,
+    background,
+    color,
+  };
+}
+
 export default function App() {
   const { settings, save, loaded } = useSettings();
   const cardOrder = settings.cardOrder ?? [];
@@ -110,15 +142,24 @@ export default function App() {
   }
 
   function getCardLabel(id: string): string {
-    if (!metrics) return id;
+    if (!metrics) {
+      return id
+        .replace(/^(gpu|disk|net)_/, '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+    }
     if (id === 'cpu') return metrics.cpu_name || 'CPU';
     if (id === 'memory') return 'Memory';
     if (id === 'network') return 'Network';
     if (id.startsWith('disk_')) return `Disk ${id.slice('disk_'.length)}`;
     if (id.startsWith('gpu_')) {
-      return metrics.gpus.find(g => gpuId(g.name) === id)?.name ?? id;
+      const gpuName = metrics.gpus.find(g => gpuId(g.name) === id)?.name;
+      if (gpuName) return gpuName;
     }
-    return id;
+    return id
+      .replace(/^(gpu|disk|net)_/, '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -129,6 +170,25 @@ export default function App() {
       save({ cardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
     }
   }
+
+  function isCardPresent(id: string): boolean {
+    if (!metrics) return false;
+    if (id === 'cpu') return true;
+    if (id === 'memory') return true;
+    if (id === 'network') return metrics.net_recv.length > 0 || metrics.net_sent.length > 0;
+    if (id.startsWith('disk_')) return metrics.disks.length > 0;
+    if (id.startsWith('gpu_')) return metrics.gpus.length > 0;
+    return false;
+  }
+
+  const hasNvidiaData =
+    !!metrics &&
+    metrics.gpus.some((g) => g.vendor === 'nvidia') &&
+    (metrics.nvidia_power_w != null ||
+      metrics.nvidia_mem_used_mb != null ||
+      metrics.nvidia_mem_total_mb != null ||
+      metrics.nvidia_fan_speed_pct != null ||
+      metrics.nvidia_clock_mhz != null);
 
   // Maps a card ID back to the correct SortableCard with its props.
   function renderCard(id: string) {
@@ -253,15 +313,44 @@ export default function App() {
       const gpuIdx = metrics.gpus.findIndex(g => gpuId(g.name) === id);
       if (gpuIdx === -1) return null;
       const gpu = metrics.gpus[gpuIdx];
+      const gpuTitle = gpu.name || (gpu.vendor === 'unknown' ? 'Unknown GPU' : 'GPU');
+      const showNvmlForThisCard = hasNvidiaData && gpu.vendor === 'nvidia';
+      const powerText =
+        metrics.nvidia_power_w != null ? `${metrics.nvidia_power_w.toFixed(1)} W` : '—';
+      const vramText =
+        metrics.nvidia_mem_used_mb != null && metrics.nvidia_mem_total_mb != null
+          ? `${metrics.nvidia_mem_used_mb} / ${metrics.nvidia_mem_total_mb} MB`
+          : '—';
+      const fanText =
+        metrics.nvidia_fan_speed_pct != null ? `${metrics.nvidia_fan_speed_pct}%` : '—';
+      const clockText =
+        metrics.nvidia_clock_mhz != null ? `${metrics.nvidia_clock_mhz} MHz` : '—';
       return (
         <SortableCard
           key={id}
           id={id}
-          title={gpu.name}
+          title={gpuTitle}
           value={formatPercent(gpu.values.at(-1))}
           history={gpu.values}
           color={GPU_COLORS[gpuIdx % GPU_COLORS.length]}
-          badge={<span style={badgeStyle}>{formatTempC(gpu.temp_c)}</span>}
+          badge={
+            <>
+              <span style={gpuVendorBadgeStyle(gpu.vendor)}>
+                {gpuVendorLabel(gpu.vendor)}
+              </span>
+              <span style={badgeStyle}>
+                {gpu.temp_c != null ? `${gpu.temp_c.toFixed(1)}°C` : '—'}
+              </span>
+              {showNvmlForThisCard && (
+                <>
+                  <span style={badgeStyle}>{powerText}</span>
+                  <span style={badgeStyle}>{vramText}</span>
+                  <span style={badgeStyle}>{fanText}</span>
+                  <span style={badgeStyle}>{clockText}</span>
+                </>
+              )}
+            </>
+          }
           viewMode={viewMode}
         />
       );
@@ -270,7 +359,7 @@ export default function App() {
     return null;
   }
 
-  const visibleCardOrder = cardOrder.filter(id => !hiddenCardIds.has(id));
+  const visibleCardOrder = cardOrder.filter(id => !hiddenCardIds.has(id) && isCardPresent(id));
 
   const containerStyle =
     viewMode === 'tile'
@@ -305,7 +394,7 @@ export default function App() {
           />
           {metrics && cardOrder.length > 0 && (
             <MetricCardSelector
-              items={cardOrder.map(id => ({ id, label: getCardLabel(id) }))}
+              items={cardOrder.filter(id => isCardPresent(id)).map(id => ({ id, label: getCardLabel(id) }))}
               hiddenIds={hiddenCardIds}
               onToggle={handleMetricToggle}
             />

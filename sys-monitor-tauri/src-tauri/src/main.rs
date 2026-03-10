@@ -7,6 +7,7 @@ mod pdh;
 mod sensor;
 mod state;
 
+use hardware::GpuVendor;
 use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use std::collections::VecDeque;
@@ -51,6 +52,7 @@ pub struct MetricsSnapshot {
 #[derive(serde::Serialize, Clone)]
 pub struct GpuSnapshot {
     pub name: String,
+    pub vendor: String,
     pub util: f64,
     pub temp_c: Option<f64>,
 }
@@ -134,6 +136,14 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
         .gpu_entries
         .iter()
         .map(|(_, name, hist)| {
+            let (vendor_enum, _kind) = hardware::classify_gpu(name);
+            let vendor = match vendor_enum {
+                GpuVendor::Nvidia => "nvidia",
+                GpuVendor::Intel => "intel",
+                GpuVendor::Amd => "amd",
+                GpuVendor::Unknown => "unknown",
+            }
+            .to_string();
             let temp_c = if collector::is_nvidia_gpu(name) && nvidia_temp.is_some() {
                 nvidia_temp
             } else {
@@ -141,6 +151,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
             };
             GpuSnapshot {
                 name: name.clone(),
+                vendor,
                 util: hist.back().copied().unwrap_or(0.0),
                 temp_c,
             }
@@ -401,7 +412,7 @@ fn main() {
                 for disk in &profile.disks {
                     println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
                 }
-                if profile.has_nvidia_dgpu() {
+                if !profile.gpus.is_empty() {
                     registry.register(GpuSensorProvider);
                 }
                 {

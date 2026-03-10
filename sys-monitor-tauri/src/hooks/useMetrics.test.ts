@@ -94,7 +94,7 @@ describe('mergeGpuHistory', () => {
   ];
 
   it('appends new util value to existing GPU', () => {
-    const snapshot = [{ name: 'RTX 4050', util: 60, temp_c: 58 }];
+    const snapshot = [{ name: 'RTX 4050', vendor: 'nvidia', util: 60, temp_c: 58 }];
     const result = mergeGpuHistory(existing, snapshot);
     expect(result.length).toBe(1);
     expect(result[0].values).toEqual([20, 40, 60]);
@@ -103,8 +103,8 @@ describe('mergeGpuHistory', () => {
 
   it('adds a newly discovered GPU', () => {
     const snapshot = [
-      { name: 'RTX 4050', util: 60, temp_c: 58 },
-      { name: 'UHD Graphics', util: 10, temp_c: 45 },
+      { name: 'RTX 4050', vendor: 'nvidia', util: 60, temp_c: 58 },
+      { name: 'UHD Graphics', vendor: 'intel', util: 10, temp_c: 45 },
     ];
     const result = mergeGpuHistory(existing, snapshot);
     expect(result.length).toBe(2);
@@ -113,7 +113,7 @@ describe('mergeGpuHistory', () => {
   });
 
   it('preserves temp_c from previous when snapshot has null', () => {
-    const snapshot = [{ name: 'RTX 4050', util: 70, temp_c: null }];
+    const snapshot = [{ name: 'RTX 4050', vendor: 'nvidia', util: 70, temp_c: null }];
     const result = mergeGpuHistory(existing, snapshot);
     expect(result[0].temp_c).toBe(55);
   });

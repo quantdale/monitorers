@@ -61,6 +61,7 @@ pub struct HardwareProfile {
 
 impl HardwareProfile {
     /// Returns true if any Nvidia dGPU is present.
+    #[allow(dead_code)]
     pub fn has_nvidia_dgpu(&self) -> bool {
         self.gpus
             .iter()
@@ -114,7 +115,7 @@ fn detect_cpu_name() -> String {
 
 // ── GPU classification (name-based) ───────────────────────────────────────────
 
-fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
+pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
     let lower = name.to_lowercase();
     let vendor = if lower.contains("nvidia")
         || lower.contains("geforce")

@@ -61,8 +61,8 @@ function mockMetricsSnapshot(): MetricsSnapshot {
     net_recv_kb: Math.max(0, 100 + 200 * Math.sin(t * 0.4 + 2.5)),
     net_sent_kb: Math.max(0, 50 + 150 * Math.sin(t * 0.4 + 3)),
     gpus: [
-      { name: 'UHD Graphics', util: 15 + 25 * Math.sin(t * 0.3 + 0.8), temp_c: 48 },
-      { name: 'RTX 4050', util: 20 + 40 * Math.sin(t * 0.3 + 1.2), temp_c: 55 },
+      { name: 'UHD Graphics', vendor: 'intel', util: 15 + 25 * Math.sin(t * 0.3 + 0.8), temp_c: 48 },
+      { name: 'RTX 4050', vendor: 'nvidia', util: 20 + 40 * Math.sin(t * 0.3 + 1.2), temp_c: 55 },
     ],
     cpu_temp_c: 52,
     nvidia_power_w: 45,
@@ -138,6 +138,23 @@ export function sliceWindow(arr: number[], windowSeconds: number): number[] {
   return arr.slice(arr.length - windowSeconds);
 }
 
+interface NvidiaStats {
+  power_w: number | null;
+  mem_used_mb: number | null;
+  mem_total_mb: number | null;
+  fan_speed_pct: number | null;
+  clock_mhz: number | null;
+}
+
+interface GpuMeta {
+  name: string;
+  vendor: string;
+}
+
+export interface SlicedGpuHistory extends GpuHistory {
+  vendor: string;
+}
+
 export interface SlicedHistory {
   cpu: number[];
   cpu_name: string;
@@ -148,7 +165,12 @@ export interface SlicedHistory {
   disks: DiskHistory[];
   net_recv: number[];
   net_sent: number[];
-  gpus: GpuHistory[];
+  gpus: SlicedGpuHistory[];
+  nvidia_power_w: number | null;
+  nvidia_mem_used_mb: number | null;
+  nvidia_mem_total_mb: number | null;
+  nvidia_fan_speed_pct: number | null;
+  nvidia_clock_mhz: number | null;
 }
 
 export function useMetrics(windowSeconds: number): SlicedHistory | null {
@@ -158,6 +180,14 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     used: 0,
     total: 0,
   });
+  const [nvidiaStats, setNvidiaStats] = useState<NvidiaStats>({
+    power_w: null,
+    mem_used_mb: null,
+    mem_total_mb: null,
+    fan_speed_pct: null,
+    clock_mhz: null,
+  });
+  const [gpuMeta, setGpuMeta] = useState<GpuMeta[]>([]);
 
   // Load history on mount and when the time window changes.
   useEffect(() => {
@@ -181,6 +211,20 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         const snap = event.payload;
         assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
         setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
+        setNvidiaStats({
+          power_w: snap.nvidia_power_w ?? null,
+          mem_used_mb: snap.nvidia_mem_used_mb ?? null,
+          mem_total_mb: snap.nvidia_mem_total_mb ?? null,
+          fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
+          clock_mhz: snap.nvidia_clock_mhz ?? null,
+        });
+        setGpuMeta((prev) => {
+          const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
+          for (const g of snap.gpus) {
+            map.set(g.name, g.vendor ?? 'unknown');
+          }
+          return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
+        });
         setHistory((prev) => {
           if (!prev) return prev;
           return {
@@ -203,6 +247,20 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     const id = setInterval(() => {
       const snap = mockMetricsSnapshot();
       setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
+      setNvidiaStats({
+        power_w: snap.nvidia_power_w ?? null,
+        mem_used_mb: snap.nvidia_mem_used_mb ?? null,
+        mem_total_mb: snap.nvidia_mem_total_mb ?? null,
+        fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
+        clock_mhz: snap.nvidia_clock_mhz ?? null,
+      });
+      setGpuMeta((prev) => {
+        const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
+        for (const g of snap.gpus) {
+          map.set(g.name, g.vendor ?? 'unknown');
+        }
+        return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
+      });
       setHistory((prev) => {
         if (!prev) return prev;
         return {
@@ -242,10 +300,19 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     })),
     net_recv: sliceWindow(history.net_recv, w),
     net_sent: sliceWindow(history.net_sent, w),
-    gpus: history.gpus.map((g) => ({
-      name: g.name,
-      values: sliceWindow(g.values, w),
-      temp_c: g.temp_c ?? null,
-    })),
+    gpus: history.gpus.map((g) => {
+      const meta = gpuMeta.find((m) => m.name === g.name);
+      return {
+        name: g.name,
+        values: sliceWindow(g.values, w),
+        temp_c: g.temp_c ?? null,
+        vendor: meta?.vendor ?? 'unknown',
+      };
+    }),
+    nvidia_power_w: nvidiaStats.power_w,
+    nvidia_mem_used_mb: nvidiaStats.mem_used_mb,
+    nvidia_mem_total_mb: nvidiaStats.mem_total_mb,
+    nvidia_fan_speed_pct: nvidiaStats.fan_speed_pct,
+    nvidia_clock_mhz: nvidiaStats.clock_mhz,
   };
 }

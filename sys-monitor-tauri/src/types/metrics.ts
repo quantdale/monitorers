@@ -9,6 +9,7 @@ export interface DiskSnapshot {
 
 export interface GpuSnapshot {
   name: string;
+  vendor: string;   // "nvidia" | "intel" | "amd" | "unknown"
   util: number;
   temp_c?: number | null;
 }
