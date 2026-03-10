@@ -1,31 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use sysinfo::{Disks, Networks, System};
-use windows::Win32::System::Performance::PdhCloseQuery;
 
-// ── PDH handles ──────────────────────────────────────────────────────────────
-// All PDH handles live here. These are raw Win32 isize values (PDH_HQUERY /
-// PDH_HCOUNTER). They must be opened once at startup and never recreated —
-// PDH rate counters store their baseline inside the handle.
+pub use crate::pdh::PdhHandles;
 
-pub struct PdhHandles {
-    pub query: Option<isize>,          // PDH_HQUERY — container for all counters
-    pub gpu_3d_counter: Option<isize>, // \GPU Engine(*engtype_3D*)\Utilization Percentage
-    pub disk_active_counter: Option<isize>, // \PhysicalDisk(*)\% Idle Time
-    pub disk_read_counter: Option<isize>, // \PhysicalDisk(*)\Disk Read Bytes/sec
-    pub disk_write_counter: Option<isize>, // \PhysicalDisk(*)\Disk Write Bytes/sec
-    pub disk_response_counter: Option<isize>, // \PhysicalDisk(*)\Avg. Disk sec/Transfer
-}
-
-impl Drop for PdhHandles {
-    fn drop(&mut self) {
-        if let Some(query) = self.query.take() {
-            unsafe {
-                PdhCloseQuery(query);
-            }
-        }
-    }
-}
+use crate::hardware::HardwareProfile;
 
 // ── RawPoll ──────────────────────────────────────────────────────────────────
 // Intermediate result produced by the collector after all I/O completes.
@@ -64,6 +43,7 @@ pub struct RawPoll {
 // thread. Never wrapped in a Mutex.
 
 pub struct CollectorState {
+    pub profile: HardwareProfile,
     pub pdh: PdhHandles,
     pub system: System,
     pub sysinfo_disks: Disks,
@@ -79,7 +59,7 @@ pub struct CollectorState {
 impl CollectorState {
     pub fn new() -> Self {
         // PDH init
-        let pdh = crate::collector::new_pdh_gpu_query().unwrap_or_else(|| PdhHandles {
+        let pdh = crate::collector::new_pdh_gpu_query().unwrap_or_else(|| crate::pdh::PdhHandles {
             query: None,
             gpu_3d_counter: None,
             disk_active_counter: None,
@@ -117,6 +97,7 @@ impl CollectorState {
         let nvml = crate::collector::nvidia::init_nvml();
 
         CollectorState {
+            profile: crate::hardware::detect(None, None),
             pdh,
             system,
             sysinfo_disks: disks,
@@ -160,6 +141,8 @@ pub struct HistoryStore {
     pub disk_avg_response_ms: HashMap<String, f64>,
     pub net_recv_history: VecDeque<f64>,
     pub net_sent_history: VecDeque<f64>,
+    /// Copy of hardware profile for IPC; set by background thread after detect().
+    pub profile: Option<HardwareProfile>,
 }
 
 impl HistoryStore {
@@ -195,6 +178,7 @@ impl HistoryStore {
             disk_avg_response_ms: HashMap::new(),
             net_recv_history: VecDeque::with_capacity(3600),
             net_sent_history: VecDeque::with_capacity(3600),
+            profile: None,
         }
     }
 }

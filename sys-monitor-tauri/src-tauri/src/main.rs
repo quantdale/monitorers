@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod collector;
+mod hardware;
+mod pdh;
 mod sensor;
 mod state;
 
@@ -227,6 +229,17 @@ fn get_history(state: tauri::State<SafeAppState>, window_secs: u64) -> HistoryPa
     build_history_payload(&s, window_secs)
 }
 
+// ── TAURI COMMAND — HARDWARE PROFILE ────────────────────────────────────────
+
+/// Returns the hardware profile (CPU, GPUs, disks) for settings/about panel. None until background thread has run detect().
+#[tauri::command]
+fn get_hardware_profile(
+    state: tauri::State<SafeAppState>,
+) -> Option<crate::hardware::HardwareProfile> {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    s.profile.clone()
+}
+
 // ── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 // ── TESTS ─────────────────────────────────────────────────────────────────────
@@ -303,7 +316,7 @@ fn main() {
 
             let mut registry = SensorRegistry::new();
             registry.register(CpuSensorProvider);
-            registry.register(GpuSensorProvider);
+            // GPU provider registered in background thread after profile has GPUs
 
             let app_handle = app.handle().clone();
 
@@ -371,6 +384,32 @@ fn main() {
                 }
                 let wmi_con = wmi_con;
 
+                // Full profile (including GPUs) now that WMI is ready
+                collector_state.profile =
+                    crate::hardware::detect(Some(&collector_state.pdh), wmi_con.as_ref());
+                let profile = &collector_state.profile;
+                println!(
+                    "[HardwareProfile] CPU: {:?} — {}",
+                    profile.cpu_vendor, profile.cpu_name
+                );
+                for gpu in &profile.gpus {
+                    println!(
+                        "[HardwareProfile] GPU: {} — {:?} {:?}",
+                        gpu.name, gpu.vendor, gpu.kind
+                    );
+                }
+                for disk in &profile.disks {
+                    println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
+                }
+                if profile.has_nvidia_dgpu() {
+                    registry.register(GpuSensorProvider);
+                }
+                {
+                    let store = app_handle.state::<SafeHistoryStore>();
+                    let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+                    s.profile = Some(collector_state.profile.clone());
+                }
+
                 let mut tick: u32 = 0;
                 loop {
                     // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
@@ -382,7 +421,7 @@ fn main() {
                     let reg_raw = if !tick.is_multiple_of(4) {
                         registry.poll_all(&mut collector_state, wmi_con.as_ref())
                     } else {
-                        vec![None, None]
+                        (0..registry.len()).map(|_| None).collect()
                     };
 
                     let snapshot = {
@@ -407,7 +446,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_history])
+        .invoke_handler(tauri::generate_handler![get_history, get_hardware_profile])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
             eprintln!("error while running tauri application: {:?}", e);

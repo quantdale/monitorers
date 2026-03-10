@@ -149,6 +149,11 @@ impl SensorRegistry {
         });
     }
 
+    /// Number of registered providers (used to build placeholder reg_raw on full ticks).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn poll_all(
         &mut self,
         state: &mut CollectorState,
