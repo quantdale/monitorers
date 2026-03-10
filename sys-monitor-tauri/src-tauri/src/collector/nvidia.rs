@@ -52,24 +52,16 @@ pub fn query_nvml(nvml: &Nvml) -> NvmlReadings {
         .ok()
         .map(|t| t as f64);
 
-    let power_w = device
-        .power_usage()
-        .ok()
-        .map(|mw| mw as f64 / 1000.0);
+    let power_w = device.power_usage().ok().map(|mw| mw as f64 / 1000.0);
 
     let (mem_used_mb, mem_total_mb) = match device.memory_info() {
-        Ok(m) => (
-            Some(m.used / 1024 / 1024),
-            Some(m.total / 1024 / 1024),
-        ),
+        Ok(m) => (Some(m.used / 1024 / 1024), Some(m.total / 1024 / 1024)),
         Err(_) => (None, None),
     };
 
     let fan_speed_pct = device.fan_speed(0).ok();
 
-    let clock_mhz = device
-        .clock(Clock::Graphics, ClockId::Current)
-        .ok();
+    let clock_mhz = device.clock(Clock::Graphics, ClockId::Current).ok();
 
     NvmlReadings {
         temp_c,

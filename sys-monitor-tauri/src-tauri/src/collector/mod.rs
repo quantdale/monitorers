@@ -188,20 +188,26 @@ pub fn poll(
         gpu::query_gpu_utilization_pdh(&collector.pdh, wmi_con, &collector.gpu_error_lock);
 
     #[cfg(feature = "nvml")]
-    let (nvidia_temp, nvidia_power_w, nvidia_mem_used_mb, nvidia_mem_total_mb, nvidia_fan_speed_pct, nvidia_clock_mhz) =
-        if let Some(ref nvml) = collector.nvml {
-            let r = nvidia::query_nvml(nvml);
-            (
-                r.temp_c,
-                r.power_w,
-                r.mem_used_mb,
-                r.mem_total_mb,
-                r.fan_speed_pct,
-                r.clock_mhz,
-            )
-        } else {
-            (None, None, None, None, None, None)
-        };
+    let (
+        nvidia_temp,
+        nvidia_power_w,
+        nvidia_mem_used_mb,
+        nvidia_mem_total_mb,
+        nvidia_fan_speed_pct,
+        nvidia_clock_mhz,
+    ) = if let Some(ref nvml) = collector.nvml {
+        let r = nvidia::query_nvml(nvml);
+        (
+            r.temp_c,
+            r.power_w,
+            r.mem_used_mb,
+            r.mem_total_mb,
+            r.fan_speed_pct,
+            r.clock_mhz,
+        )
+    } else {
+        (None, None, None, None, None, None)
+    };
 
     #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
     let nvidia_temp = nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
@@ -330,7 +336,11 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 
 /// Commit only disk and network fields from a RawPoll into HistoryStore (full tick, every 4th).
 pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), MAX_HISTORY);
+    push_history(
+        &mut store.mem_history,
+        poll.mem_pct.clamp(0.0, 100.0),
+        MAX_HISTORY,
+    );
     store.mem_used_gb = poll.mem_used_gb;
     store.mem_total_gb = poll.mem_total_gb;
     push_history(&mut store.net_recv_history, poll.net_recv_kb_s, MAX_HISTORY);
