@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -11,11 +11,13 @@ import {
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useMetrics } from './hooks/useMetrics';
+import { useSettings } from './hooks/useSettings';
 import { SortableCard } from './components/SortableCard';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
 import { MetricCardSelector } from './components/MetricCardSelector';
-import type { ViewMode } from './utils';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { gpuId, historyMinMax } from './utils';
 
 const TIME_OPTIONS = [
   { label: '30s', value: 30 },
@@ -62,42 +64,49 @@ const badgeStyle: React.CSSProperties = {
 };
 
 export default function App() {
-  const [windowSecs, setWindowSecs] = useState(60);
-  const [viewMode, setViewMode] = useState<ViewMode>('default');
-  const [cardOrder, setCardOrder] = useState<string[]>([]);
-  const [hiddenCardIds, setHiddenCardIds] = useState<Set<string>>(new Set());
+  const { settings, save, loaded } = useSettings();
+  const cardOrder = settings.cardOrder ?? [];
+  const hiddenCardIds = new Set(settings.hiddenCardIds);
+  const viewMode = settings.viewMode;
+  const windowSecs = settings.windowSecs;
 
   const metrics = useMetrics(windowSecs);
 
-  // Initialize and sync card order when metrics load. Disk/GPU keys are dynamic and may
-  // arrive late (backend populates them after first refresh). Update cardOrder whenever
-  // the default set of IDs changes so disks/GPUs that appear after initial load are shown.
-  // Order resets to default on launch — no persistence.
+  // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
   useEffect(() => {
     if (!metrics) return;
     const defaultIds = [
       'cpu',
       'memory',
-      ...metrics.disks.map(d => `disk_${d.key}`),
+      ...metrics.disks.map((d) => `disk_${d.key}`),
       'network',
-      ...metrics.gpus.map((_, i) => `gpu_${i}`),
+      ...metrics.gpus.map((g) => gpuId(g.name)),
     ];
-    setCardOrder(prev => {
-      const prevSet = new Set(prev);
-      const hasNew = defaultIds.some(id => !prevSet.has(id));
-      const hasRemoved = prev.some(id => !defaultIds.includes(id));
-      if (!hasNew && !hasRemoved) return prev;
-      return defaultIds;
-    });
-  }, [metrics]);
+    const current = settings.cardOrder ?? [];
+    if (settings.cardOrder === null) {
+      save({ cardOrder: defaultIds });
+      return;
+    }
+    const currentSet = new Set(current);
+    const hasNew = defaultIds.some((id) => !currentSet.has(id));
+    if (!hasNew) return;
+    const merged = [...current];
+    for (const id of defaultIds) {
+      if (!currentSet.has(id)) {
+        merged.push(id);
+        currentSet.add(id);
+      }
+    }
+    save({ cardOrder: merged });
+  }, [metrics, settings.cardOrder, save]);
+
+  if (!loaded) return null;
 
   function handleMetricToggle(id: string, visible: boolean) {
-    setHiddenCardIds(prev => {
-      const next = new Set(prev);
-      if (visible) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    const next = new Set(hiddenCardIds);
+    if (visible) next.delete(id);
+    else next.add(id);
+    save({ hiddenCardIds: [...next] });
   }
 
   function getCardLabel(id: string): string {
@@ -107,8 +116,7 @@ export default function App() {
     if (id === 'network') return 'Network';
     if (id.startsWith('disk_')) return `Disk ${id.slice('disk_'.length)}`;
     if (id.startsWith('gpu_')) {
-      const idx = parseInt(id.slice('gpu_'.length), 10);
-      return metrics.gpus[idx]?.name ?? id;
+      return metrics.gpus.find(g => gpuId(g.name) === id)?.name ?? id;
     }
     return id;
   }
@@ -116,11 +124,9 @@ export default function App() {
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (over && active.id !== over.id) {
-      setCardOrder(prev => {
-        const oldIndex = prev.indexOf(active.id as string);
-        const newIndex = prev.indexOf(over.id as string);
-        return arrayMove(prev, oldIndex, newIndex);
-      });
+      const oldIndex = cardOrder.indexOf(active.id as string);
+      const newIndex = cardOrder.indexOf(over.id as string);
+      save({ cardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
     }
   }
 
@@ -199,20 +205,12 @@ export default function App() {
     if (id === 'network') {
       const recv = metrics.net_recv.at(-1) ?? 0;
       const sent = metrics.net_sent.at(-1) ?? 0;
-      const { min: minR, max: maxR } = (() => {
-        const h = metrics.net_recv;
-        if (h.length === 0) return { min: 0, max: 0 };
-        const rawMin = Math.min(...h);
-        const rawMax = Math.max(...h);
-        return { min: Math.max(0, rawMin), max: Math.max(0, rawMax) };
-      })();
-      const { min: minS, max: maxS } = (() => {
-        const h = metrics.net_sent;
-        if (h.length === 0) return { min: 0, max: 0 };
-        const rawMin = Math.min(...h);
-        const rawMax = Math.max(...h);
-        return { min: Math.max(0, rawMin), max: Math.max(0, rawMax) };
-      })();
+      const { min: rawMinR, max: rawMaxR } = historyMinMax(metrics.net_recv);
+      const minR = Math.max(0, rawMinR);
+      const maxR = Math.max(0, rawMaxR);
+      const { min: rawMinS, max: rawMaxS } = historyMinMax(metrics.net_sent);
+      const minS = Math.max(0, rawMinS);
+      const maxS = Math.max(0, rawMaxS);
       return (
         <SortableCard
           key={id}
@@ -252,8 +250,8 @@ export default function App() {
     }
 
     if (id.startsWith('gpu_')) {
-      const gpuIdx = parseInt(id.slice('gpu_'.length), 10);
-      if (isNaN(gpuIdx) || gpuIdx >= metrics.gpus.length) return null;
+      const gpuIdx = metrics.gpus.findIndex(g => gpuId(g.name) === id);
+      if (gpuIdx === -1) return null;
       const gpu = metrics.gpus[gpuIdx];
       return (
         <SortableCard
@@ -303,7 +301,7 @@ export default function App() {
           <TimeRangeSelector
             options={TIME_OPTIONS}
             value={windowSecs}
-            onChange={setWindowSecs}
+            onChange={(value) => save({ windowSecs: value })}
           />
           {metrics && cardOrder.length > 0 && (
             <MetricCardSelector
@@ -313,7 +311,7 @@ export default function App() {
             />
           )}
         </div>
-        <ViewModeSelector value={viewMode} onChange={setViewMode} />
+        <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
 
       {!metrics || cardOrder.length === 0 ? (
@@ -331,7 +329,11 @@ export default function App() {
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visibleCardOrder} strategy={strategy}>
             <div style={containerStyle}>
-              {visibleCardOrder.map(id => renderCard(id))}
+              {visibleCardOrder.map(id => (
+                <ErrorBoundary key={id + '_boundary'}>
+                  {renderCard(id)}
+                </ErrorBoundary>
+              ))}
             </div>
           </SortableContext>
         </DndContext>

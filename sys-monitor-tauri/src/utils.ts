@@ -7,6 +7,11 @@
 
 export type ViewMode = 'default' | 'tile' | 'list';
 
+/** Stable slug for GPU card ID from display name (e.g. "GeForce RTX 4050" → "gpu_geforce_rtx_4050"). */
+export function gpuId(name: string): string {
+  return 'gpu_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
 /**
  * Returns min and max of a history slice.
  * Computed from the current windowed slice (what the user can see on the graph),
@@ -15,8 +20,8 @@ export type ViewMode = 'default' | 'tile' | 'list';
 export function historyMinMax(history: number[]): { min: number; max: number } {
   if (history.length === 0) return { min: 0, max: 0 };
   return {
-    min: Math.min(...history),
-    max: Math.max(...history),
+    min: history.reduce((a, b) => Math.min(a, b), Infinity),
+    max: history.reduce((a, b) => Math.max(a, b), -Infinity),
   };
 }
 
