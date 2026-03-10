@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -66,7 +66,7 @@ const badgeStyle: React.CSSProperties = {
 export default function App() {
   const { settings, save, loaded } = useSettings();
   const cardOrder = settings.cardOrder ?? [];
-  const hiddenCardIds = new Set(settings.hiddenCardIds);
+  const hiddenCardIds = useMemo(() => new Set(settings.hiddenCardIds), [settings.hiddenCardIds]);
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;
 

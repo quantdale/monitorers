@@ -95,7 +95,7 @@ pub struct DiskHistory {
 
 /// Returns the last `window_secs` points from the deque, or all if window_secs is 0 or >= len.
 fn slice_history(deque: &VecDeque<f64>, window_secs: u64) -> Vec<f64> {
-    let n = window_secs as usize;
+    let n = window_secs.min(usize::MAX as u64) as usize;
     let len = deque.len();
     if n == 0 || n >= len {
         deque.iter().copied().collect()
@@ -373,21 +373,28 @@ fn main() {
 
                 let mut tick: u32 = 0;
                 loop {
-                    let raw = if tick % 4 == 0 {
+                    // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
+                    let raw = if tick.is_multiple_of(4) {
                         Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
                     } else {
                         None
                     };
-                    let reg_raw =
-                        registry.poll_all(&mut collector_state, wmi_con.as_ref());
+                    let reg_raw = if !tick.is_multiple_of(4) {
+                        registry.poll_all(&mut collector_state, wmi_con.as_ref())
+                    } else {
+                        vec![None, None]
+                    };
 
                     let snapshot = {
                         let store = app_handle.state::<SafeHistoryStore>();
                         let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(ref r) = raw {
                             collector::commit_disk_network(&mut s, r);
+                            collector::commit_cpu(&mut s, r);
+                            collector::commit_gpu(&mut s, r);
+                        } else {
+                            registry.commit_all(&mut s, &reg_raw);
                         }
-                        registry.commit_all(&mut s, &reg_raw);
                         build_snapshot(&s)
                     };
 
@@ -402,5 +409,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![get_history])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            eprintln!("error while running tauri application: {:?}", e);
+            std::process::exit(1);
+        });
 }

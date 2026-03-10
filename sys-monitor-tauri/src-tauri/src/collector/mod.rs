@@ -238,7 +238,8 @@ pub fn poll(
 }
 
 /// Append RawPoll values into HistoryStore. Fast — no I/O, pure memory writes.
-#[allow(dead_code)] // used when polling everything at once; slow path uses commit_disk_network
+/// Full commit (CPU, GPU, disk, network). Unused in favour of granular commit_* when raw.is_some().
+#[allow(dead_code)]
 pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     push_history(&mut store.cpu_history, poll.cpu_usage, MAX_HISTORY);
     store.cpu_temp_c = poll.cpu_temp_c;
@@ -327,7 +328,7 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
     }
 }
 
-/// Commit only disk and network fields from a RawPoll into HistoryStore (slow path, every 4th tick).
+/// Commit only disk and network fields from a RawPoll into HistoryStore (full tick, every 4th).
 pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     push_history(&mut store.mem_history, poll.mem_pct.clamp(0.0, 100.0), MAX_HISTORY);
     store.mem_used_gb = poll.mem_used_gb;
