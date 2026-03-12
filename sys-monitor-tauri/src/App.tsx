@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -17,7 +17,10 @@ import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
 import { MetricCardSelector } from './components/MetricCardSelector';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { HardwareSidebar } from './components/HardwareSidebar';
+import { useHardwareProfile } from './hooks/useHardwareProfile';
 import { gpuId, historyMinMax } from './utils';
+import { PanelLeft } from 'lucide-react';
 
 const TIME_OPTIONS = [
   { label: '30s', value: 30 },
@@ -101,7 +104,8 @@ export default function App() {
   const hiddenCardIds = useMemo(() => new Set(settings.hiddenCardIds), [settings.hiddenCardIds]);
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;
-
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const hardwareProfile = useHardwareProfile();
   const metrics = useMetrics(windowSecs);
 
   // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
@@ -369,16 +373,25 @@ export default function App() {
   const strategy = viewMode === 'tile' ? rectSortingStrategy : verticalListSortingStrategy;
 
   return (
-    <div
-      style={{
-        background: '#141414',
-        minHeight: '100vh',
-        padding: '12px 16px',
-        overflowY: 'auto',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        color: '#fff',
-      }}
-    >
+    <div style={{ display: 'flex', height: '100vh' }}>
+      <HardwareSidebar open={sidebarOpen} profile={hardwareProfile} metrics={metrics} />
+      <div
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            background: '#141414',
+            minHeight: '100vh',
+            padding: '12px 16px',
+            overflowY: 'auto',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            color: '#fff',
+          }}
+        >
       <div style={{ marginBottom: 4 }}>
         <span style={{ fontSize: 18, fontWeight: 700, color: '#e0e0e0' }}>
           System Monitor
@@ -387,6 +400,24 @@ export default function App() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((prev) => !prev)}
+            title={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
+            style={{
+              padding: '4px 8px',
+              borderRadius: 4,
+              border: '1px solid #444',
+              background: '#1e1e1e',
+              color: '#fff',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <PanelLeft size={16} />
+          </button>
           <TimeRangeSelector
             options={TIME_OPTIONS}
             value={windowSecs}
@@ -427,6 +458,8 @@ export default function App() {
           </SortableContext>
         </DndContext>
       )}
+        </div>
+      </div>
     </div>
   );
 }
