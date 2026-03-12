@@ -61,6 +61,7 @@ describe('useSettings (non-Tauri)', () => {
     expect(result().settings).toEqual({
       cardOrder: null,
       hiddenCardIds: [],
+      sidebarCardOrder: null,
       viewMode: 'default',
       windowSecs: 60,
     });
