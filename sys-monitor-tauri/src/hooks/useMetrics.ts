@@ -5,7 +5,7 @@ import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '.
 
 const MAX_HISTORY = 3600;
 
-export const EXPECTED_SCHEMA_VERSION = 1;
+export const EXPECTED_SCHEMA_VERSION = 2;
 
 export function assertSchemaVersion(actual: number, payloadName: string): void {
   if (actual !== EXPECTED_SCHEMA_VERSION) {
@@ -26,7 +26,8 @@ function mockHistoryPayload(): HistoryPayload {
   const n = 300;
   const t = (i: number) => (i / n) * Math.PI * 4;
   return {
-    schema_version: 1,
+    schema_version: 2,
+    timestamps: Array.from({ length: n }, (_, i) => i * 1000),
     cpu: Array.from({ length: n }, (_, i) => 30 + 40 * Math.sin(t(i))),
     cpu_name: 'CPU',
     cpu_temp_c: 52,
@@ -48,7 +49,7 @@ function mockHistoryPayload(): HistoryPayload {
 function mockMetricsSnapshot(): MetricsSnapshot {
   const t = Date.now() / 1000;
   return {
-    schema_version: 1,
+    schema_version: 2,
     cpu: 30 + 40 * Math.sin(t * 0.3),
     cpu_name: 'CPU',
     mem: 50 + 35 * Math.sin(t * 0.3 + 0.5),
@@ -156,6 +157,7 @@ export interface SlicedGpuHistory extends GpuHistory {
 }
 
 export interface SlicedHistory {
+  timestamps: number[];
   cpu: number[];
   cpu_name: string;
   cpu_temp_c: number | null;
@@ -195,7 +197,10 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
         .then((payload) => {
           assertSchemaVersion(payload.schema_version, 'HistoryPayload');
-          setHistory(payload);
+          setHistory({
+            ...payload,
+            timestamps: payload.timestamps ?? [],
+          });
         })
         .catch((err) => console.warn('[useMetrics] get_history failed:', err));
       return;
@@ -227,8 +232,10 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         });
         setHistory((prev) => {
           if (!prev) return prev;
+          const now = Date.now();
           return {
             schema_version: prev.schema_version,
+            timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
             cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
             cpu_name: snap.cpu_name ?? prev.cpu_name,
             cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
@@ -263,8 +270,10 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       });
       setHistory((prev) => {
         if (!prev) return prev;
+        const now = Date.now();
         return {
           schema_version: prev.schema_version,
+          timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
           cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
           cpu_name: snap.cpu_name ?? prev.cpu_name,
           cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
@@ -284,6 +293,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
   const w = Math.min(windowSeconds, MAX_HISTORY);
 
   return {
+    timestamps: sliceWindow(history.timestamps, w),
     cpu: sliceWindow(history.cpu, w),
     cpu_name: history.cpu_name,
     cpu_temp_c: history.cpu_temp_c ?? null,

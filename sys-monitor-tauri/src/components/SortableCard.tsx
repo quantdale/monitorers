@@ -8,6 +8,7 @@ interface Props {
   title: string;
   value: string;
   history?: number[];
+  timestamps?: number[];
   color: string;
   yDomain?: [number, number | 'auto'];
   badge?: React.ReactNode;

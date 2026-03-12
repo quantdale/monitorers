@@ -7,6 +7,7 @@ mod pdh;
 mod sensor;
 mod state;
 
+use chrono::Utc;
 use hardware::GpuVendor;
 use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
@@ -19,7 +20,7 @@ const WMI_BACKOFF_BASE_SECS: u64 = 1;
 const WMI_BACKOFF_MAX_SECS: u64 = 30;
 const WMI_MAX_ATTEMPTS: u32 = 8;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 // ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ pub struct DiskSnapshot {
 #[derive(serde::Serialize, Clone)]
 pub struct HistoryPayload {
     pub schema_version: u32,
+    pub timestamps: Vec<u64>,
     pub cpu: Vec<f64>,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -99,6 +101,16 @@ pub struct DiskHistory {
 
 /// Returns the last `window_secs` points from the deque, or all if window_secs is 0 or >= len.
 fn slice_history(deque: &VecDeque<f64>, window_secs: u64) -> Vec<f64> {
+    let n = window_secs.min(usize::MAX as u64) as usize;
+    let len = deque.len();
+    if n == 0 || n >= len {
+        deque.iter().copied().collect()
+    } else {
+        deque.iter().skip(len - n).copied().collect()
+    }
+}
+
+fn slice_timestamps(deque: &VecDeque<u64>, window_secs: u64) -> Vec<u64> {
     let n = window_secs.min(usize::MAX as u64) as usize;
     let len = deque.len();
     if n == 0 || n >= len {
@@ -189,6 +201,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
 fn build_history_payload(s: &state::HistoryStore, window_secs: u64) -> HistoryPayload {
     HistoryPayload {
         schema_version: SCHEMA_VERSION,
+        timestamps: slice_timestamps(&s.timestamps, window_secs),
         cpu: slice_history(&s.cpu_history, window_secs),
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
@@ -473,6 +486,8 @@ fn main() {
                             collector::commit_cpu(&mut s, r);
                             collector::commit_gpu(&mut s, r);
                             registry.commit_all(&mut s, &reg_raw);
+                            let ts = Utc::now().timestamp_millis() as u64;
+                            s.push_timestamp(ts);
                         }
                         build_snapshot(&s)
                     };

@@ -115,6 +115,8 @@ impl CollectorState {
 // Holds only history buffers and latest scalar readings. This is what goes
 // behind the Mutex.
 
+const HISTORY_LEN: usize = 3600;
+
 pub struct HistoryStore {
     pub cpu_history: VecDeque<f64>,
     pub cpu_name: String,
@@ -141,6 +143,7 @@ pub struct HistoryStore {
     pub disk_avg_response_ms: HashMap<String, f64>,
     pub net_recv_history: VecDeque<f64>,
     pub net_sent_history: VecDeque<f64>,
+    pub timestamps: VecDeque<u64>,
     /// Copy of hardware profile for IPC; set by background thread after detect().
     pub profile: Option<HardwareProfile>,
 }
@@ -153,10 +156,10 @@ impl HistoryStore {
             cpu_name.to_string()
         };
         HistoryStore {
-            cpu_history: VecDeque::with_capacity(3600),
+            cpu_history: VecDeque::with_capacity(HISTORY_LEN),
             cpu_name: name,
             cpu_temp_c: None,
-            mem_history: VecDeque::with_capacity(3600),
+            mem_history: VecDeque::with_capacity(HISTORY_LEN),
             mem_used_gb: 0.0,
             mem_total_gb: 0.0,
             gpu_entries: Vec::new(),
@@ -176,10 +179,18 @@ impl HistoryStore {
             disk_read_mb_s: HashMap::new(),
             disk_write_mb_s: HashMap::new(),
             disk_avg_response_ms: HashMap::new(),
-            net_recv_history: VecDeque::with_capacity(3600),
-            net_sent_history: VecDeque::with_capacity(3600),
+            net_recv_history: VecDeque::with_capacity(HISTORY_LEN),
+            net_sent_history: VecDeque::with_capacity(HISTORY_LEN),
+            timestamps: VecDeque::with_capacity(HISTORY_LEN),
             profile: None,
         }
+    }
+
+    pub fn push_timestamp(&mut self, ts: u64) {
+        if self.timestamps.len() >= HISTORY_LEN {
+            self.timestamps.pop_front();
+        }
+        self.timestamps.push_back(ts);
     }
 }
 

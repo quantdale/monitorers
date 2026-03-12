@@ -206,6 +206,7 @@ export default function App() {
           title={metrics.cpu_name || 'CPU'}
           value={formatPercent(metrics.cpu.at(-1))}
           history={metrics.cpu}
+          timestamps={metrics.timestamps}
           color="#4699e8"
           badge={<span style={badgeStyle}>{formatTempC(metrics.cpu_temp_c)}</span>}
           viewMode={viewMode}
@@ -221,6 +222,7 @@ export default function App() {
           title="Memory"
           value={formatPercent(metrics.mem.at(-1))}
           history={metrics.mem}
+          timestamps={metrics.timestamps}
           color="#4ed87a"
           badge={
             <span style={badgeStyle}>
@@ -245,6 +247,7 @@ export default function App() {
           title={`Disk ${disk.key}`}
           value={`Active Time ${formatPercent(disk.values.at(-1))}`}
           history={disk.values}
+          timestamps={metrics.timestamps}
           color={DISK_COLORS[diskIdx % DISK_COLORS.length]}
           listViewValue={
             <>
@@ -283,6 +286,7 @@ export default function App() {
           value=""
           history={metrics.net_recv}
           secondaryHistory={metrics.net_sent}
+          timestamps={metrics.timestamps}
           color="#50d8f0"
           secondaryColor="#e88a50"
           yDomain={[0, 'auto']}
@@ -336,6 +340,7 @@ export default function App() {
           title={gpuTitle}
           value={formatPercent(gpu.values.at(-1))}
           history={gpu.values}
+          timestamps={metrics.timestamps}
           color={GPU_COLORS[gpuIdx % GPU_COLORS.length]}
           badge={
             <>

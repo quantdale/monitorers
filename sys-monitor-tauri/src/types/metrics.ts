@@ -51,6 +51,7 @@ export interface GpuHistory {
 
 export interface HistoryPayload {
   schema_version: number;
+  timestamps: number[];
   cpu: number[];
   cpu_name: string;
   cpu_temp_c?: number | null;

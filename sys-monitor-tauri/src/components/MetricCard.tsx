@@ -8,7 +8,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { ViewMode } from '../utils';
-import { historyMinMax, downsample } from '../utils';
+import { historyMinMax } from '../utils';
 
 const MAX_CHART_POINTS = 300;
 
@@ -22,6 +22,7 @@ interface Props {
   title: string;
   value: string;
   history?: number[];
+  timestamps?: number[];
   color: string;
   yDomain?: [number, number | 'auto'];
   badge?: React.ReactNode;
@@ -40,6 +41,7 @@ export function MetricCard({
   title,
   value,
   history,
+  timestamps,
   color,
   yDomain = [0, 100],
   badge,
@@ -53,21 +55,43 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
-  const primaryRaw = hasChart ? downsample(history!, MAX_CHART_POINTS) : [];
-  const primary = primaryRaw.map((v) =>
-    v == null || Number.isNaN(v) ? 0 : v
-  );
-  const secondaryRaw = hasSecondary ? downsample(secondaryHistory!, MAX_CHART_POINTS) : null;
-  const secondary = secondaryRaw
-    ? secondaryRaw.map((v) => (v == null || Number.isNaN(v) ? 0 : v))
-    : null;
-  const data = hasChart
-    ? primary.map((v, i) => ({
-        i,
-        v: Math.max(0, v),
-        v2: secondary !== null ? Math.max(0, secondary[i] ?? 0) : undefined,
-      }))
-    : [];
+  const ts = timestamps ?? [];
+
+  let data: { t: number; v: number; v2?: number }[] = [];
+  if (hasChart) {
+    const src = history!;
+    const len = src.length;
+    const addPoint = (idx: number) => {
+      const rawV = src[idx];
+      const v = rawV == null || Number.isNaN(rawV) ? 0 : rawV;
+      const vClamped = Math.max(0, v);
+      let v2: number | undefined;
+      if (hasSecondary && secondaryHistory) {
+        const rawV2 = secondaryHistory[idx];
+        const v2Sanitised = rawV2 == null || Number.isNaN(rawV2) ? 0 : rawV2;
+        v2 = Math.max(0, v2Sanitised);
+      }
+      const t = ts[idx] ?? idx;
+      data.push({ t, v: vClamped, v2 });
+    };
+
+    if (len === 1) {
+      addPoint(0);
+    } else if (len <= MAX_CHART_POINTS) {
+      for (let i = 0; i < len; i += 1) {
+        addPoint(i);
+      }
+    } else {
+      const stride = Math.ceil(len / MAX_CHART_POINTS);
+      for (let i = 0; i < len; i += stride) {
+        addPoint(i);
+      }
+      const lastIndex = len - 1;
+      if ((data.length === 0 && len > 0) || data[data.length - 1].t !== (ts[lastIndex] ?? lastIndex)) {
+        addPoint(lastIndex);
+      }
+    }
+  }
 
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
@@ -145,7 +169,7 @@ export function MetricCard({
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 2, left: 0 }}>
                 <YAxis domain={yDomain} hide />
-                <XAxis dataKey="i" hide />
+                <XAxis dataKey="t" hide />
                 <Area
                   type="monotone"
                   dataKey="v"
@@ -246,7 +270,20 @@ export function MetricCard({
         <ResponsiveContainer width="100%" height={140}>
           <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
             <YAxis domain={yDomain} hide />
-            <XAxis dataKey="i" hide />
+            <XAxis
+              dataKey="t"
+              type="number"
+              domain={['dataMin', 'dataMax']}
+              tickFormatter={(ms: number) =>
+                new Date(ms).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })
+              }
+              tick={{ fontSize: 10 }}
+              interval="preserveStartEnd"
+            />
             <Area
               type="monotone"
               dataKey="v"
