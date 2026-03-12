@@ -194,14 +194,20 @@ fn detect_disks() -> Vec<DiskInfo> {
 
 // ── Public detect ──────────────────────────────────────────────────────────────
 
-/// Build hardware profile. Call with (None, None) when WMI is not yet available
-/// (e.g. in CollectorState::new()); call with (Some(&pdh), wmi_con) on the
-/// background thread after WMI is ready to populate GPUs.
-pub fn detect(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -> HardwareProfile {
+/// Build hardware profile. Call with (None, None, None) when WMI is not yet available
+/// (e.g. in CollectorState::new()); call with (Some(&pdh), wmi_con, Some(disks)) on the
+/// background thread after WMI is ready to populate GPUs and physical-disk list.
+/// When disks_override is Some, it is used so the sidebar matches the dashboard disk count.
+pub fn detect(
+    pdh: Option<&PdhHandles>,
+    wmi_con: Option<&wmi::WMIConnection>,
+    disks_override: Option<Vec<DiskInfo>>,
+) -> HardwareProfile {
+    let disks = disks_override.unwrap_or_else(detect_disks);
     HardwareProfile {
         cpu_vendor: detect_cpu_vendor(),
         cpu_name: detect_cpu_name(),
         gpus: detect_gpus(pdh, wmi_con),
-        disks: detect_disks(),
+        disks,
     }
 }

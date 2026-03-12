@@ -187,6 +187,46 @@ pub type PollDiskResult = (
     Vec<String>,
 );
 
+/// Returns one entry per physical disk (same keys and order as poll_disk), with name = disk_key
+/// (e.g. "C:" or "C: D:") and kind from sysinfo. Used by the hardware profile so the sidebar
+/// shows the same number of storage cards as the dashboard.
+pub fn physical_disk_list(
+    disks: &sysinfo::Disks,
+    pdh: &crate::state::PdhHandles,
+) -> Vec<(String, sysinfo::DiskKind)> {
+    let mut known_drive_letters: HashMap<String, String> = HashMap::new();
+    let mut drive_letter_to_kind: HashMap<String, sysinfo::DiskKind> = HashMap::new();
+    for d in disks.list() {
+        let mount = d.mount_point().to_string_lossy().to_string();
+        let mount_upper = mount.to_uppercase();
+        if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
+            let letter = mount_upper[..2].to_string();
+            known_drive_letters.insert(letter.clone(), mount);
+            drive_letter_to_kind.insert(letter, d.kind());
+        }
+    }
+
+    let mut result = Vec::new();
+    for (instance_name, _pct_active) in query_disk_active_time(pdh) {
+        let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
+            .into_iter()
+            .filter(|letter| known_drive_letters.contains_key(letter))
+            .collect();
+
+        if mapped_letters.is_empty() {
+            continue;
+        }
+
+        let disk_key = mapped_letters.join(" ");
+        let kind = mapped_letters
+            .first()
+            .and_then(|letter| drive_letter_to_kind.get(letter).copied())
+            .unwrap_or(sysinfo::DiskKind::Unknown(0));
+        result.push((disk_key, kind));
+    }
+    result
+}
+
 /// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
 pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> PollDiskResult {
     disks.refresh(false);

@@ -3126,7 +3126,7 @@ dependencies = [
 
 [[package]]
 name = "sys-monitor-tauri"
-version = "0.0.0"
+version = "0.1.4"
 dependencies = [
  "nvapi-sys",
  "nvml-wrapper",

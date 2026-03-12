@@ -17,7 +17,7 @@ import {
   Network,
 } from 'lucide-react';
 import type { SlicedHistory } from '../hooks/useMetrics';
-import type { DiskProfileEntry, GpuProfileEntry, HardwareProfile } from '../hooks/useHardwareProfile';
+import type { HardwareProfile } from '../hooks/useHardwareProfile';
 import { useSettings } from '../hooks/useSettings';
 import { SortableSidebarCard } from './SortableSidebarCard';
 
@@ -100,7 +100,6 @@ interface Props {
 
 export function HardwareSidebar({ open, profile, metrics }: Props) {
   const { settings, save } = useSettings();
-  const sidebarCardOrder = settings.sidebarCardOrder ?? [];
 
   // Compute ordered list: merge saved order with new cards from profile
   const cardOrder = (() => {

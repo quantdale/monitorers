@@ -97,7 +97,7 @@ impl CollectorState {
         let nvml = crate::collector::nvidia::init_nvml();
 
         CollectorState {
-            profile: crate::hardware::detect(None, None),
+            profile: crate::hardware::detect(None, None, None),
             pdh,
             system,
             sysinfo_disks: disks,

@@ -395,9 +395,38 @@ fn main() {
                 }
                 let wmi_con = wmi_con;
 
-                // Full profile (including GPUs) now that WMI is ready
-                collector_state.profile =
-                    crate::hardware::detect(Some(&collector_state.pdh), wmi_con.as_ref());
+                // Full profile (including GPUs and physical-disk list) now that WMI is ready.
+                // Prime PDH so physical_disk_list can read instance names.
+                let _ = collector::collect_pdh(&collector_state);
+                // Use same physical-disk list as metrics so sidebar storage cards match dashboard.
+                // Fall back to sysinfo-based list if PDH returns empty (e.g. before first poll).
+                let physical = collector::physical_disk_list(
+                    &collector_state.sysinfo_disks,
+                    &collector_state.pdh,
+                );
+                use sysinfo::DiskKind as SysDiskKind;
+                let disk_infos: Option<Vec<crate::hardware::DiskInfo>> = if physical.is_empty() {
+                    None // fall back to detect_disks() in hardware::detect
+                } else {
+                    Some(
+                        physical
+                            .into_iter()
+                            .map(|(name, kind)| {
+                                let k = match kind {
+                                    SysDiskKind::SSD => crate::hardware::DiskKind::Ssd,
+                                    SysDiskKind::HDD => crate::hardware::DiskKind::Hdd,
+                                    _ => crate::hardware::DiskKind::Unknown,
+                                };
+                                crate::hardware::DiskInfo { name, kind: k }
+                            })
+                            .collect(),
+                    )
+                };
+                collector_state.profile = crate::hardware::detect(
+                    Some(&collector_state.pdh),
+                    wmi_con.as_ref(),
+                    disk_infos,
+                );
                 let profile = &collector_state.profile;
                 println!(
                     "[HardwareProfile] CPU: {:?} — {}",
@@ -420,6 +449,7 @@ fn main() {
                     let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
                     s.profile = Some(collector_state.profile.clone());
                 }
+                app_handle.emit("hardware-profile-ready", ()).ok();
 
                 let mut tick: u32 = 0;
                 loop {
