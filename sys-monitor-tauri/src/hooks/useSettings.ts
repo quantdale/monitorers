@@ -7,6 +7,7 @@ const STORE_PATH = 'settings.json';
 export interface Settings {
   cardOrder: string[] | null;
   hiddenCardIds: string[];
+  sidebarCardOrder: string[] | null;
   viewMode: ViewMode;
   windowSecs: number;
 }
@@ -14,6 +15,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   cardOrder: null,
   hiddenCardIds: [],
+  sidebarCardOrder: null,
   viewMode: 'default',
   windowSecs: 60,
 };
@@ -33,11 +35,13 @@ export function useSettings() {
       setStore(s);
       const cardOrder = await s.get<string[]>('cardOrder');
       const hiddenCardIds = await s.get<string[]>('hiddenCardIds');
+      const sidebarCardOrder = await s.get<string[]>('sidebarCardOrder');
       const viewMode = await s.get<ViewMode>('viewMode');
       const windowSecs = await s.get<number>('windowSecs');
       setSettings({
         cardOrder: cardOrder ?? null,
         hiddenCardIds: hiddenCardIds ?? [],
+        sidebarCardOrder: sidebarCardOrder ?? null,
         viewMode: viewMode ?? 'default',
         windowSecs: windowSecs ?? 60,
       });
