@@ -7,15 +7,13 @@ use windows::Win32::System::Performance::{
 
 /// Query Win32_DiskDrive for Index and Model. Returns map from physical drive index to model name.
 /// Used as the preferred display name when sysinfo returns a device path (e.g. \\.\PhysicalDrive0).
-pub fn query_disk_models_wmi(
-    wmi_con: Option<&wmi::WMIConnection>,
-) -> HashMap<u32, String> {
+pub fn query_disk_models_wmi(wmi_con: Option<&wmi::WMIConnection>) -> HashMap<u32, String> {
     let Some(con) = wmi_con else {
         return HashMap::new();
     };
-    let rows = match con.raw_query::<HashMap<String, wmi::Variant>>(
-        "SELECT Index, Model FROM Win32_DiskDrive",
-    ) {
+    let rows = match con
+        .raw_query::<HashMap<String, wmi::Variant>>("SELECT Index, Model FROM Win32_DiskDrive")
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[Disk] WMI Win32_DiskDrive query failed: {:?}", e);
