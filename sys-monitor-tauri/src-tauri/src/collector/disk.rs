@@ -3,6 +3,47 @@ use windows::Win32::System::Performance::{
     PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
 };
 
+// ── WMI DISK MODEL (Win32_DiskDrive) ─────────────────────────────────────────
+
+/// Query Win32_DiskDrive for Index and Model. Returns map from physical drive index to model name.
+/// Used as the preferred display name when sysinfo returns a device path (e.g. \\.\PhysicalDrive0).
+pub fn query_disk_models_wmi(
+    wmi_con: Option<&wmi::WMIConnection>,
+) -> HashMap<u32, String> {
+    let Some(con) = wmi_con else {
+        return HashMap::new();
+    };
+    let rows = match con.raw_query::<HashMap<String, wmi::Variant>>(
+        "SELECT Index, Model FROM Win32_DiskDrive",
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[Disk] WMI Win32_DiskDrive query failed: {:?}", e);
+            return HashMap::new();
+        }
+    };
+    let mut map = HashMap::new();
+    for row in rows {
+        let index = row.get("Index").and_then(|v| match v {
+            wmi::Variant::I4(n) => Some((*n).max(0) as u32),
+            wmi::Variant::UI4(n) => Some(*n),
+            wmi::Variant::I8(n) => Some((*n).max(0) as u32),
+            wmi::Variant::UI8(n) => Some(*n as u32),
+            _ => None,
+        });
+        let model = row.get("Model").and_then(|v| match v {
+            wmi::Variant::String(s) => Some(s.trim().to_string()),
+            _ => None,
+        });
+        if let (Some(idx), Some(m)) = (index, model) {
+            if !m.is_empty() {
+                map.insert(idx, m);
+            }
+        }
+    }
+    map
+}
+
 // ── DISK HELPERS ─────────────────────────────────────────────────────────────
 
 /// Parse a PDH PhysicalDisk instance name like "0 C: D:" into drive letters ["C:", "D:"].
@@ -187,22 +228,36 @@ pub type PollDiskResult = (
     Vec<String>,
 );
 
-/// Returns one entry per physical disk (same keys and order as poll_disk), with name = disk_key
-/// (e.g. "C:" or "C: D:") and kind from sysinfo. Used by the hardware profile so the sidebar
-/// shows the same number of storage cards as the dashboard.
+/// Parse PDH PhysicalDisk instance name (e.g. "0 C:" or "1 D: E:") to get the physical drive index.
+fn pdh_instance_to_drive_index(instance: &str) -> Option<u32> {
+    instance
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
+/// One entry per physical disk: (disk_key, kind, display_name_source, pdh_drive_index).
+/// display_name_source is the sysinfo Disk::name() for the first drive letter (for fallback).
+pub type PhysicalDiskEntry = (String, sysinfo::DiskKind, String, Option<u32>);
+
+/// Returns one entry per physical disk (same keys and order as poll_disk). Third element is the
+/// sysinfo disk name for the first drive (used as fallback when WMI model is unavailable).
+/// Used by the hardware profile so the sidebar shows the same number of storage cards as the dashboard.
 pub fn physical_disk_list(
     disks: &sysinfo::Disks,
     pdh: &crate::state::PdhHandles,
-) -> Vec<(String, sysinfo::DiskKind)> {
+) -> Vec<PhysicalDiskEntry> {
     let mut known_drive_letters: HashMap<String, String> = HashMap::new();
     let mut drive_letter_to_kind: HashMap<String, sysinfo::DiskKind> = HashMap::new();
+    let mut drive_letter_to_name: HashMap<String, String> = HashMap::new();
     for d in disks.list() {
         let mount = d.mount_point().to_string_lossy().to_string();
         let mount_upper = mount.to_uppercase();
         if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
             let letter = mount_upper[..2].to_string();
             known_drive_letters.insert(letter.clone(), mount);
-            drive_letter_to_kind.insert(letter, d.kind());
+            drive_letter_to_kind.insert(letter.clone(), d.kind());
+            drive_letter_to_name.insert(letter, d.name().to_string_lossy().to_string());
         }
     }
 
@@ -222,7 +277,12 @@ pub fn physical_disk_list(
             .first()
             .and_then(|letter| drive_letter_to_kind.get(letter).copied())
             .unwrap_or(sysinfo::DiskKind::Unknown(0));
-        result.push((disk_key, kind));
+        let sysinfo_name = mapped_letters
+            .first()
+            .and_then(|letter| drive_letter_to_name.get(letter).cloned())
+            .unwrap_or_else(|| disk_key.clone());
+        let drive_index = pdh_instance_to_drive_index(&instance_name);
+        result.push((disk_key, kind, sysinfo_name, drive_index));
     }
     result
 }
@@ -331,5 +391,16 @@ mod tests {
     #[test]
     fn test_pdh_instance_whitespace_resilience() {
         assert_eq!(pdh_instance_to_drive_letters("  0 C:  "), vec!["C:"]);
+    }
+
+    // --- pdh_instance_to_drive_index ---
+
+    #[test]
+    fn test_pdh_instance_to_drive_index() {
+        assert_eq!(pdh_instance_to_drive_index("0 C:"), Some(0));
+        assert_eq!(pdh_instance_to_drive_index("1 D:"), Some(1));
+        assert_eq!(pdh_instance_to_drive_index("2 E: F:"), Some(2));
+        assert_eq!(pdh_instance_to_drive_index("_Total"), None);
+        assert_eq!(pdh_instance_to_drive_index(""), None);
     }
 }

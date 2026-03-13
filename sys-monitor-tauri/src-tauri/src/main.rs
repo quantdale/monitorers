@@ -417,6 +417,7 @@ fn main() {
                     &collector_state.sysinfo_disks,
                     &collector_state.pdh,
                 );
+                let wmi_disk_models = collector::query_disk_models_wmi(wmi_con.as_ref());
                 use sysinfo::DiskKind as SysDiskKind;
                 let disk_infos: Option<Vec<crate::hardware::DiskInfo>> = if physical.is_empty() {
                     None // fall back to detect_disks() in hardware::detect
@@ -424,7 +425,22 @@ fn main() {
                     Some(
                         physical
                             .into_iter()
-                            .map(|(name, kind)| {
+                            .map(|(disk_key, kind, sysinfo_name, drive_index)| {
+                                let display_name = drive_index
+                                    .and_then(|i| wmi_disk_models.get(&i).cloned())
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or(sysinfo_name.clone());
+                                let name = if display_name.is_empty() {
+                                    disk_key.clone()
+                                } else {
+                                    display_name
+                                };
+                                eprintln!(
+                                    "[HardwareProfile] Disk: {} — sysinfo name: {:?}, wmi model: {:?}",
+                                    name,
+                                    sysinfo_name,
+                                    drive_index.and_then(|i| wmi_disk_models.get(&i).cloned())
+                                );
                                 let k = match kind {
                                     SysDiskKind::SSD => crate::hardware::DiskKind::Ssd,
                                     SysDiskKind::HDD => crate::hardware::DiskKind::Hdd,
