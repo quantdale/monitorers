@@ -12,7 +12,7 @@ pub use nvidia::query_nvidia_gpu_temp;
 
 use std::collections::{HashMap, VecDeque};
 use windows::Win32::System::Performance::{
-    PdhAddEnglishCounterW, PdhCollectQueryData, PdhOpenQueryW,
+    PdhAddEnglishCounterW, PdhCollectQueryData, PdhOpenQueryW, PDH_HCOUNTER, PDH_HQUERY,
 };
 
 // ── PUSH HISTORY HELPER ──────────────────────────────────────────────────────
@@ -39,14 +39,14 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
     // SAFETY: PDH C API calls via FFI. All pointer arguments are stack variables.
     // Return codes are checked before any output values are read.
     unsafe {
-        let mut query: isize = 0;
+        let mut query = PDH_HQUERY::default();
         if PdhOpenQueryW(None, 0, &mut query) != 0 {
             eprintln!("[PDH] PdhOpenQueryW failed — GPU metrics unavailable.");
             return None;
         }
 
         let path_3d = windows::core::w!(r"\GPU Engine(*engtype_3D*)\Utilization Percentage");
-        let mut counter_3d: isize = 0;
+        let mut counter_3d = PDH_HCOUNTER::default();
         if PdhAddEnglishCounterW(query, path_3d, 0, &mut counter_3d) != 0 {
             eprintln!("[PDH] Failed to add GPU 3D counter — GPU metrics unavailable.");
             return None;
@@ -56,7 +56,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
         // PdhCollectQueryData snapshots both domains atomically.
         // active% = 100 - idle%  (inverted in query_disk_active_time).
         let path_disk_active = windows::core::w!(r"\PhysicalDisk(*)\% Idle Time");
-        let mut counter_disk_active: isize = 0;
+        let mut counter_disk_active = PDH_HCOUNTER::default();
         let counter_disk_opt =
             if PdhAddEnglishCounterW(query, path_disk_active, 0, &mut counter_disk_active) == 0 {
                 Some(counter_disk_active)
@@ -66,7 +66,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
             };
 
         let path_disk_read = windows::core::w!(r"\PhysicalDisk(*)\Disk Read Bytes/sec");
-        let mut counter_disk_read: isize = 0;
+        let mut counter_disk_read = PDH_HCOUNTER::default();
         let counter_disk_read_opt =
             if PdhAddEnglishCounterW(query, path_disk_read, 0, &mut counter_disk_read) == 0 {
                 Some(counter_disk_read)
@@ -76,7 +76,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
             };
 
         let path_disk_write = windows::core::w!(r"\PhysicalDisk(*)\Disk Write Bytes/sec");
-        let mut counter_disk_write: isize = 0;
+        let mut counter_disk_write = PDH_HCOUNTER::default();
         let counter_disk_write_opt =
             if PdhAddEnglishCounterW(query, path_disk_write, 0, &mut counter_disk_write) == 0 {
                 Some(counter_disk_write)
@@ -86,7 +86,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
             };
 
         let path_disk_response = windows::core::w!(r"\PhysicalDisk(*)\Avg. Disk sec/Transfer");
-        let mut counter_disk_response: isize = 0;
+        let mut counter_disk_response = PDH_HCOUNTER::default();
         let counter_disk_response_opt =
             if PdhAddEnglishCounterW(query, path_disk_response, 0, &mut counter_disk_response) == 0
             {

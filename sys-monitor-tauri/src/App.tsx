@@ -397,6 +397,22 @@ export default function App() {
             color: '#fff',
           }}
         >
+      {metrics?.collectorError && (
+        <div
+          style={{
+            background: 'rgba(231, 76, 60, 0.15)',
+            border: '1px solid rgba(231, 76, 60, 0.7)',
+            borderRadius: 4,
+            color: '#ffd6d3',
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {metrics.collectorError}
+        </div>
+      )}
       <div style={{ marginBottom: 4 }}>
         <span style={{ fontSize: 18, fontWeight: 700, color: '#e0e0e0' }}>
           System Monitor

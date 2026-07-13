@@ -1,7 +1,4 @@
 use std::collections::HashMap;
-use windows::Win32::System::Performance::{
-    PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
-};
 
 // ── WMI DISK MODEL (Win32_DiskDrive) ─────────────────────────────────────────
 
@@ -62,62 +59,17 @@ pub fn query_disk_active_time(pdh: &crate::state::PdhHandles) -> HashMap<String,
         None => return HashMap::new(),
     };
 
-    // SAFETY: PDH API calls with valid handles and stack-owned output pointers.
-    unsafe {
-        let mut buffer_size: u32 = 0;
-        let mut item_count: u32 = 0;
-
-        let _ = PdhGetFormattedCounterArrayW(
-            counter,
-            PDH_FMT_DOUBLE,
-            &mut buffer_size,
-            &mut item_count,
-            None,
-        );
-
-        if buffer_size == 0 || item_count == 0 {
-            return HashMap::new();
-        }
-
-        let u64_count = (buffer_size as usize * 3).div_ceil(8);
-        let mut backing: Vec<u64> = vec![0u64; u64_count];
-        let mut actual_buf_size: u32 = (u64_count * 8) as u32;
-        let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
-
-        let status = PdhGetFormattedCounterArrayW(
-            counter,
-            PDH_FMT_DOUBLE,
-            &mut actual_buf_size,
-            &mut item_count,
-            Some(buf_ptr),
-        );
-
-        if status != 0 {
-            return HashMap::new();
-        }
-
-        let mut result = HashMap::new();
-        for i in 0..item_count as usize {
-            let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
-
-            if item.FmtValue.CStatus > 1 {
-                continue;
-            }
-
-            let name = item.szName.to_string().unwrap_or_default();
-
+    crate::pdh::read_pdh_counter_array(counter)
+        .into_iter()
+        .filter_map(|(name, idle_pct)| {
             // _Total is the aggregate — skip it, we render per-disk cards.
             if name == "_Total" {
-                continue;
+                return None;
             }
-
             // Invert idle% → active%. Clamp handles out-of-range values near startup.
-            let value = (100.0 - item.FmtValue.Anonymous.doubleValue).clamp(0.0, 100.0);
-            result.insert(name, value);
-        }
-
-        result
-    }
+            Some((name, (100.0 - idle_pct).clamp(0.0_f64, 100.0)))
+        })
+        .collect()
 }
 
 /// Read \PhysicalDisk(*)\Disk Read Bytes/sec and Disk Write Bytes/sec.
@@ -175,46 +127,10 @@ fn query_disk_response_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f
 }
 
 /// Read a PDH counter array into instance_name -> value map.
-fn query_pdh_counter_array(counter: isize) -> HashMap<String, f64> {
-    let mut result = HashMap::new();
-    unsafe {
-        let mut buf_size: u32 = 0;
-        let mut item_count: u32 = 0;
-        let _ = PdhGetFormattedCounterArrayW(
-            counter,
-            PDH_FMT_DOUBLE,
-            &mut buf_size,
-            &mut item_count,
-            None,
-        );
-        if item_count == 0 {
-            return result;
-        }
-        let u64_count = (buf_size as usize * 3).div_ceil(8);
-        let mut backing: Vec<u64> = vec![0u64; u64_count];
-        let mut actual_buf_size: u32 = (u64_count * 8) as u32;
-        let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
-        let status = PdhGetFormattedCounterArrayW(
-            counter,
-            PDH_FMT_DOUBLE,
-            &mut actual_buf_size,
-            &mut item_count,
-            Some(buf_ptr),
-        );
-        if status != 0 {
-            return result;
-        }
-        for i in 0..item_count as usize {
-            let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
-            if item.FmtValue.CStatus > 1 {
-                continue;
-            }
-            let name = item.szName.to_string().unwrap_or_default();
-            let value = item.FmtValue.Anonymous.doubleValue;
-            result.insert(name, value);
-        }
-    }
-    result
+fn query_pdh_counter_array(
+    counter: windows::Win32::System::Performance::PDH_HCOUNTER,
+) -> HashMap<String, f64> {
+    crate::pdh::read_pdh_counter_array(counter)
 }
 
 /// Return type for `poll_disk`: active %, read MB/s, write MB/s, response ms, display order.

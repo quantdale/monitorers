@@ -365,6 +365,37 @@ mod tests {
         let snap = build_snapshot(&s);
         assert_eq!(snap.gpus[0].util, 25.0);
     }
+
+    // --- background thread panic recovery ---
+
+    #[test]
+    fn test_catch_unwind_catches_synthetic_panic() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("synthetic collector panic");
+        }));
+        assert!(result.is_err(), "catch_unwind must catch a synthetic panic");
+    }
+
+    #[test]
+    fn test_catch_unwind_error_payload_emitted() {
+        use std::sync::mpsc::channel;
+
+        let (tx, rx) = channel::<String>();
+        let emit_error = |payload: &str| tx.send(payload.to_string()).ok();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("background thread panicked");
+        }));
+
+        if result.is_err() {
+            emit_error("metrics collection stopped — restart the app");
+        }
+
+        assert_eq!(
+            rx.recv().expect("error payload must be emitted"),
+            "metrics collection stopped — restart the app"
+        );
+    }
 }
 
 fn main() {
@@ -533,33 +564,48 @@ fn main() {
 
                 let mut tick: u32 = 0;
                 loop {
-                    // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
-                    let raw = if tick.is_multiple_of(4) {
-                        Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
-                    } else {
-                        None
-                    };
-                    let reg_raw = if !tick.is_multiple_of(4) {
-                        registry.poll_all(&mut collector_state, wmi_con.as_ref())
-                    } else {
-                        (0..registry.len()).map(|_| None).collect()
-                    };
+                    let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
+                        let raw = if tick.is_multiple_of(4) {
+                            Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
+                        } else {
+                            None
+                        };
+                        let reg_raw = if !tick.is_multiple_of(4) {
+                            registry.poll_all(&mut collector_state, wmi_con.as_ref())
+                        } else {
+                            (0..registry.len()).map(|_| None).collect()
+                        };
 
-                    let snapshot = {
-                        let store = app_handle.state::<SafeHistoryStore>();
-                        let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(ref r) = raw {
-                            collector::commit_disk_network(&mut s, r);
-                            collector::commit_cpu(&mut s, r);
-                            collector::commit_gpu(&mut s, r);
-                            let ts = Utc::now().timestamp_millis() as u64;
-                            s.push_timestamp(ts);
+                        let snapshot = {
+                            let store = app_handle.state::<SafeHistoryStore>();
+                            let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ref r) = raw {
+                                collector::commit_disk_network(&mut s, r);
+                                collector::commit_cpu(&mut s, r);
+                                collector::commit_gpu(&mut s, r);
+                                let ts = Utc::now().timestamp_millis() as u64;
+                                s.push_timestamp(ts);
+                            }
+                            registry.commit_all(&mut s, &reg_raw);
+                            build_snapshot(&s)
+                        };
+
+                        snapshot
+                    }));
+
+                    match tick_result {
+                        Ok(snapshot) => {
+                            app_handle.emit("metrics-update", snapshot).ok();
                         }
-                        registry.commit_all(&mut s, &reg_raw);
-                        build_snapshot(&s)
-                    };
-
-                    app_handle.emit("metrics-update", snapshot).ok();
+                        Err(_) => {
+                            eprintln!("[Collector] background thread panicked");
+                            app_handle
+                                .emit("collector-error", "metrics collection stopped — restart the app")
+                                .ok();
+                            break;
+                        }
+                    }
 
                     tick = tick.wrapping_add(1);
                     std::thread::sleep(std::time::Duration::from_millis(250));

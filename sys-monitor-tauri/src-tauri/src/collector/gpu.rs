@@ -1,8 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
-use windows::Win32::System::Performance::{
-    PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
-};
 
 // ── GPU CLASSIFICATION ───────────────────────────────────────────────────────
 
@@ -198,59 +195,13 @@ pub fn query_gpu_utilization_pdh(
 
     let mut luid_3d_totals: HashMap<String, f64> = HashMap::new();
 
-    // SAFETY: PDH API calls. All mutable pointers point to stack variables or
-    // heap allocations with sufficient lifetime. Return codes checked before reads.
-    // szName pointers inside PDH_FMT_COUNTERVALUE_ITEM_W point into `backing`,
-    // which is alive for the duration of this unsafe block.
-    unsafe {
-        let mut buf_size: u32 = 0;
-        let mut item_count: u32 = 0;
-
-        let _ = PdhGetFormattedCounterArrayW(
-            counter_3d,
-            PDH_FMT_DOUBLE,
-            &mut buf_size,
-            &mut item_count,
-            None,
-        );
-
-        if item_count == 0 {
-            return result;
-        }
-
-        let u64_count = (buf_size as usize * 3).div_ceil(8);
-        let mut backing: Vec<u64> = vec![0u64; u64_count];
-        let mut actual_buf_size: u32 = (u64_count * 8) as u32;
-        let buf_ptr = backing.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
-
-        let status = PdhGetFormattedCounterArrayW(
-            counter_3d,
-            PDH_FMT_DOUBLE,
-            &mut actual_buf_size,
-            &mut item_count,
-            Some(buf_ptr),
-        );
-
-        if status != 0 {
-            return result;
-        }
-
-        for i in 0..item_count as usize {
-            let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
-            if item.FmtValue.CStatus > 1 {
-                continue;
-            }
-            let name = match item.szName.to_string() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let luid = match extract_luid_from_name(&name) {
-                Some(l) => l,
-                None => continue,
-            };
-            let util = item.FmtValue.Anonymous.doubleValue.clamp(0.0, 100.0);
-            *luid_3d_totals.entry(luid.clone()).or_insert(0.0) += util;
-        }
+    for (name, util) in crate::pdh::read_pdh_counter_array(counter_3d) {
+        let luid = match extract_luid_from_name(&name) {
+            Some(l) => l,
+            None => continue,
+        };
+        let util = util.clamp(0.0_f64, 100.0);
+        *luid_3d_totals.entry(luid).or_insert(0.0) += util;
     }
 
     // Build vendor map with PDH LUIDs included so dGPU engines that only appear

@@ -173,6 +173,7 @@ export interface SlicedHistory {
   nvidia_mem_total_mb: number | null;
   nvidia_fan_speed_pct: number | null;
   nvidia_clock_mhz: number | null;
+  collectorError: string | null;
 }
 
 export function useMetrics(windowSeconds: number): SlicedHistory | null {
@@ -190,6 +191,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     clock_mhz: null,
   });
   const [gpuMeta, setGpuMeta] = useState<GpuMeta[]>([]);
+  const [collectorError, setCollectorError] = useState<string | null>(null);
 
   // Load history on mount and when the time window changes.
   useEffect(() => {
@@ -212,7 +214,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
   // Listen for live metric updates and append to history.
   useEffect(() => {
     if (isTauri()) {
-      const unlistenPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
+      const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         const snap = event.payload;
         assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
         setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
@@ -247,8 +249,12 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
           };
         });
       });
+      const unlistenErrorPromise = listen<string>('collector-error', (event) => {
+        setCollectorError(event.payload);
+      });
       return () => {
-        unlistenPromise.then((f) => f());
+        unlistenMetricsPromise.then((f) => f());
+        unlistenErrorPromise.then((f) => f());
       };
     }
     const id = setInterval(() => {
@@ -324,5 +330,6 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     nvidia_mem_total_mb: nvidiaStats.mem_total_mb,
     nvidia_fan_speed_pct: nvidiaStats.fan_speed_pct,
     nvidia_clock_mhz: nvidiaStats.clock_mhz,
+    collectorError,
   };
 }
