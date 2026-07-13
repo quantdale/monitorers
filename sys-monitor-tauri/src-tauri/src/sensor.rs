@@ -48,7 +48,7 @@ impl SensorProvider for CpuSensorProvider {
     }
 
     fn commit(&mut self, store: &mut HistoryStore, raw: &RawPoll) {
-        collector::commit_cpu(store, raw);
+        collector::commit_cpu_scalar(store, raw);
     }
 
     fn poll_interval(&self) -> std::time::Duration {
@@ -115,7 +115,7 @@ impl SensorProvider for GpuSensorProvider {
     }
 
     fn commit(&mut self, store: &mut HistoryStore, raw: &RawPoll) {
-        collector::commit_gpu(store, raw);
+        collector::commit_gpu_scalar(store, raw);
     }
 
     fn poll_interval(&self) -> std::time::Duration {

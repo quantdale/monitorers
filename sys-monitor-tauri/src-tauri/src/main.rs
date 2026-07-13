@@ -123,7 +123,9 @@ fn slice_timestamps(deque: &VecDeque<u64>, window_secs: u64) -> Vec<u64> {
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
 fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
-    let cpu = s.cpu_history.back().copied().unwrap_or(0.0);
+    let cpu = s
+        .cpu_latest
+        .unwrap_or_else(|| s.cpu_history.back().copied().unwrap_or(0.0));
     let mem = s.mem_history.back().copied().unwrap_or(0.0);
 
     let disks = s
@@ -147,7 +149,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
     let gpus = s
         .gpu_entries
         .iter()
-        .map(|(_, name, hist)| {
+        .map(|(key, name, hist)| {
             let (vendor_enum, _kind) = hardware::classify_gpu(name);
             let vendor = match vendor_enum {
                 GpuVendor::Nvidia => "nvidia",
@@ -164,7 +166,11 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
             GpuSnapshot {
                 name: name.clone(),
                 vendor,
-                util: hist.back().copied().unwrap_or(0.0),
+                util: s
+                    .gpu_latest
+                    .get(key)
+                    .copied()
+                    .unwrap_or_else(|| hist.back().copied().unwrap_or(0.0)),
                 temp_c,
             }
         })
@@ -313,6 +319,51 @@ mod tests {
     fn test_slice_history_window_one() {
         let d = deque(&[7.0, 8.0, 9.0]);
         assert_eq!(slice_history(&d, 1), vec![9.0]);
+    }
+
+    // --- build_snapshot latest-value preference ---
+
+    #[test]
+    fn test_build_snapshot_prefers_cpu_latest() {
+        let mut s = state::HistoryStore::new("test");
+        s.cpu_latest = Some(42.0);
+        s.cpu_history = deque(&[10.0, 20.0, 30.0]);
+        let snap = build_snapshot(&s);
+        assert_eq!(snap.cpu, 42.0);
+    }
+
+    #[test]
+    fn test_build_snapshot_prefers_gpu_latest() {
+        let mut s = state::HistoryStore::new("test");
+        s.gpu_entries = vec![(
+            "gpu0".to_string(),
+            "NVIDIA GeForce".to_string(),
+            deque(&[10.0, 20.0]),
+        )];
+        s.gpu_latest.insert("gpu0".to_string(), 75.0);
+        let snap = build_snapshot(&s);
+        assert_eq!(snap.gpus.len(), 1);
+        assert_eq!(snap.gpus[0].util, 75.0);
+    }
+
+    #[test]
+    fn test_build_snapshot_cpu_fallback_without_latest() {
+        let mut s = state::HistoryStore::new("test");
+        s.cpu_history = deque(&[10.0, 20.0, 30.0]);
+        let snap = build_snapshot(&s);
+        assert_eq!(snap.cpu, 30.0);
+    }
+
+    #[test]
+    fn test_build_snapshot_gpu_fallback_without_latest() {
+        let mut s = state::HistoryStore::new("test");
+        s.gpu_entries = vec![(
+            "gpu0".to_string(),
+            "NVIDIA GeForce".to_string(),
+            deque(&[10.0, 25.0]),
+        )];
+        let snap = build_snapshot(&s);
+        assert_eq!(snap.gpus[0].util, 25.0);
     }
 }
 
@@ -501,10 +552,10 @@ fn main() {
                             collector::commit_disk_network(&mut s, r);
                             collector::commit_cpu(&mut s, r);
                             collector::commit_gpu(&mut s, r);
-                            registry.commit_all(&mut s, &reg_raw);
                             let ts = Utc::now().timestamp_millis() as u64;
                             s.push_timestamp(ts);
                         }
+                        registry.commit_all(&mut s, &reg_raw);
                         build_snapshot(&s)
                     };
 

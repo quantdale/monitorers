@@ -335,6 +335,30 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
     }
 }
 
+/// Commit only CPU scalar fields (no history push) for high-frequency snapshots.
+pub fn commit_cpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    store.cpu_temp_c = poll.cpu_temp_c;
+    store.cpu_latest = Some(poll.cpu_usage);
+}
+
+/// Commit only GPU scalar fields (no history push) for high-frequency snapshots.
+pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    store.gpu_latest = poll
+        .gpu_updates
+        .iter()
+        .map(|(key, _, util)| (key.clone(), util.clamp(0.0, 100.0)))
+        .collect();
+    store.nvidia_temp = poll.nvidia_temp;
+    #[cfg(feature = "nvml")]
+    {
+        store.nvidia_power_w = poll.nvidia_power_w;
+        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
+        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
+        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
+        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
+    }
+}
+
 /// Commit only disk and network fields from a RawPoll into HistoryStore (full tick, every 4th).
 pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     push_history(
@@ -422,5 +446,59 @@ mod tests {
             brand.to_string()
         };
         assert_eq!(name, "CPU");
+    }
+
+    // --- scalar commits ---
+
+    #[test]
+    fn test_commit_cpu_scalar_updates_latest_not_history() {
+        let mut store = crate::state::HistoryStore::new("test");
+        let poll = crate::state::RawPoll {
+            cpu_usage: 42.0,
+            cpu_temp_c: Some(65.0),
+            ..Default::default()
+        };
+        commit_cpu_scalar(&mut store, &poll);
+        assert_eq!(store.cpu_latest, Some(42.0));
+        assert_eq!(store.cpu_temp_c, Some(65.0));
+        assert!(store.cpu_history.is_empty());
+    }
+
+    #[test]
+    fn test_commit_gpu_scalar_updates_latest_not_history() {
+        let mut store = crate::state::HistoryStore::new("test");
+        let poll = crate::state::RawPoll {
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 150.0)],
+            nvidia_temp: Some(70.0),
+            ..Default::default()
+        };
+        commit_gpu_scalar(&mut store, &poll);
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&100.0));
+        assert_eq!(store.nvidia_temp, Some(70.0));
+        assert!(store.gpu_entries.is_empty());
+    }
+
+    #[test]
+    fn test_history_length_invariant_after_simulated_ticks() {
+        let mut store = crate::state::HistoryStore::new("test");
+        let full_poll = crate::state::RawPoll {
+            cpu_usage: 10.0,
+            ..Default::default()
+        };
+        commit_cpu(&mut store, &full_poll);
+        store.push_timestamp(1);
+
+        for v in [20.0, 30.0, 40.0] {
+            let scalar_poll = crate::state::RawPoll {
+                cpu_usage: v,
+                ..Default::default()
+            };
+            commit_cpu_scalar(&mut store, &scalar_poll);
+        }
+
+        assert_eq!(store.cpu_history.len(), 1);
+        assert_eq!(store.timestamps.len(), 1);
+        assert_eq!(store.cpu_latest, Some(40.0));
+        assert_eq!(store.cpu_history.back().copied(), Some(10.0));
     }
 }
