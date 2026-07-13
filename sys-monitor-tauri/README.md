@@ -1,6 +1,6 @@
 # System Monitor (Tauri)
 
-Desktop system monitor built with **Tauri 1** (Rust backend) and **React + TypeScript** (Vite) frontend. Shows CPU, memory, disk, network, and GPU metrics with live charts.
+Desktop system monitor built with **Tauri 2** (Rust backend) and **React + TypeScript** (Vite) frontend. Shows CPU, memory, disk, network, and GPU metrics with live charts.
 
 ---
 

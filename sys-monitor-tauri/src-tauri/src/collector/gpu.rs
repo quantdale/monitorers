@@ -57,12 +57,19 @@ fn strip_brand_prefix(caption: &str) -> String {
 
 /// Returns true if the GPU display name belongs to an Nvidia GPU
 /// that should receive the Nvidia temperature reading.
+///
+/// Called on the post-strip_brand_prefix display name, so the "nvidia" keyword
+/// rarely appears — this must also recognize professional-line model names
+/// (Quadro, Tesla, NVS) that lack a consumer keyword like GeForce/RTX/GTX.
 pub fn is_nvidia_gpu(display_name: &str) -> bool {
     let lower = display_name.to_lowercase();
     lower.contains("geforce")
         || lower.contains("rtx")
         || lower.contains("gtx")
         || lower.contains("nvidia")
+        || lower.contains("quadro")
+        || lower.contains("tesla")
+        || lower.contains("nvs")
 }
 
 /// Classify a LUID as iGPU or dGPU.
@@ -431,5 +438,114 @@ mod tests {
             classify_luid("0xDEADBEEF", &map),
             GpuClass::Unknown
         ));
+    }
+
+    // --- is_nvidia_gpu ---
+    // is_nvidia_gpu is always called on the post-strip_brand_prefix display name
+    // (see main.rs build_snapshot/build_history_payload), so these cases use the
+    // same stripped form the function actually receives at runtime.
+
+    #[test]
+    fn test_is_nvidia_gpu_geforce() {
+        assert!(is_nvidia_gpu("GeForce RTX 4070"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_gtx() {
+        assert!(is_nvidia_gpu("GeForce GTX 1660"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_quadro_rtx() {
+        assert!(is_nvidia_gpu("Quadro RTX 5000"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_quadro_non_rtx() {
+        assert!(is_nvidia_gpu("Quadro P620"));
+        assert!(is_nvidia_gpu("Quadro M2000"));
+        assert!(is_nvidia_gpu("Quadro K420"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_tesla() {
+        assert!(is_nvidia_gpu("Tesla V100"));
+        assert!(is_nvidia_gpu("Tesla T4"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_nvs() {
+        assert!(is_nvidia_gpu("NVS 810"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_bare_nvidia_form() {
+        assert!(is_nvidia_gpu("NVIDIA A100"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_amd_rejected() {
+        assert!(!is_nvidia_gpu("Radeon RX 6700 XT"));
+    }
+
+    #[test]
+    fn test_is_nvidia_gpu_intel_rejected() {
+        assert!(!is_nvidia_gpu("Iris Xe Graphics"));
+    }
+
+    // --- strip_brand_prefix ---
+
+    #[test]
+    fn test_strip_brand_prefix_nvidia() {
+        assert_eq!(
+            strip_brand_prefix("NVIDIA GeForce RTX 4050"),
+            "GeForce RTX 4050"
+        );
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_intel_r() {
+        assert_eq!(
+            strip_brand_prefix("Intel(R) Iris Xe Graphics"),
+            "Iris Xe Graphics"
+        );
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_intel_no_r() {
+        assert_eq!(
+            strip_brand_prefix("Intel Iris Xe Graphics"),
+            "Iris Xe Graphics"
+        );
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_amd() {
+        assert_eq!(
+            strip_brand_prefix("AMD Radeon RX 6700 XT"),
+            "Radeon RX 6700 XT"
+        );
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_no_prefix_present() {
+        assert_eq!(strip_brand_prefix("Some Other GPU"), "Some Other GPU");
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_already_stripped() {
+        assert_eq!(strip_brand_prefix("GeForce RTX 4070"), "GeForce RTX 4070");
+    }
+
+    #[test]
+    fn test_strip_brand_prefix_case_insensitive_match() {
+        assert_eq!(
+            strip_brand_prefix("nvidia geforce rtx 4070"),
+            "geforce rtx 4070"
+        );
+        assert_eq!(
+            strip_brand_prefix("NVIDIA GEFORCE RTX 4070"),
+            "GEFORCE RTX 4070"
+        );
     }
 }

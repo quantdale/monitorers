@@ -8,6 +8,8 @@ sys-monitor-tauri/src-tauri/target/
 sys-monitor-tauri/node_modules/
 sys-monitor-tauri/dist/
 
+# Debug artifacts
+debug-*.log
+
 # Cursor editor
 .cursor/
-.cursorrules

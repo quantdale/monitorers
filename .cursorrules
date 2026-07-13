@@ -2,11 +2,11 @@
 
 ## 1. Project Overview & Core Stack
 
-Real-time Windows desktop system monitor built with Tauri v1. A single Rust backend collects CPU, memory, disk, network, and GPU metrics via Win32 PDH/WMI/NVAPI, streams them at 1 Hz over Tauri IPC, and a React/TypeScript frontend renders live area charts with drag-to-reorder cards. **Windows only** — every collector depends on Win32-exclusive APIs.
+Real-time Windows desktop system monitor built with Tauri v2. A single Rust backend collects CPU, memory, disk, network, and GPU metrics via Win32 PDH/WMI/NVAPI, streams them at 1 Hz over Tauri IPC, and a React/TypeScript frontend renders live area charts with drag-to-reorder cards. **Windows only** — every collector depends on Win32-exclusive APIs.
 
 | Layer | Technology | Version |
 |---|---|---|
-| App shell | Tauri v1 (WebView2) | `tauri = "1"` |
+| App shell | Tauri v2 (WebView2) | `tauri = "2"` |
 | Backend | Rust 2021, `sysinfo 0.33`, `windows 0.52` (PDH), `wmi 0.13`, `nvapi-sys 0.1.3` (opt) | edition 2021 |
 | Frontend | React 18, TypeScript 5, Vite 5 | `"react": "^18.2.0"`, `"vite": "^5.0.0"` |
 | Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.8.0"` |
@@ -96,7 +96,7 @@ monitorers/
     │       └── MetricCardSelector.tsx
     └── src-tauri/                  ← BACKEND (Rust)
         ├── Cargo.toml
-        ├── tauri.conf.json         ← window: 900×1100, bundle id: com.sysmonitor.app
+        ├── tauri.conf.json         ← window: 900×1100, bundle id: com.quantdale.systemmonitor
         ├── build.rs
         └── src/
             ├── main.rs             ← Tauri setup, payload structs, get_history command, slice_history
@@ -332,7 +332,7 @@ npx tsc --noEmit
 **Critical config values**:
 - Vite dev server: port **5180** (strict port; in `vite.config.ts` and `tauri.conf.json`)
 - Tauri window: 900×1100 default, 400×300 minimum
-- Bundle identifier: `com.sysmonitor.app`
+- Bundle identifier: `com.quantdale.systemmonitor`
 - Release profile: `opt-level = 3`, `lto = true`, `codegen-units = 1`, `strip = true`
 
 **No environment variables required** — all configuration is compile-time.
