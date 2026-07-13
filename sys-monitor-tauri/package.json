@@ -27,10 +27,10 @@
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "@types/recharts": "^1.8.29",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^25.0.0",
     "typescript": "^5.0.2",
-    "vite": "^5.0.0",
-    "vitest": "^4.0.18"
+    "vite": "^6.4.3",
+    "vitest": "^4.1.10"
   }
 }
