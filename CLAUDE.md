@@ -23,7 +23,7 @@ npm run build               # tsc + vite build (frontend only)
 npm test -- --run           # frontend tests (Vitest, 41 tests)
 npx tsc --noEmit            # frontend type check
 
-cd src-tauri && cargo test                  # Rust tests (45 tests)
+cd src-tauri && cargo test                  # Rust tests (70 tests)
 cd src-tauri && cargo test test_name        # single Rust test
 cd src-tauri && cargo test collector::disk  # one module
 cd src-tauri && cargo fmt -- --check        # format check (CI-enforced)
@@ -35,15 +35,15 @@ cd src-tauri && cargo clippy -- -D warnings # lint, zero warnings allowed (CI-en
 Before considering any task done, run the checks for whatever you changed and confirm they pass. CI (`.github/workflows/rust.yml`) runs three parallel jobs:
 - **rust-test** (windows-latest): `cargo test --verbose`
 - **rust-lint** (windows-latest): `cargo fmt -- --check`, `cargo clippy --verbose -- -D warnings`, `cargo audit`
-- **frontend** (ubuntu-latest): `npx tsc --noEmit`, `npm test -- --run`
+- **frontend** (ubuntu-latest): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`
 
-Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 45 (Rust) / 41 (frontend), investigate before committing.
+Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 70 (Rust) / 41 (frontend), investigate before committing.
 
 ## Backend architecture (`src-tauri/src/`)
 
 The whole backend is one background thread doing a polling loop. Understanding the concurrency model requires `main.rs` + `state.rs` + `sensor.rs` + `collector/mod.rs` together:
 
-- **`main.rs`** — Tauri `setup()` spawns the collector thread; defines all IPC payload structs (`MetricsSnapshot`, `HistoryPayload`, `DiskSnapshot`, `GpuSnapshot`, etc.) and `build_snapshot` / `build_history_payload`. Commands: `get_history(window_secs)` and `get_hardware_profile()`.
+- **`main.rs`** — Tauri `setup()` spawns the collector thread; defines all IPC payload structs (`MetricsSnapshot`, `GpuSnapshot`, `DiskSnapshot`, `HistoryPayload`, `GpuHistory`, `DiskHistory`) and `build_snapshot` / `build_history_payload`. `MetricsSnapshot` carries six `#[cfg(feature = "nvml")]`-gated `nvidia_*` fields (power/mem/fan/clock). Commands: `get_history(window_secs)` and `get_hardware_profile()`.
 - **`state.rs`** — `CollectorState` (owns all OS handles: sysinfo, `PdhHandles`, WMI, NVAPI/NVML state, the hardware profile) lives on the background thread and is **never behind a Mutex**. `HistoryStore` (ring buffers) is the **only** type behind `Mutex` (aliased `SafeHistoryStore` / `SafeAppState`). `RawPoll` carries one poll's values from I/O to commit.
 - **`collector/`** — `mod.rs` has `new_pdh_gpu_query()`, `poll()` (all slow Win32 I/O, no lock), the granular `commit_cpu` / `commit_gpu` / `commit_disk_network`, and `push_history()`. Submodules: `cpu.rs` (WMI thermal), `disk.rs` (PDH active%/throughput/response + physical-disk enumeration), `gpu.rs` (PDH 3D util + WMI vendor classification), `nvidia.rs` (NVAPI/NVML, feature-gated).
 - **`sensor.rs`** — `SensorProvider` trait + `SensorRegistry`. `CpuSensorProvider` and `GpuSensorProvider` poll at 250ms for snapshot freshness.
@@ -57,10 +57,11 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - **PDH handles are opened once** in `CollectorState::new()` and never recreated — recreating resets rate-counter baselines (first reading is always 0%, by design). A single `PdhCollectQueryData` per tick snapshots GPU and disk counters atomically.
 - **WMI/COM thread affinity**: winit initializes COM as STA on the main thread, so `WMIConnection::new()` runs on the spawned MTA background thread (with exponential-backoff retry: base 1s, max 30s, 8 attempts) and **never leaves it**.
 - On startup the thread detects the hardware profile, stores it, and emits `hardware-profile-ready`.
+- **Panic recovery**: each tick body runs inside `std::panic::catch_unwind`. On a caught panic the loop emits `app_handle.emit("collector-error", "metrics collection stopped — restart the app")` and **breaks** — the collector thread stops permanently (no auto-restart), so metrics freeze until the app is relaunched.
 
 ## Frontend architecture (`src/`)
 
-- **`hooks/useMetrics.ts`** — single source of truth for metrics. `invoke("get_history", { windowSecs })` on mount/window-change for the initial snapshot, then `listen("metrics-update")` appends incrementally (`appendToHistory` / `mergeDiskHistory` / `mergeGpuHistory`) into ring buffers of `MAX_HISTORY = 3600`. `sliceWindow()` clips to the active time range. Returns `SlicedHistory` or `null` while loading. In the browser (no `window.__TAURI_INTERNALS__`) it generates mock sine-wave data via `setInterval(1000)`.
+- **`hooks/useMetrics.ts`** — single source of truth for metrics. `invoke("get_history", { windowSecs })` on mount/window-change for the initial snapshot, then `listen("metrics-update")` appends incrementally (`appendToHistory` / `mergeDiskHistory` / `mergeGpuHistory`) into ring buffers of `MAX_HISTORY = 3600`. `sliceWindow()` clips to the active time range. A second `listen<string>("collector-error")` sets a `collectorError: string | null` field on `SlicedHistory`; `App.tsx` renders a red error banner when it is set. Returns `SlicedHistory` or `null` while loading. In the browser (no `window.__TAURI_INTERNALS__`) it generates mock sine-wave data via `setInterval(1000)`.
 - **`hooks/useSettings.ts`** — persists `cardOrder`, `hiddenCardIds`, `sidebarCardOrder`, `viewMode`, `windowSecs` to `settings.json` via `@tauri-apps/plugin-store`. No-ops (returns defaults) in the browser.
 - **`hooks/useHardwareProfile.ts`** — fetches `get_hardware_profile` and refreshes on the `hardware-profile-ready` event.
 - **`App.tsx`** — card layout, dnd-kit drag-to-reorder, view modes, hidden cards, hardware sidebar. Uses `export default` (the one allowed default export).
@@ -68,7 +69,7 @@ The whole backend is one background thread doing a polling loop. Understanding t
 
 ### IPC contract (Tauri v2) — easy to get wrong
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
-- Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2.
+- Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), and `collector-error` (a `string` message) when the collector thread panics and halts.
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
 - **`SCHEMA_VERSION` (Rust `main.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `2`.** Bump both together when payload shape changes.
 
@@ -83,4 +84,5 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - First PDH reading after init is always `0%` (baseline). 
 - Disk keys are drive-letter combos (`"C:"`, `"C: D:"`) parsed from PDH instance names like `"0 C: D:"`.
 - GPU display names are brand-stripped (`"NVIDIA GeForce RTX 4050"` → `"GeForce RTX 4050"`); GPU LUIDs are machine-specific and change across reboots — never hardcode them.
-- Critical config: Vite dev port **5180** (strict, in `vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.sysmonitor.app`. No env vars — all config is compile-time.
+- Critical config: Vite dev port **5180** (strict, in `vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.quantdale.systemmonitor`. No env vars — all config is compile-time.
+- `tauri.conf.json` sets a strict **CSP** (`default-src 'self'`; `connect-src 'self' ipc: http://ipc.localhost`) — no external fonts/CDN/network can load. `style-src 'unsafe-inline'` is what keeps the inline-React-styles convention working; don't remove it.
