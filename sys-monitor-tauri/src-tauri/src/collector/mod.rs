@@ -117,6 +117,8 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
 /// Call this before query_gpu_utilization_pdh when polling only GPU via sensor registry.
 pub fn collect_pdh(collector: &crate::state::CollectorState) -> bool {
     match collector.pdh.query {
+        // SAFETY: PDH C API call via FFI. `query` is a stack-local handle from
+        // CollectorState; the return code is checked before any output is read.
         Some(query) => unsafe { PdhCollectQueryData(query) == 0 },
         None => false,
     }
@@ -167,10 +169,7 @@ pub fn poll(
     let net_sent_kb_s = (total_sent_bytes as f64 / 1024.0).max(0.0);
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
-    let pdh_collected_ok = match collector.pdh.query {
-        Some(query) => unsafe { PdhCollectQueryData(query) == 0 },
-        None => false,
-    };
+    let pdh_collected_ok = collect_pdh(collector);
 
     let (disk_active, disk_read_mb_s, disk_write_mb_s, disk_avg_response_ms, disk_display_order) =
         if pdh_collected_ok {
