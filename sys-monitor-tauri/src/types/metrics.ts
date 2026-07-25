@@ -16,6 +16,8 @@ export interface GpuSnapshot {
 
 export interface MetricsSnapshot {
   schema_version: number;
+  /** True when this snapshot was emitted on a full (history-committing) tick. */
+  on_tick: boolean;
   cpu: number;
   cpu_name: string;
   cpu_temp_c?: number | null;

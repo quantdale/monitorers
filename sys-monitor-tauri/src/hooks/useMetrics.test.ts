@@ -4,6 +4,8 @@ import {
   sliceWindow,
   mergeDiskHistory,
   mergeGpuHistory,
+  mergeLatestGpu,
+  shouldCommitHistory,
   assertSchemaVersion,
   EXPECTED_SCHEMA_VERSION,
 } from './useMetrics';
@@ -118,6 +120,39 @@ describe('mergeGpuHistory', () => {
     const snapshot = [{ name: 'RTX 4050', vendor: 'nvidia', util: 70, temp_c: null }];
     const result = mergeGpuHistory(existing, snapshot);
     expect(result[0].temp_c).toBe(55);
+  });
+});
+
+// --- shouldCommitHistory (COR-001 gating) ---
+
+describe('shouldCommitHistory', () => {
+  it('returns true when on_tick is true', () => {
+    expect(shouldCommitHistory(true)).toBe(true);
+  });
+
+  it('returns false when on_tick is false', () => {
+    expect(shouldCommitHistory(false)).toBe(false);
+  });
+});
+
+// --- mergeLatestGpu (latest-value derivation, independent of history) ---
+
+describe('mergeLatestGpu', () => {
+  it('sets latest util for a new GPU', () => {
+    const result = mergeLatestGpu({}, [{ name: 'RTX 4050', util: 42 }]);
+    expect(result).toEqual({ 'RTX 4050': 42 });
+  });
+
+  it('updates latest util for an existing GPU on every call, regardless of on_tick', () => {
+    const prev = { 'RTX 4050': 10 };
+    const result = mergeLatestGpu(prev, [{ name: 'RTX 4050', util: 55 }]);
+    expect(result).toEqual({ 'RTX 4050': 55 });
+  });
+
+  it('preserves entries for GPUs not present in the current snapshot', () => {
+    const prev = { 'RTX 4050': 10, 'UHD Graphics': 5 };
+    const result = mergeLatestGpu(prev, [{ name: 'RTX 4050', util: 20 }]);
+    expect(result).toEqual({ 'RTX 4050': 20, 'UHD Graphics': 5 });
   });
 });
 

@@ -299,13 +299,18 @@ pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPo
     store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
 }
 
-/// Commit only CPU-related fields from a RawPoll into HistoryStore (for sensor registry).
+/// Commit only CPU-related fields from a RawPoll into HistoryStore (full tick).
+/// Also refreshes `cpu_latest` so it's never stale relative to the value just
+/// pushed into `cpu_history` in the same tick (ARC-007).
 pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     push_history(&mut store.cpu_history, poll.cpu_usage, MAX_HISTORY);
     store.cpu_temp_c = poll.cpu_temp_c;
+    store.cpu_latest = Some(poll.cpu_usage);
 }
 
-/// Commit only GPU-related fields from a RawPoll into HistoryStore (for sensor registry).
+/// Commit only GPU-related fields from a RawPoll into HistoryStore (full tick).
+/// Also refreshes `gpu_latest` so it's never stale relative to the value just
+/// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     let mut existing: HashMap<String, VecDeque<f64>> = store
         .gpu_entries
@@ -322,6 +327,11 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
             push_history(&mut hist, util.clamp(0.0, 100.0), MAX_HISTORY);
             (key.clone(), display_name.clone(), hist)
         })
+        .collect();
+    store.gpu_latest = poll
+        .gpu_updates
+        .iter()
+        .map(|(key, _, util)| (key.clone(), util.clamp(0.0, 100.0)))
         .collect();
     store.nvidia_temp = poll.nvidia_temp;
     #[cfg(feature = "nvml")]
@@ -475,6 +485,41 @@ mod tests {
         assert_eq!(store.gpu_latest.get("gpu0"), Some(&100.0));
         assert_eq!(store.nvidia_temp, Some(70.0));
         assert!(store.gpu_entries.is_empty());
+    }
+
+    #[test]
+    fn test_commit_cpu_updates_latest_alongside_history() {
+        let mut store = crate::state::HistoryStore::new("test");
+        store.cpu_latest = Some(999.0); // stale value from a prior registry-only tick
+        let poll = crate::state::RawPoll {
+            cpu_usage: 55.0,
+            ..Default::default()
+        };
+        commit_cpu(&mut store, &poll);
+        assert_eq!(store.cpu_history.back().copied(), Some(55.0));
+        assert_eq!(
+            store.cpu_latest,
+            Some(55.0),
+            "cpu_latest must not be stale relative to the value just committed to history"
+        );
+    }
+
+    #[test]
+    fn test_commit_gpu_updates_latest_alongside_history() {
+        let mut store = crate::state::HistoryStore::new("test");
+        store.gpu_latest.insert("gpu0".to_string(), 999.0); // stale value
+        let poll = crate::state::RawPoll {
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 65.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &poll);
+        let (_, _, hist) = &store.gpu_entries[0];
+        assert_eq!(hist.back().copied(), Some(65.0));
+        assert_eq!(
+            store.gpu_latest.get("gpu0"),
+            Some(&65.0),
+            "gpu_latest must not be stale relative to the value just committed to history"
+        );
     }
 
     #[test]

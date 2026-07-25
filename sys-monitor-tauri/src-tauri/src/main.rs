@@ -20,13 +20,25 @@ const WMI_BACKOFF_BASE_SECS: u64 = 1;
 const WMI_BACKOFF_MAX_SECS: u64 = 30;
 const WMI_MAX_ATTEMPTS: u32 = 8;
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
+
+/// Every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O, history committed).
+/// The other 3 ticks are registry-only (CPU + GPU scalar refresh, no history write).
+/// Extracted as a pure function so the 1Hz history-commit cadence is unit-testable
+/// in isolation from the I/O it gates (TEST-001).
+fn is_full_poll_tick(tick: u32) -> bool {
+    tick.is_multiple_of(4)
+}
 
 // ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 pub struct MetricsSnapshot {
     pub schema_version: u32,
+    /// True when this snapshot was emitted on a full (history-committing) tick.
+    /// The frontend only appends to its charting history arrays when this is true;
+    /// it still updates live scalar readouts (e.g. CPU/GPU %) on every event.
+    pub on_tick: bool,
     pub cpu: f64,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -122,7 +134,7 @@ fn slice_timestamps(deque: &VecDeque<u64>, window_secs: u64) -> Vec<u64> {
 
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
-fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
+fn build_snapshot(s: &state::HistoryStore, on_tick: bool) -> MetricsSnapshot {
     let cpu = s
         .cpu_latest
         .unwrap_or_else(|| s.cpu_history.back().copied().unwrap_or(0.0));
@@ -178,6 +190,7 @@ fn build_snapshot(s: &state::HistoryStore) -> MetricsSnapshot {
 
     MetricsSnapshot {
         schema_version: SCHEMA_VERSION,
+        on_tick,
         cpu,
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
@@ -321,6 +334,50 @@ mod tests {
         assert_eq!(slice_history(&d, 1), vec![9.0]);
     }
 
+    // --- is_full_poll_tick cadence gate (TEST-001) ---
+
+    #[test]
+    fn test_is_full_poll_tick_true_on_multiples_of_four() {
+        for tick in [0u32, 4, 8, 12, 100] {
+            assert!(is_full_poll_tick(tick), "tick {tick} should be a full poll");
+        }
+    }
+
+    #[test]
+    fn test_is_full_poll_tick_false_on_non_multiples_of_four() {
+        for tick in [1u32, 2, 3, 5, 6, 7, 101] {
+            assert!(
+                !is_full_poll_tick(tick),
+                "tick {tick} should not be a full poll"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_full_poll_tick_pattern_over_range() {
+        let results: Vec<bool> = (0..9).map(is_full_poll_tick).collect();
+        assert_eq!(
+            results,
+            vec![true, false, false, false, true, false, false, false, true]
+        );
+    }
+
+    // --- build_snapshot on_tick pass-through ---
+
+    #[test]
+    fn test_build_snapshot_on_tick_true() {
+        let s = state::HistoryStore::new("test");
+        let snap = build_snapshot(&s, true);
+        assert!(snap.on_tick);
+    }
+
+    #[test]
+    fn test_build_snapshot_on_tick_false() {
+        let s = state::HistoryStore::new("test");
+        let snap = build_snapshot(&s, false);
+        assert!(!snap.on_tick);
+    }
+
     // --- build_snapshot latest-value preference ---
 
     #[test]
@@ -328,7 +385,7 @@ mod tests {
         let mut s = state::HistoryStore::new("test");
         s.cpu_latest = Some(42.0);
         s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s);
+        let snap = build_snapshot(&s, true);
         assert_eq!(snap.cpu, 42.0);
     }
 
@@ -341,7 +398,7 @@ mod tests {
             deque(&[10.0, 20.0]),
         )];
         s.gpu_latest.insert("gpu0".to_string(), 75.0);
-        let snap = build_snapshot(&s);
+        let snap = build_snapshot(&s, true);
         assert_eq!(snap.gpus.len(), 1);
         assert_eq!(snap.gpus[0].util, 75.0);
     }
@@ -350,7 +407,7 @@ mod tests {
     fn test_build_snapshot_cpu_fallback_without_latest() {
         let mut s = state::HistoryStore::new("test");
         s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s);
+        let snap = build_snapshot(&s, true);
         assert_eq!(snap.cpu, 30.0);
     }
 
@@ -362,7 +419,7 @@ mod tests {
             "NVIDIA GeForce".to_string(),
             deque(&[10.0, 25.0]),
         )];
-        let snap = build_snapshot(&s);
+        let snap = build_snapshot(&s, true);
         assert_eq!(snap.gpus[0].util, 25.0);
     }
 
@@ -566,12 +623,13 @@ fn main() {
                 loop {
                     let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
-                        let raw = if tick.is_multiple_of(4) {
+                        let full_poll_tick = is_full_poll_tick(tick);
+                        let raw = if full_poll_tick {
                             Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
                         } else {
                             None
                         };
-                        let reg_raw = if !tick.is_multiple_of(4) {
+                        let reg_raw = if !full_poll_tick {
                             registry.poll_all(&mut collector_state, wmi_con.as_ref())
                         } else {
                             (0..registry.len()).map(|_| None).collect()
@@ -588,7 +646,7 @@ fn main() {
                                 s.push_timestamp(ts);
                             }
                             registry.commit_all(&mut s, &reg_raw);
-                            build_snapshot(&s)
+                            build_snapshot(&s, full_poll_tick)
                         };
 
                         snapshot

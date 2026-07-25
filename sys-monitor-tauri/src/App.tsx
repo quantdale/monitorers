@@ -204,7 +204,7 @@ export default function App() {
           key={id}
           id={id}
           title={metrics.cpu_name || 'CPU'}
-          value={formatPercent(metrics.cpu.at(-1))}
+          value={formatPercent(metrics.latestCpu)}
           history={metrics.cpu}
           timestamps={metrics.timestamps}
           color="#4699e8"
@@ -338,7 +338,7 @@ export default function App() {
           key={id}
           id={id}
           title={gpuTitle}
-          value={formatPercent(gpu.values.at(-1))}
+          value={formatPercent(gpu.latest)}
           history={gpu.values}
           timestamps={metrics.timestamps}
           color={GPU_COLORS[gpuIdx % GPU_COLORS.length]}

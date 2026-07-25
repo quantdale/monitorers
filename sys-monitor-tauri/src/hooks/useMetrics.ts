@@ -5,7 +5,7 @@ import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '.
 
 const MAX_HISTORY = 3600;
 
-export const EXPECTED_SCHEMA_VERSION = 2;
+export const EXPECTED_SCHEMA_VERSION = 3;
 
 export function assertSchemaVersion(actual: number, payloadName: string): void {
   if (actual !== EXPECTED_SCHEMA_VERSION) {
@@ -26,7 +26,7 @@ function mockHistoryPayload(): HistoryPayload {
   const n = 300;
   const t = (i: number) => (i / n) * Math.PI * 4;
   return {
-    schema_version: 2,
+    schema_version: 3,
     timestamps: Array.from({ length: n }, (_, i) => i * 1000),
     cpu: Array.from({ length: n }, (_, i) => 30 + 40 * Math.sin(t(i))),
     cpu_name: 'CPU',
@@ -45,11 +45,17 @@ function mockHistoryPayload(): HistoryPayload {
   };
 }
 
-/** Plausible fake snapshot that varies over time for browser dev. */
-function mockMetricsSnapshot(): MetricsSnapshot {
+/**
+ * Plausible fake snapshot that varies over time for browser dev.
+ * `tick` mirrors the backend's tick counter — mock mode runs its own interval
+ * at the same 250ms period and 4:1 on_tick ratio as production, so the
+ * frontend's history-gating logic is exercised identically in dev mode.
+ */
+function mockMetricsSnapshot(tick: number): MetricsSnapshot {
   const t = Date.now() / 1000;
   return {
-    schema_version: 2,
+    schema_version: 3,
+    on_tick: tick % 4 === 0,
     cpu: 30 + 40 * Math.sin(t * 0.3),
     cpu_name: 'CPU',
     mem: 50 + 35 * Math.sin(t * 0.3 + 0.5),
@@ -112,6 +118,23 @@ export function mergeDiskHistory(
   return updated;
 }
 
+/** History arrays only advance on history-committing (on_tick) events. */
+export function shouldCommitHistory(onTick: boolean): boolean {
+  return onTick;
+}
+
+/** Merge fresh per-GPU util% into the latest-value map, updated on every event. */
+export function mergeLatestGpu(
+  prev: Record<string, number>,
+  gpus: { name: string; util: number }[]
+): Record<string, number> {
+  const next = { ...prev };
+  for (const g of gpus) {
+    next[g.name] = g.util;
+  }
+  return next;
+}
+
 export function mergeGpuHistory(
   prev: GpuHistory[],
   snapshotGpus: MetricsSnapshot['gpus']
@@ -154,11 +177,15 @@ interface GpuMeta {
 
 export interface SlicedGpuHistory extends GpuHistory {
   vendor: string;
+  /** Latest util%, refreshed on every event (~250ms) independent of history commits. */
+  latest: number;
 }
 
 export interface SlicedHistory {
   timestamps: number[];
   cpu: number[];
+  /** Latest CPU%, refreshed on every event (~250ms) independent of history commits. */
+  latestCpu: number;
   cpu_name: string;
   cpu_temp_c: number | null;
   mem: number[];
@@ -192,6 +219,11 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
   });
   const [gpuMeta, setGpuMeta] = useState<GpuMeta[]>([]);
   const [collectorError, setCollectorError] = useState<string | null>(null);
+  // Latest CPU/GPU scalar values, updated on every event regardless of on_tick —
+  // mirrors the memGb/nvidiaStats latest-vs-history split, so card readouts keep
+  // their ~250ms refresh rate even though history[] only appends on_tick.
+  const [latestCpu, setLatestCpu] = useState<number>(0);
+  const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
 
   // Load history on mount and when the time window changes.
   useEffect(() => {
@@ -232,6 +264,12 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
           }
           return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
         });
+        // Latest scalars refresh on every event, independent of on_tick.
+        setLatestCpu(snap.cpu);
+        setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
+        // History arrays only advance on history-committing (on_tick) events —
+        // otherwise every ~250ms event would grow them 4x faster than real time.
+        if (!shouldCommitHistory(snap.on_tick)) return;
         setHistory((prev) => {
           if (!prev) return prev;
           const now = Date.now();
@@ -257,8 +295,13 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         unlistenErrorPromise.then((f) => f());
       };
     }
+    // Mock mode runs at the same 250ms period and 4:1 on_tick ratio as the real
+    // backend's tick loop, so the history-gating logic below is exercised the
+    // same way in dev mode as it is against live Tauri events.
+    let mockTick = 0;
     const id = setInterval(() => {
-      const snap = mockMetricsSnapshot();
+      const snap = mockMetricsSnapshot(mockTick);
+      mockTick += 1;
       setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
       setNvidiaStats({
         power_w: snap.nvidia_power_w ?? null,
@@ -274,6 +317,9 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         }
         return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
       });
+      setLatestCpu(snap.cpu);
+      setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
+      if (!shouldCommitHistory(snap.on_tick)) return;
       setHistory((prev) => {
         if (!prev) return prev;
         const now = Date.now();
@@ -290,7 +336,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
           gpus: mergeGpuHistory(prev.gpus, snap.gpus),
         };
       });
-    }, 1000);
+    }, 250);
     return () => clearInterval(id);
   }, []);
 
@@ -301,6 +347,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
   return {
     timestamps: sliceWindow(history.timestamps, w),
     cpu: sliceWindow(history.cpu, w),
+    latestCpu,
     cpu_name: history.cpu_name,
     cpu_temp_c: history.cpu_temp_c ?? null,
     mem: sliceWindow(history.mem, w),
@@ -323,6 +370,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
         values: sliceWindow(g.values, w),
         temp_c: g.temp_c ?? null,
         vendor: meta?.vendor ?? 'unknown',
+        latest: latestGpu[g.name] ?? g.values.at(-1) ?? 0,
       };
     }),
     nvidia_power_w: nvidiaStats.power_w,
