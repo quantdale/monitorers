@@ -61,9 +61,9 @@ Run all checks from both sections above.
 - Always run the applicable checks after the final code change and
   before writing the task summary
 
-### Test counts (as of last audit):
-- Rust: 45 tests expected. If count drops, investigate before committing.
-- Frontend: 41 tests expected. If count drops, investigate before committing.
+### Test counts (as of the latest merged change; these drift as tests are added):
+- Rust: 88 tests expected. If count drops, investigate before committing.
+- Frontend: 77 tests expected. If count drops, investigate before committing.
 
 ---
 
@@ -84,7 +84,6 @@ monitorers/
     │   ├── main.tsx                ← ReactDOM.createRoot, StrictMode
     │   ├── App.tsx                 ← card layout, dnd-kit drag-to-reorder, viewMode, hiddenCardIds
     │   ├── styles.css              ← global reset, dark theme, scrollbar, drag-handle hover
-    │   ├── App.css                 ← unused legacy logo hover effects
     │   ├── utils.ts                ← ViewMode type, historyMinMax()
     │   ├── types/metrics.ts        ← TS interfaces mirroring Rust serde structs
     │   ├── hooks/useMetrics.ts     ← Tauri IPC + state (single source of truth)
@@ -202,7 +201,7 @@ monitorers/
 | Exports | **Named exports only** — no `export default` from component/hook files |
 | Exception | `App.tsx` uses `export default function App()` (Vite convention) |
 | Styling | **Inline React styles** — no CSS modules, no Tailwind, no styled-components |
-| CSS files | `styles.css` for global resets/scrollbar only; `App.css` is legacy (unused except logo hover) |
+| CSS files | `styles.css` for global resets/scrollbar only |
 | Color palette | `#141414` background, `#1e1e1e` cards, `#4699e8` blue accent, `#4ed87a` green memory |
 | Charts | `<Area isAnimationActive={false}>` always — live data at 1-second updates cannot animate |
 | Components | `PascalCase` filenames and export names (e.g. `MetricCard.tsx` → `export function MetricCard`) |
@@ -284,18 +283,17 @@ cargo test collector::disk::tests # one module
 
 ### Frontend tests
 
-**Vitest** (41 tests in `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`). When adding tests:
+**Vitest** (77 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
 - Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, formatters in `App.tsx`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)
 
 ### CI
 
-GitHub Actions (`.github/workflows/rust.yml`) on `windows-latest`:
-1. `cargo build --verbose`
-2. `cargo test --verbose`
-3. `cargo fmt -- --check`
-4. `cargo clippy --verbose -- -D warnings`
+GitHub Actions (`.github/workflows/rust.yml`) runs three parallel jobs:
+- **rust-test** (`windows-latest`): `cargo test --verbose`
+- **rust-lint** (`windows-latest`): `cargo fmt -- --check`, `cargo clippy --verbose -- -D warnings`, `cargo audit`
+- **frontend** (`ubuntu-latest`): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`
 
 ---
 

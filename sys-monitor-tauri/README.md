@@ -6,7 +6,7 @@ Desktop system monitor built with **Tauri 2** (Rust backend) and **React + TypeS
 
 ## Prerequisites
 
-- **Node.js** (v16+)
+- **Node.js** (v20+, matching CI)
 - **Rust** ([rustup](https://rustup.rs))
 - **Windows:** WebView2 (usually already installed on Windows 10/11)
 - **Tauri CLI** is installed as a dev dependency; no global install needed.
@@ -57,7 +57,7 @@ Run the React app in the browser with mock metrics (no Rust backend):
 npm run dev
 ```
 
-Then open the URL shown (e.g. `http://localhost:5173`).
+Then open the URL shown (`http://127.0.0.1:5180`, strict port).
 
 ### Build frontend only
 
@@ -106,7 +106,7 @@ cd sys-monitor-tauri/src-tauri && cargo test
 |------|-------------|
 | `src/` | React frontend (App, components, hooks, types) |
 | `src-tauri/` | Rust backend (Tauri app, collector, state, main) |
-| `src-tauri/src/` | Rust source (`main.rs`, `collector.rs`, `state.rs`) |
+| `src-tauri/src/` | Rust source (`main.rs`, `state.rs`, `sensor.rs`, `hardware.rs`, `pdh.rs`, `collector/`) |
 | `dist/` | Built frontend (after `npm run build`) |
 | `src-tauri/target/release/` | Built binary and bundle after `npm run tauri build` |
 

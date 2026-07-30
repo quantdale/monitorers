@@ -20,10 +20,10 @@ npm run tauri dev           # full app: Vite + Tauri hot-reload (real Windows me
 npm run dev                 # frontend only in browser at http://127.0.0.1:5180 — mock sine-wave data, no Rust
 npm run tauri build         # production .msi/.exe bundle
 npm run build               # tsc + vite build (frontend only)
-npm test -- --run           # frontend tests (Vitest, 41 tests)
+npm test -- --run           # frontend tests (Vitest, 77 tests)
 npx tsc --noEmit            # frontend type check
 
-cd src-tauri && cargo test                  # Rust tests (70 tests)
+cd src-tauri && cargo test                  # Rust tests (88 tests)
 cd src-tauri && cargo test test_name        # single Rust test
 cd src-tauri && cargo test collector::disk  # one module
 cd src-tauri && cargo fmt -- --check        # format check (CI-enforced)
@@ -37,7 +37,7 @@ Before considering any task done, run the checks for whatever you changed and co
 - **rust-lint** (windows-latest): `cargo fmt -- --check`, `cargo clippy --verbose -- -D warnings`, `cargo audit`
 - **frontend** (ubuntu-latest): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`
 
-Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 70 (Rust) / 41 (frontend), investigate before committing.
+Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 88 (Rust) / 77 (frontend) — the counts as of the latest merged change — investigate before committing.
 
 ## Backend architecture (`src-tauri/src/`)
 
