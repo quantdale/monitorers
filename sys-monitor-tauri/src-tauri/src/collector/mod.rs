@@ -545,4 +545,55 @@ mod tests {
         assert_eq!(store.cpu_latest, Some(40.0));
         assert_eq!(store.cpu_history.back().copied(), Some(10.0));
     }
+
+    // --- everyday longitudinal usage: capacity + length-sync (6.1, 6.2) ---
+
+    #[test]
+    fn test_push_history_past_max_history_capacity_drops_oldest_and_caps_length() {
+        let mut d: VecDeque<f64> = VecDeque::new();
+        for i in 0..(MAX_HISTORY + 100) {
+            push_history(&mut d, i as f64, MAX_HISTORY);
+        }
+        assert_eq!(d.len(), MAX_HISTORY);
+        // Oldest 100 values (0..100) were dropped; the deque now starts at 100.
+        assert_eq!(d.front().copied(), Some(100.0));
+        assert_eq!(d.back().copied(), Some((MAX_HISTORY + 99) as f64));
+    }
+
+    // WMI unavailable (5.7): poll() must still return a valid RawPoll — only
+    // GPU vendor classification and CPU thermal readings degrade to empty/None,
+    // rather than the whole poll failing. Mirrors the real startup path where
+    // the WMI connection can still be None after WMI_MAX_ATTEMPTS retries
+    // (see main.rs), and the precedent in collector/nvidia.rs of constructing
+    // a real CollectorState in a test.
+    #[test]
+    fn test_poll_produces_valid_snapshot_when_wmi_unavailable() {
+        let mut collector = crate::state::CollectorState::new();
+        let raw = poll(&mut collector, None);
+
+        assert!((0.0..=100.0).contains(&raw.cpu_usage));
+        assert!(raw.mem_total_gb >= 0.0);
+        assert!(raw.mem_pct >= 0.0);
+        // No WMI connection => no thermal-zone query possible.
+        assert_eq!(raw.cpu_temp_c, None);
+    }
+
+    #[test]
+    fn test_timestamps_and_cpu_history_stay_length_synchronized_past_capacity() {
+        let mut store = crate::state::HistoryStore::new("test");
+        for tick in 0..(MAX_HISTORY as u64 + 50) {
+            let poll = crate::state::RawPoll {
+                cpu_usage: tick as f64,
+                ..Default::default()
+            };
+            commit_cpu(&mut store, &poll);
+            store.push_timestamp(tick);
+        }
+
+        assert_eq!(store.cpu_history.len(), MAX_HISTORY);
+        assert_eq!(store.timestamps.len(), MAX_HISTORY);
+        // Both ring buffers dropped the same oldest 50 entries in lockstep.
+        assert_eq!(store.timestamps.front().copied(), Some(50));
+        assert_eq!(store.cpu_history.front().copied(), Some(50.0));
+    }
 }

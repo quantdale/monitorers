@@ -205,3 +205,48 @@ pub type SafeAppState = SafeHistoryStore;
 // which provides mutual exclusion.
 unsafe impl Send for HistoryStore {}
 unsafe impl Sync for HistoryStore {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Telemetry (HistoryStore) intentionally does not persist across process
+    // restarts — only settings.json (frontend, via plugin-store) does. A
+    // freshly constructed HistoryStore must always start empty regardless of
+    // what a prior instance held, characterizing that persistence boundary (4.4).
+    #[test]
+    fn test_fresh_history_store_starts_with_empty_ring_buffers() {
+        let mut prior = HistoryStore::new("Intel Core i7");
+        prior.cpu_history.push_back(42.0);
+        prior.mem_history.push_back(55.0);
+        prior.push_timestamp(1234);
+        prior.gpu_entries.push((
+            "gpu0".to_string(),
+            "GeForce RTX 4050".to_string(),
+            VecDeque::from([10.0]),
+        ));
+        prior.disk_display_order.push("C:".to_string());
+
+        let fresh = HistoryStore::new("Intel Core i7");
+
+        assert!(fresh.cpu_history.is_empty());
+        assert!(fresh.mem_history.is_empty());
+        assert!(fresh.timestamps.is_empty());
+        assert!(fresh.gpu_entries.is_empty());
+        assert!(fresh.disk_display_order.is_empty());
+        assert_eq!(fresh.cpu_latest, None);
+        assert!(fresh.profile.is_none());
+    }
+
+    #[test]
+    fn test_history_store_cpu_name_uses_provided_brand() {
+        let store = HistoryStore::new("AMD Ryzen 9");
+        assert_eq!(store.cpu_name, "AMD Ryzen 9");
+    }
+
+    #[test]
+    fn test_history_store_cpu_name_falls_back_when_empty() {
+        let store = HistoryStore::new("");
+        assert_eq!(store.cpu_name, "CPU");
+    }
+}

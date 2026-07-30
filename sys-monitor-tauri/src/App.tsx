@@ -20,6 +20,14 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { HardwareSidebar } from './components/HardwareSidebar';
 import { useHardwareProfile } from './hooks/useHardwareProfile';
 import { gpuId, historyMinMax } from './utils';
+import {
+  computeDefaultCardIds,
+  computeHasNvidiaData,
+  computeVisibleCardOrder,
+  isCardPresent,
+  mergeNewCardIds,
+  shouldShowLoadingState,
+} from './cardIdentity';
 import { PanelLeft } from 'lucide-react';
 
 const TIME_OPTIONS = [
@@ -111,28 +119,13 @@ export default function App() {
   // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
   useEffect(() => {
     if (!metrics) return;
-    const defaultIds = [
-      'cpu',
-      'memory',
-      ...metrics.disks.map((d) => `disk_${d.key}`),
-      'network',
-      ...metrics.gpus.map((g) => gpuId(g.name)),
-    ];
-    const current = settings.cardOrder ?? [];
+    const defaultIds = computeDefaultCardIds(metrics);
     if (settings.cardOrder === null) {
       save({ cardOrder: defaultIds });
       return;
     }
-    const currentSet = new Set(current);
-    const hasNew = defaultIds.some((id) => !currentSet.has(id));
-    if (!hasNew) return;
-    const merged = [...current];
-    for (const id of defaultIds) {
-      if (!currentSet.has(id)) {
-        merged.push(id);
-        currentSet.add(id);
-      }
-    }
+    const merged = mergeNewCardIds(settings.cardOrder, defaultIds);
+    if (merged === null) return;
     save({ cardOrder: merged });
   }, [metrics, settings.cardOrder, save]);
 
@@ -175,24 +168,7 @@ export default function App() {
     }
   }
 
-  function isCardPresent(id: string): boolean {
-    if (!metrics) return false;
-    if (id === 'cpu') return true;
-    if (id === 'memory') return true;
-    if (id === 'network') return metrics.net_recv.length > 0 || metrics.net_sent.length > 0;
-    if (id.startsWith('disk_')) return metrics.disks.length > 0;
-    if (id.startsWith('gpu_')) return metrics.gpus.length > 0;
-    return false;
-  }
-
-  const hasNvidiaData =
-    !!metrics &&
-    metrics.gpus.some((g) => g.vendor === 'nvidia') &&
-    (metrics.nvidia_power_w != null ||
-      metrics.nvidia_mem_used_mb != null ||
-      metrics.nvidia_mem_total_mb != null ||
-      metrics.nvidia_fan_speed_pct != null ||
-      metrics.nvidia_clock_mhz != null);
+  const hasNvidiaData = computeHasNvidiaData(metrics);
 
   // Maps a card ID back to the correct SortableCard with its props.
   function renderCard(id: string) {
@@ -368,7 +344,7 @@ export default function App() {
     return null;
   }
 
-  const visibleCardOrder = cardOrder.filter(id => !hiddenCardIds.has(id) && isCardPresent(id));
+  const visibleCardOrder = computeVisibleCardOrder(cardOrder, hiddenCardIds, metrics);
 
   const containerStyle =
     viewMode === 'tile'
@@ -446,7 +422,7 @@ export default function App() {
           />
           {metrics && cardOrder.length > 0 && (
             <MetricCardSelector
-              items={cardOrder.filter(id => isCardPresent(id)).map(id => ({ id, label: getCardLabel(id) }))}
+              items={cardOrder.filter(id => isCardPresent(id, metrics)).map(id => ({ id, label: getCardLabel(id) }))}
               hiddenIds={hiddenCardIds}
               onToggle={handleMetricToggle}
             />
@@ -455,7 +431,7 @@ export default function App() {
         <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
 
-      {!metrics || cardOrder.length === 0 ? (
+      {shouldShowLoadingState(metrics, cardOrder) ? (
         <div
           style={{
             color: '#666',
