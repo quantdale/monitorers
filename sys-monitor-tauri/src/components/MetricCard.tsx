@@ -102,7 +102,7 @@ export function MetricCard({
       style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#666', userSelect: 'none' }}
       title="Drag to reorder"
     >
-      ⠿
+      <span aria-hidden="true">⠿</span>
     </div>
   );
 

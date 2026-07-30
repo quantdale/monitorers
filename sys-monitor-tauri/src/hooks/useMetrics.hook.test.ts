@@ -31,8 +31,12 @@ function emptyHistoryPayload(): HistoryPayload {
   };
 }
 
+let historyInvokeError: Error | null = null;
+
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() => Promise.resolve(emptyHistoryPayload())),
+  invoke: vi.fn(() =>
+    historyInvokeError ? Promise.reject(historyInvokeError) : Promise.resolve(emptyHistoryPayload())
+  ),
 }));
 
 import { useMetrics, type SlicedHistory } from './useMetrics';
@@ -62,11 +66,12 @@ function emit(eventName: string, payload: unknown) {
 
 interface RenderResult {
   result: () => SlicedHistory;
+  historyLoadError: () => string | null;
   unmount: () => void;
 }
 
 function renderUseMetrics(windowSecs: number): RenderResult {
-  let hookValue: ReturnType<typeof useMetrics>;
+  let hookValue: ReturnType<typeof useMetrics> | undefined;
   const container = document.createElement('div');
   let root: Root;
 
@@ -82,9 +87,10 @@ function renderUseMetrics(windowSecs: number): RenderResult {
 
   return {
     result: () => {
-      if (!hookValue) throw new Error('metrics not loaded yet');
-      return hookValue;
+      if (!hookValue?.metrics) throw new Error('metrics not loaded yet');
+      return hookValue.metrics;
     },
+    historyLoadError: () => hookValue?.historyLoadError ?? null,
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -93,10 +99,30 @@ describe('useMetrics (Tauri event wiring)', () => {
   beforeEach(() => {
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     listeners.clear();
+    historyInvokeError = null;
   });
 
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  // --- 4.3: get_history rejection surfaces historyLoadError (ERR-006) ---
+
+  it('sets historyLoadError instead of only warning when get_history rejects', async () => {
+    historyInvokeError = new Error('IPC channel closed');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(historyLoadError()).toBe('IPC channel closed');
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    unmount();
   });
 
   // --- 5.2: collectorError never auto-clears ---

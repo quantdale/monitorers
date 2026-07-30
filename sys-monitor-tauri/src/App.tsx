@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   DndContext,
   closestCenter,
+  useSensor,
+  useSensors,
+  PointerSensor,
+  KeyboardSensor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
@@ -9,6 +13,7 @@ import {
   arrayMove,
   verticalListSortingStrategy,
   rectSortingStrategy,
+  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { useMetrics } from './hooks/useMetrics';
 import { useSettings } from './hooks/useSettings';
@@ -107,14 +112,18 @@ function gpuVendorBadgeStyle(vendor: string): React.CSSProperties {
 }
 
 export default function App() {
-  const { settings, save, loaded } = useSettings();
+  const { settings, save, loaded, error: settingsError } = useSettings();
   const cardOrder = settings.cardOrder ?? [];
   const hiddenCardIds = useMemo(() => new Set(settings.hiddenCardIds), [settings.hiddenCardIds]);
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const hardwareProfile = useHardwareProfile();
-  const metrics = useMetrics(windowSecs);
+  const { metrics, historyLoadError } = useMetrics(windowSecs);
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
   useEffect(() => {
@@ -128,6 +137,36 @@ export default function App() {
     if (merged === null) return;
     save({ cardOrder: merged });
   }, [metrics, settings.cardOrder, save]);
+
+  if (settingsError) {
+    return (
+      <div
+        style={{
+          background: '#141414',
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        }}
+      >
+        <div
+          style={{
+            background: 'rgba(231, 76, 60, 0.15)',
+            border: '1px solid rgba(231, 76, 60, 0.7)',
+            borderRadius: 4,
+            color: '#ffd6d3',
+            padding: '12px 16px',
+            fontSize: 14,
+            maxWidth: 480,
+            textAlign: 'center',
+          }}
+        >
+          Couldn't load settings — {settingsError}. Try restarting the app.
+        </div>
+      </div>
+    );
+  }
 
   if (!loaded) return null;
 
@@ -432,7 +471,18 @@ export default function App() {
         <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
 
-      {shouldShowLoadingState(metrics, visibleCardOrder) ? (
+      {historyLoadError && !metrics ? (
+        <div
+          style={{
+            color: '#ffd6d3',
+            padding: '32px 0',
+            textAlign: 'center',
+            fontSize: 14,
+          }}
+        >
+          Couldn't load metrics history — {historyLoadError}. Try restarting the app.
+        </div>
+      ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div
           style={{
             color: '#888',
@@ -444,7 +494,7 @@ export default function App() {
           Collecting metrics…
         </div>
       ) : (
-        <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={visibleCardOrder} strategy={strategy}>
             <div style={containerStyle}>
               {visibleCardOrder.map(id => (

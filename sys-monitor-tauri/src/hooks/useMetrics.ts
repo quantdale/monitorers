@@ -255,8 +255,15 @@ function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
   });
 }
 
-export function useMetrics(windowSeconds: number): SlicedHistory | null {
+export interface UseMetricsResult {
+  metrics: SlicedHistory | null;
+  /** Set when the initial `get_history` IPC call rejects; distinct from the normal "still loading" state where `metrics` is null but no error occurred. */
+  historyLoadError: string | null;
+}
+
+export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [history, setHistory] = useState<HistoryPayload | null>(null);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   // Track the latest mem GB values separately (not historised).
   const [memGb, setMemGb] = useState<{ used: number; total: number }>({
     used: 0,
@@ -288,7 +295,10 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
             timestamps: payload.timestamps ?? [],
           });
         })
-        .catch((err) => console.warn('[useMetrics] get_history failed:', err));
+        .catch((err) => {
+          console.warn('[useMetrics] get_history failed:', err);
+          setHistoryLoadError(err instanceof Error ? err.message : String(err));
+        });
       return;
     }
     setHistory(mockHistoryPayload());
@@ -337,44 +347,47 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     return () => clearInterval(id);
   }, []);
 
-  if (!history) return null;
+  if (!history) return { metrics: null, historyLoadError };
 
   const w = Math.min(windowSeconds, MAX_HISTORY);
 
   return {
-    timestamps: sliceWindow(history.timestamps, w),
-    cpu: sliceWindow(history.cpu, w),
-    latestCpu,
-    cpu_name: history.cpu_name,
-    cpu_temp_c: history.cpu_temp_c ?? null,
-    mem: sliceWindow(history.mem, w),
-    mem_used_gb: memGb.used,
-    mem_total_gb: memGb.total,
-    disks: history.disks.map((d) => ({
-      key: d.key,
-      values: sliceWindow(d.values, w),
-      read_mb_s: d.read_mb_s,
-      write_mb_s: d.write_mb_s,
-      avg_response_ms: d.avg_response_ms,
-      temp_c: d.temp_c ?? null,
-    })),
-    net_recv: sliceWindow(history.net_recv, w),
-    net_sent: sliceWindow(history.net_sent, w),
-    gpus: history.gpus.map((g) => {
-      const meta = gpuMeta.find((m) => m.name === g.name);
-      return {
-        name: g.name,
-        values: sliceWindow(g.values, w),
-        temp_c: g.temp_c ?? null,
-        vendor: meta?.vendor ?? 'unknown',
-        latest: latestGpu[g.name] ?? g.values.at(-1) ?? 0,
-      };
-    }),
-    nvidia_power_w: nvidiaStats.power_w,
-    nvidia_mem_used_mb: nvidiaStats.mem_used_mb,
-    nvidia_mem_total_mb: nvidiaStats.mem_total_mb,
-    nvidia_fan_speed_pct: nvidiaStats.fan_speed_pct,
-    nvidia_clock_mhz: nvidiaStats.clock_mhz,
-    collectorError,
+    metrics: {
+      timestamps: sliceWindow(history.timestamps, w),
+      cpu: sliceWindow(history.cpu, w),
+      latestCpu,
+      cpu_name: history.cpu_name,
+      cpu_temp_c: history.cpu_temp_c ?? null,
+      mem: sliceWindow(history.mem, w),
+      mem_used_gb: memGb.used,
+      mem_total_gb: memGb.total,
+      disks: history.disks.map((d) => ({
+        key: d.key,
+        values: sliceWindow(d.values, w),
+        read_mb_s: d.read_mb_s,
+        write_mb_s: d.write_mb_s,
+        avg_response_ms: d.avg_response_ms,
+        temp_c: d.temp_c ?? null,
+      })),
+      net_recv: sliceWindow(history.net_recv, w),
+      net_sent: sliceWindow(history.net_sent, w),
+      gpus: history.gpus.map((g) => {
+        const meta = gpuMeta.find((m) => m.name === g.name);
+        return {
+          name: g.name,
+          values: sliceWindow(g.values, w),
+          temp_c: g.temp_c ?? null,
+          vendor: meta?.vendor ?? 'unknown',
+          latest: latestGpu[g.name] ?? g.values.at(-1) ?? 0,
+        };
+      }),
+      nvidia_power_w: nvidiaStats.power_w,
+      nvidia_mem_used_mb: nvidiaStats.mem_used_mb,
+      nvidia_mem_total_mb: nvidiaStats.mem_total_mb,
+      nvidia_fan_speed_pct: nvidiaStats.fan_speed_pct,
+      nvidia_clock_mhz: nvidiaStats.clock_mhz,
+      collectorError,
+    },
+    historyLoadError,
   };
 }

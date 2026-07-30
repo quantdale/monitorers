@@ -285,6 +285,231 @@ fn get_hardware_profile(
 
 // ── ENTRY POINT ──────────────────────────────────────────────────────────────
 
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .setup(|app| {
+            // CollectorState::new() must run here (after Tauri/winit has initialised
+            // COM via CoInitializeEx) for PDH and sysinfo init.
+            let mut collector_state = CollectorState::new();
+            let cpu_name = collector_state
+                .system
+                .cpus()
+                .first()
+                .map(|c| c.brand().to_string())
+                .unwrap_or_default();
+            let cpu_name = if cpu_name.is_empty() {
+                "CPU".to_string()
+            } else {
+                cpu_name
+            };
+
+            let history_store = HistoryStore::new(&cpu_name);
+            app.manage(SafeHistoryStore::new(history_store));
+
+            let mut registry = SensorRegistry::new();
+            registry.register(CpuSensorProvider);
+            // GPU provider registered in background thread after profile has GPUs
+
+            let app_handle = app.handle().clone();
+
+            std::thread::spawn(move || {
+                // Initialize COM for this thread (MTA — not yet initialized here,
+                // so COMLibrary::new() works, unlike the main thread where winit
+                // has already called CoInitializeEx(COINIT_APARTMENTTHREADED)).
+                // The WMI connection stays local to this thread so COM thread
+                // affinity is respected (no RPC_E_WRONG_THREAD errors).
+                // Retry with exponential backoff on transient COM/WMI failures.
+                let mut wmi_con: Option<wmi::WMIConnection> = None;
+                for attempt in 1..=WMI_MAX_ATTEMPTS {
+                    match wmi::COMLibrary::new() {
+                        Err(e) => {
+                            if attempt == 1 {
+                                eprintln!("[WMI] COM init failed on background thread: {:?}", e);
+                            }
+                            if attempt < WMI_MAX_ATTEMPTS {
+                                let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
+                                    .min(WMI_BACKOFF_MAX_SECS);
+                                eprintln!(
+                                    "[WMI] Retry {}/{} in {}s (COM init failed: {:?})",
+                                    attempt, WMI_MAX_ATTEMPTS, delay, e
+                                );
+                                std::thread::sleep(std::time::Duration::from_secs(delay));
+                            } else {
+                                eprintln!(
+                                    "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
+                                    WMI_MAX_ATTEMPTS
+                                );
+                                break;
+                            }
+                        }
+                        Ok(com) => match wmi::WMIConnection::new(com) {
+                            Ok(con) => {
+                                eprintln!("[WMI] Background thread connection initialized (MTA).");
+                                wmi_con = Some(con);
+                                break;
+                            }
+                            Err(e) => {
+                                if attempt == 1 {
+                                    eprintln!(
+                                        "[WMI] WMI connection failed: {:?}. GPU classification unavailable.",
+                                        e
+                                    );
+                                }
+                                if attempt < WMI_MAX_ATTEMPTS {
+                                    let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
+                                        .min(WMI_BACKOFF_MAX_SECS);
+                                    eprintln!(
+                                        "[WMI] Retry {}/{} in {}s (WMI connection failed: {:?})",
+                                        attempt, WMI_MAX_ATTEMPTS, delay, e
+                                    );
+                                    std::thread::sleep(std::time::Duration::from_secs(delay));
+                                } else {
+                                    eprintln!(
+                                        "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
+                                        WMI_MAX_ATTEMPTS
+                                    );
+                                    break;
+                                }
+                            }
+                        },
+                    }
+                }
+                let wmi_con = wmi_con;
+
+                // Full profile (including GPUs and physical-disk list) now that WMI is ready.
+                // Prime PDH so physical_disk_list can read instance names.
+                let _ = collector::collect_pdh(&collector_state);
+                // Use same physical-disk list as metrics so sidebar storage cards match dashboard.
+                // Fall back to sysinfo-based list if PDH returns empty (e.g. before first poll).
+                let physical = collector::physical_disk_list(
+                    &collector_state.sysinfo_disks,
+                    &collector_state.pdh,
+                );
+                let wmi_disk_models = collector::query_disk_models_wmi(wmi_con.as_ref());
+                use sysinfo::DiskKind as SysDiskKind;
+                let disk_infos: Option<Vec<crate::hardware::DiskInfo>> = if physical.is_empty() {
+                    None // fall back to detect_disks() in hardware::detect
+                } else {
+                    Some(
+                        physical
+                            .into_iter()
+                            .map(|(disk_key, kind, sysinfo_name, drive_index)| {
+                                let display_name = drive_index
+                                    .and_then(|i| wmi_disk_models.get(&i).cloned())
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or(sysinfo_name.clone());
+                                let name = if display_name.is_empty() {
+                                    disk_key.clone()
+                                } else {
+                                    display_name
+                                };
+                                eprintln!(
+                                    "[HardwareProfile] Disk: {} — sysinfo name: {:?}, wmi model: {:?}",
+                                    name,
+                                    sysinfo_name,
+                                    drive_index.and_then(|i| wmi_disk_models.get(&i).cloned())
+                                );
+                                let k = match kind {
+                                    SysDiskKind::SSD => crate::hardware::DiskKind::Ssd,
+                                    SysDiskKind::HDD => crate::hardware::DiskKind::Hdd,
+                                    _ => crate::hardware::DiskKind::Unknown,
+                                };
+                                crate::hardware::DiskInfo { name, kind: k }
+                            })
+                            .collect(),
+                    )
+                };
+                collector_state.profile = crate::hardware::detect(
+                    Some(&collector_state.pdh),
+                    wmi_con.as_ref(),
+                    disk_infos,
+                );
+                let profile = &collector_state.profile;
+                println!(
+                    "[HardwareProfile] CPU: {:?} — {}",
+                    profile.cpu_vendor, profile.cpu_name
+                );
+                for gpu in &profile.gpus {
+                    println!(
+                        "[HardwareProfile] GPU: {} — {:?} {:?}",
+                        gpu.name, gpu.vendor, gpu.kind
+                    );
+                }
+                for disk in &profile.disks {
+                    println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
+                }
+                if !profile.gpus.is_empty() {
+                    registry.register(GpuSensorProvider);
+                }
+                {
+                    let store = app_handle.state::<SafeHistoryStore>();
+                    let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+                    s.profile = Some(collector_state.profile.clone());
+                }
+                app_handle.emit("hardware-profile-ready", ()).ok();
+
+                let mut tick: u32 = 0;
+                loop {
+                    let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
+                        let full_poll_tick = is_full_poll_tick(tick);
+                        let raw = if full_poll_tick {
+                            Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
+                        } else {
+                            None
+                        };
+                        let reg_raw = if !full_poll_tick {
+                            registry.poll_all(&mut collector_state, wmi_con.as_ref())
+                        } else {
+                            (0..registry.len()).map(|_| None).collect()
+                        };
+
+                        let snapshot = {
+                            let store = app_handle.state::<SafeHistoryStore>();
+                            let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ref r) = raw {
+                                collector::commit_disk_network(&mut s, r);
+                                collector::commit_cpu(&mut s, r);
+                                collector::commit_gpu(&mut s, r);
+                                let ts = Utc::now().timestamp_millis() as u64;
+                                s.push_timestamp(ts);
+                            }
+                            registry.commit_all(&mut s, &reg_raw);
+                            build_snapshot(&s, full_poll_tick)
+                        };
+
+                        snapshot
+                    }));
+
+                    match tick_result {
+                        Ok(snapshot) => {
+                            app_handle.emit("metrics-update", snapshot).ok();
+                        }
+                        Err(_) => {
+                            eprintln!("[Collector] background thread panicked");
+                            app_handle
+                                .emit("collector-error", "metrics collection stopped — restart the app")
+                                .ok();
+                            break;
+                        }
+                    }
+
+                    tick = tick.wrapping_add(1);
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![get_history, get_hardware_profile])
+        .run(tauri::generate_context!())
+        .unwrap_or_else(|e| {
+            eprintln!("error while running tauri application: {:?}", e);
+            std::process::exit(1);
+        });
+}
+
 // ── TESTS ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -513,229 +738,4 @@ mod tests {
             "metrics collection stopped — restart the app"
         );
     }
-}
-
-fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_store::Builder::default().build())
-        .setup(|app| {
-            // CollectorState::new() must run here (after Tauri/winit has initialised
-            // COM via CoInitializeEx) for PDH and sysinfo init.
-            let mut collector_state = CollectorState::new();
-            let cpu_name = collector_state
-                .system
-                .cpus()
-                .first()
-                .map(|c| c.brand().to_string())
-                .unwrap_or_default();
-            let cpu_name = if cpu_name.is_empty() {
-                "CPU".to_string()
-            } else {
-                cpu_name
-            };
-
-            let history_store = HistoryStore::new(&cpu_name);
-            app.manage(SafeHistoryStore::new(history_store));
-
-            let mut registry = SensorRegistry::new();
-            registry.register(CpuSensorProvider);
-            // GPU provider registered in background thread after profile has GPUs
-
-            let app_handle = app.handle().clone();
-
-            std::thread::spawn(move || {
-                // Initialize COM for this thread (MTA — not yet initialized here,
-                // so COMLibrary::new() works, unlike the main thread where winit
-                // has already called CoInitializeEx(COINIT_APARTMENTTHREADED)).
-                // The WMI connection stays local to this thread so COM thread
-                // affinity is respected (no RPC_E_WRONG_THREAD errors).
-                // Retry with exponential backoff on transient COM/WMI failures.
-                let mut wmi_con: Option<wmi::WMIConnection> = None;
-                for attempt in 1..=WMI_MAX_ATTEMPTS {
-                    match wmi::COMLibrary::new() {
-                        Err(e) => {
-                            if attempt == 1 {
-                                eprintln!("[WMI] COM init failed on background thread: {:?}", e);
-                            }
-                            if attempt < WMI_MAX_ATTEMPTS {
-                                let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
-                                    .min(WMI_BACKOFF_MAX_SECS);
-                                eprintln!(
-                                    "[WMI] Retry {}/{} in {}s (COM init failed: {:?})",
-                                    attempt, WMI_MAX_ATTEMPTS, delay, e
-                                );
-                                std::thread::sleep(std::time::Duration::from_secs(delay));
-                            } else {
-                                eprintln!(
-                                    "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
-                                    WMI_MAX_ATTEMPTS
-                                );
-                                break;
-                            }
-                        }
-                        Ok(com) => match wmi::WMIConnection::new(com) {
-                            Ok(con) => {
-                                eprintln!("[WMI] Background thread connection initialized (MTA).");
-                                wmi_con = Some(con);
-                                break;
-                            }
-                            Err(e) => {
-                                if attempt == 1 {
-                                    eprintln!(
-                                        "[WMI] WMI connection failed: {:?}. GPU classification unavailable.",
-                                        e
-                                    );
-                                }
-                                if attempt < WMI_MAX_ATTEMPTS {
-                                    let delay = (WMI_BACKOFF_BASE_SECS * 2u64.pow(attempt - 1))
-                                        .min(WMI_BACKOFF_MAX_SECS);
-                                    eprintln!(
-                                        "[WMI] Retry {}/{} in {}s (WMI connection failed: {:?})",
-                                        attempt, WMI_MAX_ATTEMPTS, delay, e
-                                    );
-                                    std::thread::sleep(std::time::Duration::from_secs(delay));
-                                } else {
-                                    eprintln!(
-                                        "[WMI] Giving up after {} attempts. GPU classification and CPU thermal unavailable.",
-                                        WMI_MAX_ATTEMPTS
-                                    );
-                                    break;
-                                }
-                            }
-                        },
-                    }
-                }
-                let wmi_con = wmi_con;
-
-                // Full profile (including GPUs and physical-disk list) now that WMI is ready.
-                // Prime PDH so physical_disk_list can read instance names.
-                let _ = collector::collect_pdh(&collector_state);
-                // Use same physical-disk list as metrics so sidebar storage cards match dashboard.
-                // Fall back to sysinfo-based list if PDH returns empty (e.g. before first poll).
-                let physical = collector::physical_disk_list(
-                    &collector_state.sysinfo_disks,
-                    &collector_state.pdh,
-                );
-                let wmi_disk_models = collector::query_disk_models_wmi(wmi_con.as_ref());
-                use sysinfo::DiskKind as SysDiskKind;
-                let disk_infos: Option<Vec<crate::hardware::DiskInfo>> = if physical.is_empty() {
-                    None // fall back to detect_disks() in hardware::detect
-                } else {
-                    Some(
-                        physical
-                            .into_iter()
-                            .map(|(disk_key, kind, sysinfo_name, drive_index)| {
-                                let display_name = drive_index
-                                    .and_then(|i| wmi_disk_models.get(&i).cloned())
-                                    .filter(|s| !s.is_empty())
-                                    .unwrap_or(sysinfo_name.clone());
-                                let name = if display_name.is_empty() {
-                                    disk_key.clone()
-                                } else {
-                                    display_name
-                                };
-                                eprintln!(
-                                    "[HardwareProfile] Disk: {} — sysinfo name: {:?}, wmi model: {:?}",
-                                    name,
-                                    sysinfo_name,
-                                    drive_index.and_then(|i| wmi_disk_models.get(&i).cloned())
-                                );
-                                let k = match kind {
-                                    SysDiskKind::SSD => crate::hardware::DiskKind::Ssd,
-                                    SysDiskKind::HDD => crate::hardware::DiskKind::Hdd,
-                                    _ => crate::hardware::DiskKind::Unknown,
-                                };
-                                crate::hardware::DiskInfo { name, kind: k }
-                            })
-                            .collect(),
-                    )
-                };
-                collector_state.profile = crate::hardware::detect(
-                    Some(&collector_state.pdh),
-                    wmi_con.as_ref(),
-                    disk_infos,
-                );
-                let profile = &collector_state.profile;
-                println!(
-                    "[HardwareProfile] CPU: {:?} — {}",
-                    profile.cpu_vendor, profile.cpu_name
-                );
-                for gpu in &profile.gpus {
-                    println!(
-                        "[HardwareProfile] GPU: {} — {:?} {:?}",
-                        gpu.name, gpu.vendor, gpu.kind
-                    );
-                }
-                for disk in &profile.disks {
-                    println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
-                }
-                if !profile.gpus.is_empty() {
-                    registry.register(GpuSensorProvider);
-                }
-                {
-                    let store = app_handle.state::<SafeHistoryStore>();
-                    let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                    s.profile = Some(collector_state.profile.clone());
-                }
-                app_handle.emit("hardware-profile-ready", ()).ok();
-
-                let mut tick: u32 = 0;
-                loop {
-                    let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
-                        let full_poll_tick = is_full_poll_tick(tick);
-                        let raw = if full_poll_tick {
-                            Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
-                        } else {
-                            None
-                        };
-                        let reg_raw = if !full_poll_tick {
-                            registry.poll_all(&mut collector_state, wmi_con.as_ref())
-                        } else {
-                            (0..registry.len()).map(|_| None).collect()
-                        };
-
-                        let snapshot = {
-                            let store = app_handle.state::<SafeHistoryStore>();
-                            let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Some(ref r) = raw {
-                                collector::commit_disk_network(&mut s, r);
-                                collector::commit_cpu(&mut s, r);
-                                collector::commit_gpu(&mut s, r);
-                                let ts = Utc::now().timestamp_millis() as u64;
-                                s.push_timestamp(ts);
-                            }
-                            registry.commit_all(&mut s, &reg_raw);
-                            build_snapshot(&s, full_poll_tick)
-                        };
-
-                        snapshot
-                    }));
-
-                    match tick_result {
-                        Ok(snapshot) => {
-                            app_handle.emit("metrics-update", snapshot).ok();
-                        }
-                        Err(_) => {
-                            eprintln!("[Collector] background thread panicked");
-                            app_handle
-                                .emit("collector-error", "metrics collection stopped — restart the app")
-                                .ok();
-                            break;
-                        }
-                    }
-
-                    tick = tick.wrapping_add(1);
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
-            });
-
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![get_history, get_hardware_profile])
-        .run(tauri::generate_context!())
-        .unwrap_or_else(|e| {
-            eprintln!("error while running tauri application: {:?}", e);
-            std::process::exit(1);
-        });
 }

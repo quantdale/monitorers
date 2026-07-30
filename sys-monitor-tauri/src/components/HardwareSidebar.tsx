@@ -2,12 +2,17 @@ import { useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
+  useSensor,
+  useSensors,
+  PointerSensor,
+  KeyboardSensor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
   arrayMove,
   verticalListSortingStrategy,
+  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import {
   Cpu,
@@ -137,6 +142,11 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
       save({ sidebarCardOrder: defaultIds });
     }
   }, [profile, settings.sidebarCardOrder, save]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -296,7 +306,7 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
             Detecting hardware…
           </div>
         ) : (
-          <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={cardOrder} strategy={verticalListSortingStrategy}>
               {cardOrder.map((id) => (
                 <SortableSidebarCard key={id} id={id}>
