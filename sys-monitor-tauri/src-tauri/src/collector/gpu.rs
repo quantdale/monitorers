@@ -172,6 +172,55 @@ pub fn build_gpu_vendor_map(
 /// Per-GPU result: (luid, display_name, utilization%).
 pub type GpuUtilEntry = (String, String, f64);
 
+/// Merge per-LUID utilization totals into per-caption entries.
+///
+/// Known characterization gap: multiple LUIDs that classify to the same
+/// brand-stripped display name (e.g. two identical dGPUs) are folded into a
+/// single entry with summed utilization, capped at 100%. This means two
+/// physically distinct same-model GPUs are indistinguishable in the UI today
+/// — see design.md Known Gaps in
+/// openspec/changes/add-realistic-usage-test-suite for the recommended fix
+/// (disambiguate by LUID instead of display name alone). This function pins
+/// today's actual behavior; it is not a requirement.
+fn merge_gpu_utilization_by_caption(
+    vendor_map: &HashMap<String, String>,
+    luid_3d_totals: &HashMap<String, f64>,
+    gpu_error_lock: &OnceLock<()>,
+) -> Vec<(String, GpuClass, f64)> {
+    // Build list from vendor_map so we include GPUs with 0% util.
+    // Merge util by caption — multiple LUIDs (e.g. 0x00017C9F and 0x00017D0F) can
+    // map to the same physical GPU; sum their utilization.
+    let mut caption_util: HashMap<String, (GpuClass, f64)> = HashMap::new();
+    for (luid, caption) in vendor_map {
+        let class = classify_luid(luid, vendor_map);
+        if matches!(class, GpuClass::Unknown) {
+            gpu_error_lock.get_or_init(|| {
+                eprintln!(
+                    "[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown",
+                    luid
+                );
+            });
+            continue;
+        }
+        let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
+        let display_name = strip_brand_prefix(caption);
+        if display_name.is_empty() {
+            continue;
+        }
+        caption_util
+            .entry(display_name)
+            .and_modify(|(_, u)| {
+                *u = (*u + util).min(100.0);
+            })
+            .or_insert((class, util));
+    }
+
+    caption_util
+        .into_iter()
+        .map(|(display_name, (class, util))| (display_name, class, util))
+        .collect()
+}
+
 /// Read GPU 3D-engine utilization from PDH. Returns list of (history_key, display_name, util%) per GPU.
 ///
 /// PdhCollectQueryData is called once per poll in poll() before this function runs.
@@ -211,38 +260,8 @@ pub fn query_gpu_utilization_pdh(
         None => HashMap::new(),
     };
 
-    // Build list from vendor_map so we include GPUs with 0% util.
-    // Merge util by caption — multiple LUIDs (e.g. 0x00017C9F and 0x00017D0F) can
-    // map to the same physical GPU; sum their utilization.
-    let mut caption_util: HashMap<String, (GpuClass, f64)> = HashMap::new();
-    for (luid, caption) in &vendor_map {
-        let class = classify_luid(luid, &vendor_map);
-        if matches!(class, GpuClass::Unknown) {
-            gpu_error_lock.get_or_init(|| {
-                eprintln!(
-                    "[GPU] LUID {} not matched by vendor keyword — GpuClass::Unknown",
-                    luid
-                );
-            });
-            continue;
-        }
-        let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
-        let display_name = strip_brand_prefix(caption);
-        if display_name.is_empty() {
-            continue;
-        }
-        caption_util
-            .entry(display_name)
-            .and_modify(|(_, u)| {
-                *u = (*u + util).min(100.0);
-            })
-            .or_insert((class, util));
-    }
-
-    let mut entries: Vec<(String, GpuClass, f64)> = caption_util
-        .into_iter()
-        .map(|(display_name, (class, util))| (display_name, class, util))
-        .collect();
+    let mut entries: Vec<(String, GpuClass, f64)> =
+        merge_gpu_utilization_by_caption(&vendor_map, &luid_3d_totals, gpu_error_lock);
 
     // Sort: iGPU first, then dGPU; within each class by display name.
     entries.sort_by(|a, b| {
@@ -321,6 +340,83 @@ mod tests {
     #[test]
     fn test_extract_luid_malformed_returns_none() {
         assert_eq!(extract_luid_from_name("pid_99_luid_notahex"), None);
+    }
+
+    // --- merge_gpu_utilization_by_caption (known defect characterization, 3.2/3.3) ---
+    // See the doc comment on merge_gpu_utilization_by_caption and design.md's
+    // Known Gaps register in openspec/changes/add-realistic-usage-test-suite:
+    // these tests pin the CURRENT (defective) behavior, not a requirement.
+
+    #[test]
+    fn test_merge_same_model_gpus_sums_utilization_into_one_entry() {
+        // Two distinct physical GPUs, same model, different LUIDs.
+        let mut vendor_map = HashMap::new();
+        vendor_map.insert(
+            "0x00017A00".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        vendor_map.insert(
+            "0x00017B00".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        let mut luid_totals = HashMap::new();
+        luid_totals.insert("0x00017A00".to_string(), 30.0);
+        luid_totals.insert("0x00017B00".to_string(), 45.0);
+        let gpu_error_lock = OnceLock::new();
+
+        let entries = merge_gpu_utilization_by_caption(&vendor_map, &luid_totals, &gpu_error_lock);
+
+        // Defect: one merged entry, not two — the two physical GPUs are
+        // indistinguishable in the result.
+        assert_eq!(entries.len(), 1);
+        let (name, class, util) = &entries[0];
+        assert_eq!(name, "GeForce RTX 3060");
+        assert_eq!(*class, GpuClass::DGpu);
+        assert_eq!(*util, 75.0); // summed, not averaged or kept separate
+    }
+
+    #[test]
+    fn test_merge_same_model_gpus_summed_utilization_capped_at_100() {
+        let mut vendor_map = HashMap::new();
+        vendor_map.insert(
+            "0x00017A00".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        vendor_map.insert(
+            "0x00017B00".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        let mut luid_totals = HashMap::new();
+        luid_totals.insert("0x00017A00".to_string(), 80.0);
+        luid_totals.insert("0x00017B00".to_string(), 70.0);
+        let gpu_error_lock = OnceLock::new();
+
+        let entries = merge_gpu_utilization_by_caption(&vendor_map, &luid_totals, &gpu_error_lock);
+
+        assert_eq!(entries.len(), 1);
+        let (_, _, util) = &entries[0];
+        assert_eq!(*util, 100.0); // 150.0 clamped to 100.0
+    }
+
+    #[test]
+    fn test_merge_distinct_models_stay_separate_entries() {
+        let mut vendor_map = HashMap::new();
+        vendor_map.insert(
+            "0x00017A00".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        vendor_map.insert(
+            "0x00017B00".to_string(),
+            "Intel(R) Iris Xe Graphics".to_string(),
+        );
+        let mut luid_totals = HashMap::new();
+        luid_totals.insert("0x00017A00".to_string(), 30.0);
+        luid_totals.insert("0x00017B00".to_string(), 10.0);
+        let gpu_error_lock = OnceLock::new();
+
+        let entries = merge_gpu_utilization_by_caption(&vendor_map, &luid_totals, &gpu_error_lock);
+
+        assert_eq!(entries.len(), 2);
     }
 
     // --- classify_luid ---

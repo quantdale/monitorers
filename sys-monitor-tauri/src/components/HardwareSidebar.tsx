@@ -82,7 +82,7 @@ function diskKindDisplay(kind: string): string {
   }
 }
 
-function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
+export function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
   return [
     'sb_cpu',
     ...profile.gpus.map((_, i) => `sb_gpu_${i}`),
@@ -90,6 +90,30 @@ function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
     ...profile.disks.map((_, i) => `sb_disk_${i}`),
     'sb_network',
   ];
+}
+
+/**
+ * Merge a saved sidebar card order with the current default ids.
+ * Unlike the dashboard's content-keyed merge (see cardIdentity.ts), this
+ * scheme is purely positional: `sb_gpu_${i}` refers to whichever GPU occupies
+ * index i of `profile.gpus`, not a specific physical GPU. If the profile's
+ * array order changes between sessions, the same id now points at different
+ * hardware — a known characterization gap, not a requirement (see design.md
+ * Known Gaps in openspec/changes/add-realistic-usage-test-suite).
+ */
+export function mergeSidebarCardOrder(current: string[], defaultIds: string[]): string[] {
+  if (current.length === 0) return defaultIds;
+  const currentSet = new Set(current);
+  const hasNew = defaultIds.some((id) => !currentSet.has(id));
+  if (!hasNew) return current.filter((id) => defaultIds.includes(id));
+  const merged: string[] = [];
+  for (const id of current) {
+    if (defaultIds.includes(id)) merged.push(id);
+  }
+  for (const id of defaultIds) {
+    if (!merged.includes(id)) merged.push(id);
+  }
+  return merged;
 }
 
 interface Props {
@@ -102,23 +126,9 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
   const { settings, save } = useSettings();
 
   // Compute ordered list: merge saved order with new cards from profile
-  const cardOrder = (() => {
-    if (!profile) return [];
-    const defaultIds = defaultSidebarCardOrder(profile);
-    const current = settings.sidebarCardOrder ?? [];
-    if (current.length === 0) return defaultIds;
-    const currentSet = new Set(current);
-    const hasNew = defaultIds.some((id) => !currentSet.has(id));
-    if (!hasNew) return current.filter((id) => defaultIds.includes(id));
-    const merged: string[] = [];
-    for (const id of current) {
-      if (defaultIds.includes(id)) merged.push(id);
-    }
-    for (const id of defaultIds) {
-      if (!merged.includes(id)) merged.push(id);
-    }
-    return merged;
-  })();
+  const cardOrder = profile
+    ? mergeSidebarCardOrder(settings.sidebarCardOrder ?? [], defaultSidebarCardOrder(profile))
+    : [];
 
   useEffect(() => {
     if (!profile) return;
