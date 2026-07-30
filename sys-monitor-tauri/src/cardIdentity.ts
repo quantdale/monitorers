@@ -80,7 +80,13 @@ export function computeHasNvidiaData(metrics: NvidiaStatsShape | null): boolean 
   );
 }
 
-/** True before the first metrics snapshot/history has arrived — render the "Collecting metrics…" state instead of cards. */
-export function shouldShowLoadingState(metrics: unknown | null, cardOrder: string[]): boolean {
-  return !metrics || cardOrder.length === 0;
+/**
+ * True before the first metrics snapshot/history has arrived, or once every
+ * card has been hidden — render the "Collecting metrics…" state instead of
+ * an empty canvas. Takes visibleCardOrder (post hidden/absent filtering), not
+ * the raw saved cardOrder, so hiding every card still shows this message
+ * instead of a blank screen.
+ */
+export function shouldShowLoadingState(metrics: unknown | null, visibleCardOrder: string[]): boolean {
+  return !metrics || visibleCardOrder.length === 0;
 }

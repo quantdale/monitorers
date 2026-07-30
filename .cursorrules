@@ -63,7 +63,7 @@ Run all checks from both sections above.
 
 ### Test counts (as of the latest merged change; these drift as tests are added):
 - Rust: 88 tests expected. If count drops, investigate before committing.
-- Frontend: 77 tests expected. If count drops, investigate before committing.
+- Frontend: 78 tests expected. If count drops, investigate before committing.
 
 ---
 
@@ -283,7 +283,7 @@ cargo test collector::disk::tests # one module
 
 ### Frontend tests
 
-**Vitest** (77 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
+**Vitest** (78 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
 - Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, formatters in `App.tsx`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)

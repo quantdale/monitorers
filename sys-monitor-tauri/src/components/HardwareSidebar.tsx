@@ -292,7 +292,7 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
         }}
       >
         {profile === null ? (
-          <div style={{ color: '#666', fontSize: 12, padding: 8 }}>
+          <div style={{ color: '#888', fontSize: 12, padding: 8 }}>
             Detecting hardware…
           </div>
         ) : (
