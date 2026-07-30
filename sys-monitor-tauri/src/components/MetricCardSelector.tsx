@@ -21,9 +21,18 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
         setOpen(false);
       }
     }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+      }
+    }
     if (open) {
       document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleKeyDown);
+      };
     }
   }, [open]);
 
@@ -34,6 +43,8 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-haspopup="true"
+        aria-expanded={open}
         style={{
           padding: '4px 12px',
           borderRadius: 4,

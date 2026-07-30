@@ -176,11 +176,17 @@ describe('shouldShowLoadingState', () => {
     expect(shouldShowLoadingState(null, [])).toBe(true);
   });
 
-  it('true when metrics exist but cardOrder is still empty', () => {
+  it('true when metrics exist but visibleCardOrder is still empty', () => {
     expect(shouldShowLoadingState(metrics(), [])).toBe(true);
   });
 
-  it('false once metrics and a non-empty cardOrder are present', () => {
+  it('false once metrics and a non-empty visibleCardOrder are present', () => {
     expect(shouldShowLoadingState(metrics(), ['cpu'])).toBe(false);
+  });
+
+  it('true when every card has been hidden, even though the underlying cardOrder is non-empty (UX-006)', () => {
+    // Caller must pass the filtered visibleCardOrder, not the raw saved cardOrder —
+    // this pins that a fully-hidden dashboard shows the message, not a blank canvas.
+    expect(shouldShowLoadingState(metrics(), [])).toBe(true);
   });
 });

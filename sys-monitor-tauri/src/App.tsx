@@ -431,10 +431,10 @@ export default function App() {
         <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
 
-      {shouldShowLoadingState(metrics, cardOrder) ? (
+      {shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div
           style={{
-            color: '#666',
+            color: '#888',
             padding: '32px 0',
             textAlign: 'center',
             fontSize: 14,
