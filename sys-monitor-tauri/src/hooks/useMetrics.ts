@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
+import { isTauri } from '../utils';
 
+// Keep in sync with `HISTORY_CAPACITY` in src-tauri/src/state.rs (no shared-constant
+// mechanism crosses the IPC boundary between Rust and TypeScript).
 const MAX_HISTORY = 3600;
 
 export const EXPECTED_SCHEMA_VERSION = 3;
@@ -15,10 +18,6 @@ export function assertSchemaVersion(actual: number, payloadName: string): void {
       `Rebuild both frontend and backend.`
     );
   }
-}
-
-function isTauri(): boolean {
-  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 }
 
 /** Plausible fake history for browser dev (no Tauri backend). */
@@ -203,6 +202,59 @@ export interface SlicedHistory {
   collectorError: string | null;
 }
 
+interface SnapshotSetters {
+  setMemGb: Dispatch<SetStateAction<{ used: number; total: number }>>;
+  setNvidiaStats: Dispatch<SetStateAction<NvidiaStats>>;
+  setGpuMeta: Dispatch<SetStateAction<GpuMeta[]>>;
+  setLatestCpu: Dispatch<SetStateAction<number>>;
+  setLatestGpu: Dispatch<SetStateAction<Record<string, number>>>;
+  setHistory: Dispatch<SetStateAction<HistoryPayload | null>>;
+}
+
+/**
+ * Applies one MetricsSnapshot to React state — shared by the real `metrics-update`
+ * listener and the browser-mock `setInterval` path so the two can't drift apart.
+ */
+function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
+  setters.setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
+  setters.setNvidiaStats({
+    power_w: snap.nvidia_power_w ?? null,
+    mem_used_mb: snap.nvidia_mem_used_mb ?? null,
+    mem_total_mb: snap.nvidia_mem_total_mb ?? null,
+    fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
+    clock_mhz: snap.nvidia_clock_mhz ?? null,
+  });
+  setters.setGpuMeta((prev) => {
+    const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
+    for (const g of snap.gpus) {
+      map.set(g.name, g.vendor ?? 'unknown');
+    }
+    return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
+  });
+  // Latest scalars refresh on every event, independent of on_tick.
+  setters.setLatestCpu(snap.cpu);
+  setters.setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
+  // History arrays only advance on history-committing (on_tick) events —
+  // otherwise every ~250ms event would grow them 4x faster than real time.
+  if (!shouldCommitHistory(snap.on_tick)) return;
+  setters.setHistory((prev) => {
+    if (!prev) return prev;
+    const now = Date.now();
+    return {
+      schema_version: prev.schema_version,
+      timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
+      cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
+      cpu_name: snap.cpu_name ?? prev.cpu_name,
+      cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
+      mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
+      disks: mergeDiskHistory(prev.disks, snap.disks),
+      net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
+      net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
+      gpus: mergeGpuHistory(prev.gpus, snap.gpus),
+    };
+  });
+}
+
 export function useMetrics(windowSeconds: number): SlicedHistory | null {
   const [history, setHistory] = useState<HistoryPayload | null>(null);
   // Track the latest mem GB values separately (not historised).
@@ -249,42 +301,13 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         const snap = event.payload;
         assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
-        setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
-        setNvidiaStats({
-          power_w: snap.nvidia_power_w ?? null,
-          mem_used_mb: snap.nvidia_mem_used_mb ?? null,
-          mem_total_mb: snap.nvidia_mem_total_mb ?? null,
-          fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
-          clock_mhz: snap.nvidia_clock_mhz ?? null,
-        });
-        setGpuMeta((prev) => {
-          const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
-          for (const g of snap.gpus) {
-            map.set(g.name, g.vendor ?? 'unknown');
-          }
-          return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
-        });
-        // Latest scalars refresh on every event, independent of on_tick.
-        setLatestCpu(snap.cpu);
-        setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
-        // History arrays only advance on history-committing (on_tick) events —
-        // otherwise every ~250ms event would grow them 4x faster than real time.
-        if (!shouldCommitHistory(snap.on_tick)) return;
-        setHistory((prev) => {
-          if (!prev) return prev;
-          const now = Date.now();
-          return {
-            schema_version: prev.schema_version,
-            timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
-            cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
-            cpu_name: snap.cpu_name ?? prev.cpu_name,
-            cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
-            mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
-            disks: mergeDiskHistory(prev.disks, snap.disks),
-            net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
-            net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
-            gpus: mergeGpuHistory(prev.gpus, snap.gpus),
-          };
+        applySnapshot(snap, {
+          setMemGb,
+          setNvidiaStats,
+          setGpuMeta,
+          setLatestCpu,
+          setLatestGpu,
+          setHistory,
         });
       });
       const unlistenErrorPromise = listen<string>('collector-error', (event) => {
@@ -302,39 +325,13 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
     const id = setInterval(() => {
       const snap = mockMetricsSnapshot(mockTick);
       mockTick += 1;
-      setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
-      setNvidiaStats({
-        power_w: snap.nvidia_power_w ?? null,
-        mem_used_mb: snap.nvidia_mem_used_mb ?? null,
-        mem_total_mb: snap.nvidia_mem_total_mb ?? null,
-        fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
-        clock_mhz: snap.nvidia_clock_mhz ?? null,
-      });
-      setGpuMeta((prev) => {
-        const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
-        for (const g of snap.gpus) {
-          map.set(g.name, g.vendor ?? 'unknown');
-        }
-        return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
-      });
-      setLatestCpu(snap.cpu);
-      setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
-      if (!shouldCommitHistory(snap.on_tick)) return;
-      setHistory((prev) => {
-        if (!prev) return prev;
-        const now = Date.now();
-        return {
-          schema_version: prev.schema_version,
-          timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
-          cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
-          cpu_name: snap.cpu_name ?? prev.cpu_name,
-          cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
-          mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
-          disks: mergeDiskHistory(prev.disks, snap.disks),
-          net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
-          net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
-          gpus: mergeGpuHistory(prev.gpus, snap.gpus),
-        };
+      applySnapshot(snap, {
+        setMemGb,
+        setNvidiaStats,
+        setGpuMeta,
+        setLatestCpu,
+        setLatestGpu,
+        setHistory,
       });
     }, 250);
     return () => clearInterval(id);

@@ -7,6 +7,11 @@
 
 export type ViewMode = 'default' | 'tile' | 'list';
 
+/** True when running inside the Tauri shell (vs. a plain browser/mock-data context). */
+export function isTauri(): boolean {
+  return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+}
+
 /** Stable slug for GPU card ID from display name (e.g. "GeForce RTX 4050" → "gpu_geforce_rtx_4050"). */
 export function gpuId(name: string): string {
   return 'gpu_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');

@@ -82,12 +82,14 @@ pub fn query_nvml(nvml: &Nvml) -> NvmlReadings {
 #[cfg_attr(feature = "nvml", allow(dead_code))]
 pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
     // NVAPI must be initialized once per process — same reason as PDH query handle, stateful C API.
-    // unsafe: NVAPI is a C library, Rust cannot verify its safety.
     // NVAPI_OK (0): all NVAPI functions return a status code; 0 = success.
     if !nvapi_initialized {
         return None;
     }
 
+    // SAFETY: NVAPI is a C library reached via FFI. All buffers passed to it
+    // (`gpu_handles`, `thermal`) are stack-local and zero-initialized before use;
+    // every call's status code is checked before any output field is read.
     unsafe {
         use nvapi_sys::gpu::thermal::{
             NvAPI_GPU_GetThermalSettings, NVAPI_THERMAL_TARGET_ALL, NV_GPU_THERMAL_SETTINGS,

@@ -138,12 +138,16 @@ export default function App() {
     save({ hiddenCardIds: [...next] });
   }
 
+  function fallbackCardLabel(id: string): string {
+    return id
+      .replace(/^(gpu|disk|net)_/, '')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
   function getCardLabel(id: string): string {
     if (!metrics) {
-      return id
-        .replace(/^(gpu|disk|net)_/, '')
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (c) => c.toUpperCase());
+      return fallbackCardLabel(id);
     }
     if (id === 'cpu') return metrics.cpu_name || 'CPU';
     if (id === 'memory') return 'Memory';
@@ -153,10 +157,7 @@ export default function App() {
       const gpuName = metrics.gpus.find(g => gpuId(g.name) === id)?.name;
       if (gpuName) return gpuName;
     }
-    return id
-      .replace(/^(gpu|disk|net)_/, '')
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return fallbackCardLabel(id);
   }
 
   function handleDragEnd(event: DragEndEvent) {

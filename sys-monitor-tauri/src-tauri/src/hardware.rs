@@ -59,30 +59,6 @@ pub struct HardwareProfile {
     pub disks: Vec<DiskInfo>,
 }
 
-impl HardwareProfile {
-    /// Returns true if any Nvidia dGPU is present.
-    #[allow(dead_code)]
-    pub fn has_nvidia_dgpu(&self) -> bool {
-        self.gpus
-            .iter()
-            .any(|g| g.vendor == GpuVendor::Nvidia && g.kind == GpuKind::Discrete)
-    }
-
-    /// Returns true if any Intel iGPU is present. Used for future Intel iGPU provider.
-    #[allow(dead_code)]
-    pub fn has_intel_igpu(&self) -> bool {
-        self.gpus
-            .iter()
-            .any(|g| g.vendor == GpuVendor::Intel && g.kind == GpuKind::Integrated)
-    }
-
-    /// Returns true if any AMD GPU (discrete or integrated) is present. Used for future AMD provider.
-    #[allow(dead_code)]
-    pub fn has_amd_gpu(&self) -> bool {
-        self.gpus.iter().any(|g| g.vendor == GpuVendor::Amd)
-    }
-}
-
 // ── CPU detection ─────────────────────────────────────────────────────────────
 
 fn detect_cpu_vendor() -> CpuVendor {

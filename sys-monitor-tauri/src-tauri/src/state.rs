@@ -85,12 +85,16 @@ impl CollectorState {
         networks.refresh(false);
 
         // NVAPI must be initialized once per process. Same reason as PDH query handle — stateful C API.
-        #[cfg(feature = "nvapi")]
+        // Only needed when nvml is absent — nvml is the sole consumer path for NVAPI-free
+        // builds; see query_nvidia_gpu_temp's matching cfg in collector/nvidia.rs.
+        #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
         let nvapi_initialized = {
+            // SAFETY: NVAPI is a stateful C API initialized exactly once per process
+            // here; the return code is checked before nvapi_initialized is trusted.
             let status = unsafe { nvapi_sys::nvapi::NvAPI_Initialize() };
             status == nvapi_sys::status::NVAPI_OK
         };
-        #[cfg(not(feature = "nvapi"))]
+        #[cfg(not(all(feature = "nvapi", not(feature = "nvml"))))]
         let nvapi_initialized = false;
 
         #[cfg(feature = "nvml")]
@@ -115,7 +119,9 @@ impl CollectorState {
 // Holds only history buffers and latest scalar readings. This is what goes
 // behind the Mutex.
 
-const HISTORY_LEN: usize = 3600;
+// Keep in sync with `useMetrics.ts`'s `MAX_HISTORY` (no shared-constant mechanism
+// crosses the IPC boundary between Rust and TypeScript).
+pub const HISTORY_CAPACITY: usize = 3600;
 
 pub struct HistoryStore {
     pub cpu_history: VecDeque<f64>,
@@ -158,11 +164,11 @@ impl HistoryStore {
             cpu_name.to_string()
         };
         HistoryStore {
-            cpu_history: VecDeque::with_capacity(HISTORY_LEN),
+            cpu_history: VecDeque::with_capacity(HISTORY_CAPACITY),
             cpu_name: name,
             cpu_temp_c: None,
             cpu_latest: None,
-            mem_history: VecDeque::with_capacity(HISTORY_LEN),
+            mem_history: VecDeque::with_capacity(HISTORY_CAPACITY),
             mem_used_gb: 0.0,
             mem_total_gb: 0.0,
             gpu_entries: Vec::new(),
@@ -183,15 +189,15 @@ impl HistoryStore {
             disk_read_mb_s: HashMap::new(),
             disk_write_mb_s: HashMap::new(),
             disk_avg_response_ms: HashMap::new(),
-            net_recv_history: VecDeque::with_capacity(HISTORY_LEN),
-            net_sent_history: VecDeque::with_capacity(HISTORY_LEN),
-            timestamps: VecDeque::with_capacity(HISTORY_LEN),
+            net_recv_history: VecDeque::with_capacity(HISTORY_CAPACITY),
+            net_sent_history: VecDeque::with_capacity(HISTORY_CAPACITY),
+            timestamps: VecDeque::with_capacity(HISTORY_CAPACITY),
             profile: None,
         }
     }
 
     pub fn push_timestamp(&mut self, ts: u64) {
-        if self.timestamps.len() >= HISTORY_LEN {
+        if self.timestamps.len() >= HISTORY_CAPACITY {
             self.timestamps.pop_front();
         }
         self.timestamps.push_back(ts);
@@ -200,11 +206,6 @@ impl HistoryStore {
 
 pub type SafeHistoryStore = Mutex<HistoryStore>;
 pub type SafeAppState = SafeHistoryStore;
-
-// SAFETY: HistoryStore is always accessed through SafeHistoryStore = Mutex<HistoryStore>,
-// which provides mutual exclusion.
-unsafe impl Send for HistoryStore {}
-unsafe impl Sync for HistoryStore {}
 
 #[cfg(test)]
 mod tests {

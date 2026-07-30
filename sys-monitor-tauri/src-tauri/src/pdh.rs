@@ -20,6 +20,8 @@ pub struct PdhHandles {
 impl Drop for PdhHandles {
     fn drop(&mut self) {
         if let Some(query) = self.query.take() {
+            // SAFETY: `query` is an owned PDH_HQUERY handle taken from `self.query`,
+            // so it is closed exactly once, at end of life, and never used afterward.
             unsafe {
                 PdhCloseQuery(query);
             }

@@ -1,6 +1,6 @@
 import { Store } from '@tauri-apps/plugin-store';
 import { useState, useEffect, useCallback } from 'react';
-import type { ViewMode } from '../utils';
+import { isTauri, type ViewMode } from '../utils';
 
 const STORE_PATH = 'settings.json';
 
@@ -26,7 +26,7 @@ export function useSettings() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+    if (!isTauri()) {
       setLoaded(true);
       return;
     }

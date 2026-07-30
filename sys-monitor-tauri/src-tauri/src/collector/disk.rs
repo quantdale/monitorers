@@ -41,6 +41,38 @@ pub fn query_disk_models_wmi(wmi_con: Option<&wmi::WMIConnection>) -> HashMap<u3
 
 // ── DISK HELPERS ─────────────────────────────────────────────────────────────
 
+/// A sysinfo disk's kind and display name, keyed by drive letter.
+struct DriveLetterInfo {
+    kind: sysinfo::DiskKind,
+    name: String,
+}
+
+/// Build a map from drive letter (e.g. "C:") to sysinfo disk info, for every
+/// sysinfo disk whose mount point is a drive-letter path. Shared by
+/// `physical_disk_list()` and `poll_disk()`, which both resolve PDH-reported
+/// drive letters back to known sysinfo disks; `poll_disk()` only needs the
+/// key set (membership checks), while `physical_disk_list()` also needs kind
+/// and name, so both fields are computed unconditionally — cheap, since `d`
+/// is already in hand.
+fn known_drive_letters(disks: &sysinfo::Disks) -> HashMap<String, DriveLetterInfo> {
+    let mut map = HashMap::new();
+    for d in disks.list() {
+        let mount = d.mount_point().to_string_lossy().to_string();
+        let mount_upper = mount.to_uppercase();
+        if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
+            let letter = mount_upper[..2].to_string();
+            map.insert(
+                letter,
+                DriveLetterInfo {
+                    kind: d.kind(),
+                    name: d.name().to_string_lossy().to_string(),
+                },
+            );
+        }
+    }
+    map
+}
+
 /// Parse a PDH PhysicalDisk instance name like "0 C: D:" into drive letters ["C:", "D:"].
 pub fn pdh_instance_to_drive_letters(instance: &str) -> Vec<String> {
     instance
@@ -161,25 +193,13 @@ pub fn physical_disk_list(
     disks: &sysinfo::Disks,
     pdh: &crate::state::PdhHandles,
 ) -> Vec<PhysicalDiskEntry> {
-    let mut known_drive_letters: HashMap<String, String> = HashMap::new();
-    let mut drive_letter_to_kind: HashMap<String, sysinfo::DiskKind> = HashMap::new();
-    let mut drive_letter_to_name: HashMap<String, String> = HashMap::new();
-    for d in disks.list() {
-        let mount = d.mount_point().to_string_lossy().to_string();
-        let mount_upper = mount.to_uppercase();
-        if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
-            let letter = mount_upper[..2].to_string();
-            known_drive_letters.insert(letter.clone(), mount);
-            drive_letter_to_kind.insert(letter.clone(), d.kind());
-            drive_letter_to_name.insert(letter, d.name().to_string_lossy().to_string());
-        }
-    }
+    let known = known_drive_letters(disks);
 
     let mut result = Vec::new();
     for (instance_name, _pct_active) in query_disk_active_time(pdh) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
             .into_iter()
-            .filter(|letter| known_drive_letters.contains_key(letter))
+            .filter(|letter| known.contains_key(letter))
             .collect();
 
         if mapped_letters.is_empty() {
@@ -189,11 +209,13 @@ pub fn physical_disk_list(
         let disk_key = mapped_letters.join(" ");
         let kind = mapped_letters
             .first()
-            .and_then(|letter| drive_letter_to_kind.get(letter).copied())
+            .and_then(|letter| known.get(letter))
+            .map(|info| info.kind)
             .unwrap_or(sysinfo::DiskKind::Unknown(0));
         let sysinfo_name = mapped_letters
             .first()
-            .and_then(|letter| drive_letter_to_name.get(letter).cloned())
+            .and_then(|letter| known.get(letter))
+            .map(|info| info.name.clone())
             .unwrap_or_else(|| disk_key.clone());
         let drive_index = pdh_instance_to_drive_index(&instance_name);
         result.push((disk_key, kind, sysinfo_name, drive_index));
@@ -205,14 +227,7 @@ pub fn physical_disk_list(
 pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> PollDiskResult {
     disks.refresh(false);
 
-    let mut known_drive_letters: HashMap<String, String> = HashMap::new();
-    for d in disks.list() {
-        let mount = d.mount_point().to_string_lossy().to_string();
-        let mount_upper = mount.to_uppercase();
-        if mount_upper.len() >= 2 && mount_upper.as_bytes()[1] == b':' {
-            known_drive_letters.insert(mount_upper[..2].to_string(), mount);
-        }
-    }
+    let known = known_drive_letters(disks);
 
     let read_write = query_disk_read_write(pdh);
     let response_times = query_disk_response_time(pdh);
@@ -226,7 +241,7 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
     for (instance_name, pct_active) in query_disk_active_time(pdh) {
         let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
             .into_iter()
-            .filter(|letter| known_drive_letters.contains_key(letter))
+            .filter(|letter| known.contains_key(letter))
             .collect();
 
         if mapped_letters.is_empty() {
@@ -253,7 +268,7 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
     for (instance_name, secs) in &response_times {
         let letters: Vec<String> = pdh_instance_to_drive_letters(instance_name)
             .into_iter()
-            .filter(|l| known_drive_letters.contains_key(l))
+            .filter(|l| known.contains_key(l))
             .collect();
         if letters.is_empty() {
             continue;

@@ -17,7 +17,9 @@ use windows::Win32::System::Performance::{
 
 // ── PUSH HISTORY HELPER ──────────────────────────────────────────────────────
 
-const MAX_HISTORY: usize = 3600;
+// Keep in sync with `useMetrics.ts`'s `MAX_HISTORY` (no shared-constant mechanism
+// crosses the IPC boundary between Rust and TypeScript).
+const MAX_HISTORY: usize = crate::state::HISTORY_CAPACITY;
 
 pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max_len: usize) {
     deque.push_back(value);
@@ -241,62 +243,6 @@ pub fn poll(
         net_recv_kb_s,
         net_sent_kb_s,
     }
-}
-
-/// Append RawPoll values into HistoryStore. Fast — no I/O, pure memory writes.
-/// Full commit (CPU, GPU, disk, network). Unused in favour of granular commit_* when raw.is_some().
-#[allow(dead_code)]
-pub fn commit(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    push_history(&mut store.cpu_history, poll.cpu_usage, MAX_HISTORY);
-    store.cpu_temp_c = poll.cpu_temp_c;
-
-    push_history(
-        &mut store.mem_history,
-        poll.mem_pct.clamp(0.0, 100.0),
-        MAX_HISTORY,
-    );
-    store.mem_used_gb = poll.mem_used_gb;
-    store.mem_total_gb = poll.mem_total_gb;
-
-    push_history(&mut store.net_recv_history, poll.net_recv_kb_s, MAX_HISTORY);
-    push_history(&mut store.net_sent_history, poll.net_sent_kb_s, MAX_HISTORY);
-
-    let mut existing: HashMap<String, VecDeque<f64>> = store
-        .gpu_entries
-        .drain(..)
-        .map(|(key, _, hist)| (key, hist))
-        .collect();
-    store.gpu_entries = poll
-        .gpu_updates
-        .iter()
-        .map(|(key, display_name, util)| {
-            let mut hist = existing
-                .remove(key)
-                .unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
-            push_history(&mut hist, util.clamp(0.0, 100.0), MAX_HISTORY);
-            (key.clone(), display_name.clone(), hist)
-        })
-        .collect();
-
-    store.nvidia_temp = poll.nvidia_temp;
-
-    for disk_key in &poll.disk_display_order {
-        if !store.disk_active_histories.contains_key(disk_key) {
-            store.disk_display_order.push(disk_key.clone());
-            store
-                .disk_active_histories
-                .insert(disk_key.clone(), VecDeque::with_capacity(MAX_HISTORY));
-        }
-        if let (Some(history), Some(&pct)) = (
-            store.disk_active_histories.get_mut(disk_key),
-            poll.disk_active.get(disk_key),
-        ) {
-            push_history(history, pct, MAX_HISTORY);
-        }
-    }
-    store.disk_read_mb_s = poll.disk_read_mb_s.clone();
-    store.disk_write_mb_s = poll.disk_write_mb_s.clone();
-    store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
 }
 
 /// Commit only CPU-related fields from a RawPoll into HistoryStore (full tick).
