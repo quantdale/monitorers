@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-07-31
+goal: Automate the last manual verification task and hard-guard the COR-001
+  emission-cadence bug class

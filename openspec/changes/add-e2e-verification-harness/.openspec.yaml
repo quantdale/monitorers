@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-07-31
+goal: General autonomous E2E verification for scenarios the cadence probe cannot
+  reach
