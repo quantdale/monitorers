@@ -41,6 +41,7 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
 
       - name: Run tests
         run: cargo test --verbose
@@ -70,6 +71,7 @@ jobs:
           key: ${{ runner.os }}-cargo-lint-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-lint-
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -113,3 +115,6 @@ jobs:
 
       - name: Test
         run: npm test -- --run
+
+      - name: Build
+        run: npm run build
