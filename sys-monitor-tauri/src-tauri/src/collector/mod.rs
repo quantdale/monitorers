@@ -2,6 +2,8 @@ mod cpu;
 mod disk;
 mod gpu;
 pub mod nvidia;
+pub mod run_loop;
+pub mod snapshot;
 
 pub use cpu::query_cpu_temp_c;
 pub use disk::{physical_disk_list, query_disk_models_wmi};
@@ -9,6 +11,12 @@ pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 pub use nvidia::query_nvidia_gpu_temp;
+pub use run_loop::run_collector_loop;
+pub use snapshot::{
+    build_history_payload, build_snapshot, is_full_poll_tick, slice_history, slice_timestamps,
+    DiskHistory, DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot,
+    SCHEMA_VERSION,
+};
 
 use std::collections::{HashMap, VecDeque};
 use windows::Win32::System::Performance::{

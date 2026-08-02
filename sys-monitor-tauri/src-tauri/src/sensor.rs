@@ -154,6 +154,11 @@ impl SensorRegistry {
         self.entries.len()
     }
 
+    /// True when no providers are registered.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn poll_all(
         &mut self,
         state: &mut CollectorState,

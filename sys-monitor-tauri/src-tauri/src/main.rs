@@ -1,17 +1,13 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod collector;
-mod hardware;
-mod pdh;
-mod sensor;
-mod state;
-
-use chrono::Utc;
-use hardware::GpuVendor;
-use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
-use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
-use std::collections::VecDeque;
+use sys_monitor_tauri::collector::{
+    collect_pdh, physical_disk_list, query_disk_models_wmi, run_collector_loop,
+};
+use sys_monitor_tauri::hardware::{detect, DiskInfo, DiskKind, HardwareProfile};
+use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
+use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
+use sys_monitor_tauri::{build_history_payload, HistoryPayload};
 use tauri::{Emitter, Manager};
 
 // ── WMI CONNECTION RETRY ─────────────────────────────────────────────────────
@@ -19,248 +15,6 @@ use tauri::{Emitter, Manager};
 const WMI_BACKOFF_BASE_SECS: u64 = 1;
 const WMI_BACKOFF_MAX_SECS: u64 = 30;
 const WMI_MAX_ATTEMPTS: u32 = 8;
-
-const SCHEMA_VERSION: u32 = 3;
-
-/// Every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O, history committed).
-/// The other 3 ticks are registry-only (CPU + GPU scalar refresh, no history write).
-/// Extracted as a pure function so the 1Hz history-commit cadence is unit-testable
-/// in isolation from the I/O it gates (TEST-001).
-fn is_full_poll_tick(tick: u32) -> bool {
-    tick.is_multiple_of(4)
-}
-
-// ── SERIALISABLE PAYLOAD TYPES ───────────────────────────────────────────────
-
-#[derive(serde::Serialize, Clone)]
-pub struct MetricsSnapshot {
-    pub schema_version: u32,
-    /// True when this snapshot was emitted on a full (history-committing) tick.
-    /// The frontend only appends to its charting history arrays when this is true;
-    /// it still updates live scalar readouts (e.g. CPU/GPU %) on every event.
-    pub on_tick: bool,
-    pub cpu: f64,
-    pub cpu_name: String,
-    pub cpu_temp_c: Option<f64>,
-    pub nvidia_temp: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_power_w: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_used_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_total_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_fan_speed_pct: Option<u32>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_clock_mhz: Option<u32>,
-    pub mem: f64,
-    pub mem_used_gb: f64,
-    pub mem_total_gb: f64,
-    pub disks: Vec<DiskSnapshot>,
-    pub net_recv_kb: f64,
-    pub net_sent_kb: f64,
-    pub gpus: Vec<GpuSnapshot>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct GpuSnapshot {
-    pub name: String,
-    pub vendor: String,
-    pub util: f64,
-    pub temp_c: Option<f64>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct DiskSnapshot {
-    pub key: String,
-    pub active: f64,
-    pub read_mb_s: f64,
-    pub write_mb_s: f64,
-    pub avg_response_ms: f64,
-    pub temp_c: Option<f64>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct HistoryPayload {
-    pub schema_version: u32,
-    pub timestamps: Vec<u64>,
-    pub cpu: Vec<f64>,
-    pub cpu_name: String,
-    pub cpu_temp_c: Option<f64>,
-    pub mem: Vec<f64>,
-    pub disks: Vec<DiskHistory>,
-    pub net_recv: Vec<f64>,
-    pub net_sent: Vec<f64>,
-    pub gpus: Vec<GpuHistory>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct GpuHistory {
-    pub name: String,
-    pub values: Vec<f64>,
-    pub temp_c: Option<f64>,
-}
-
-#[derive(serde::Serialize, Clone)]
-pub struct DiskHistory {
-    pub key: String,
-    pub values: Vec<f64>,
-    pub read_mb_s: f64,
-    pub write_mb_s: f64,
-    pub avg_response_ms: f64,
-    pub temp_c: Option<f64>,
-}
-
-/// Returns the last `window_secs` points from the deque, or all if window_secs is 0 or >= len.
-fn slice_history(deque: &VecDeque<f64>, window_secs: u64) -> Vec<f64> {
-    let n = window_secs.min(usize::MAX as u64) as usize;
-    let len = deque.len();
-    if n == 0 || n >= len {
-        deque.iter().copied().collect()
-    } else {
-        deque.iter().skip(len - n).copied().collect()
-    }
-}
-
-fn slice_timestamps(deque: &VecDeque<u64>, window_secs: u64) -> Vec<u64> {
-    let n = window_secs.min(usize::MAX as u64) as usize;
-    let len = deque.len();
-    if n == 0 || n >= len {
-        deque.iter().copied().collect()
-    } else {
-        deque.iter().skip(len - n).copied().collect()
-    }
-}
-
-// ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
-
-fn build_snapshot(s: &state::HistoryStore, on_tick: bool) -> MetricsSnapshot {
-    let cpu = s
-        .cpu_latest
-        .unwrap_or_else(|| s.cpu_history.back().copied().unwrap_or(0.0));
-    let mem = s.mem_history.back().copied().unwrap_or(0.0);
-
-    let disks = s
-        .disk_display_order
-        .iter()
-        .map(|k| DiskSnapshot {
-            key: k.clone(),
-            active: s
-                .disk_active_histories
-                .get(k)
-                .and_then(|h| h.back().copied())
-                .unwrap_or(0.0),
-            read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-            write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-            avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
-            temp_c: None,
-        })
-        .collect();
-
-    let nvidia_temp = s.nvidia_temp;
-    let gpus = s
-        .gpu_entries
-        .iter()
-        .map(|(key, name, hist)| {
-            let (vendor_enum, _kind) = hardware::classify_gpu(name);
-            let vendor = match vendor_enum {
-                GpuVendor::Nvidia => "nvidia",
-                GpuVendor::Intel => "intel",
-                GpuVendor::Amd => "amd",
-                GpuVendor::Unknown => "unknown",
-            }
-            .to_string();
-            let temp_c = if collector::is_nvidia_gpu(name) && nvidia_temp.is_some() {
-                nvidia_temp
-            } else {
-                None
-            };
-            GpuSnapshot {
-                name: name.clone(),
-                vendor,
-                util: s
-                    .gpu_latest
-                    .get(key)
-                    .copied()
-                    .unwrap_or_else(|| hist.back().copied().unwrap_or(0.0)),
-                temp_c,
-            }
-        })
-        .collect();
-
-    MetricsSnapshot {
-        schema_version: SCHEMA_VERSION,
-        on_tick,
-        cpu,
-        cpu_name: s.cpu_name.clone(),
-        cpu_temp_c: s.cpu_temp_c,
-        nvidia_temp,
-        #[cfg(feature = "nvml")]
-        nvidia_power_w: s.nvidia_power_w,
-        #[cfg(feature = "nvml")]
-        nvidia_mem_used_mb: s.nvidia_mem_used_mb,
-        #[cfg(feature = "nvml")]
-        nvidia_mem_total_mb: s.nvidia_mem_total_mb,
-        #[cfg(feature = "nvml")]
-        nvidia_fan_speed_pct: s.nvidia_fan_speed_pct,
-        #[cfg(feature = "nvml")]
-        nvidia_clock_mhz: s.nvidia_clock_mhz,
-        mem,
-        mem_used_gb: s.mem_used_gb,
-        mem_total_gb: s.mem_total_gb,
-        disks,
-        net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
-        net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
-        gpus,
-    }
-}
-
-// ── HISTORY PAYLOAD BUILDER (SLICED) ─────────────────────────────────────────
-
-fn build_history_payload(s: &state::HistoryStore, window_secs: u64) -> HistoryPayload {
-    HistoryPayload {
-        schema_version: SCHEMA_VERSION,
-        timestamps: slice_timestamps(&s.timestamps, window_secs),
-        cpu: slice_history(&s.cpu_history, window_secs),
-        cpu_name: s.cpu_name.clone(),
-        cpu_temp_c: s.cpu_temp_c,
-        mem: slice_history(&s.mem_history, window_secs),
-        disks: s
-            .disk_display_order
-            .iter()
-            .map(|k| DiskHistory {
-                key: k.clone(),
-                values: s
-                    .disk_active_histories
-                    .get(k)
-                    .map(|h| slice_history(h, window_secs))
-                    .unwrap_or_default(),
-                read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-                write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-                avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
-                temp_c: None,
-            })
-            .collect(),
-        net_recv: slice_history(&s.net_recv_history, window_secs),
-        net_sent: slice_history(&s.net_sent_history, window_secs),
-        gpus: s
-            .gpu_entries
-            .iter()
-            .map(|(_, name, hist)| {
-                let temp_c = if collector::is_nvidia_gpu(name) && s.nvidia_temp.is_some() {
-                    s.nvidia_temp
-                } else {
-                    None
-                };
-                GpuHistory {
-                    name: name.clone(),
-                    values: slice_history(hist, window_secs),
-                    temp_c,
-                }
-            })
-            .collect(),
-    }
-}
 
 // ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
 
@@ -276,9 +30,7 @@ fn get_history(state: tauri::State<SafeAppState>, window_secs: u64) -> HistoryPa
 
 /// Returns the hardware profile (CPU, GPUs, disks) for settings/about panel. None until background thread has run detect().
 #[tauri::command]
-fn get_hardware_profile(
-    state: tauri::State<SafeAppState>,
-) -> Option<crate::hardware::HardwareProfile> {
+fn get_hardware_profile(state: tauri::State<SafeAppState>) -> Option<HardwareProfile> {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
     s.profile.clone()
 }
@@ -312,6 +64,15 @@ fn main() {
             // GPU provider registered in background thread after profile has GPUs
 
             let app_handle = app.handle().clone();
+
+            // Layer-2 dev tap (SYSMON_CADENCE_LOG=1): also stream one JSONL
+            // cadence record per emit to stderr so the assembled app's cadence
+            // (real webview + real shouldCommitHistory gating) can be verified
+            // with the same checker the headless probe uses. Optional
+            // corroboration, not required for PASS — see
+            // docs/cadence-verification.md (5.1).
+            let cadence_log = std::env::var("SYSMON_CADENCE_LOG").is_ok();
+            let app_start = std::time::Instant::now();
 
             std::thread::spawn(move || {
                 // Initialize COM for this thread (MTA — not yet initialized here,
@@ -379,16 +140,16 @@ fn main() {
 
                 // Full profile (including GPUs and physical-disk list) now that WMI is ready.
                 // Prime PDH so physical_disk_list can read instance names.
-                let _ = collector::collect_pdh(&collector_state);
+                let _ = collect_pdh(&collector_state);
                 // Use same physical-disk list as metrics so sidebar storage cards match dashboard.
                 // Fall back to sysinfo-based list if PDH returns empty (e.g. before first poll).
-                let physical = collector::physical_disk_list(
+                let physical = physical_disk_list(
                     &collector_state.sysinfo_disks,
                     &collector_state.pdh,
                 );
-                let wmi_disk_models = collector::query_disk_models_wmi(wmi_con.as_ref());
+                let wmi_disk_models = query_disk_models_wmi(wmi_con.as_ref());
                 use sysinfo::DiskKind as SysDiskKind;
-                let disk_infos: Option<Vec<crate::hardware::DiskInfo>> = if physical.is_empty() {
+                let disk_infos: Option<Vec<DiskInfo>> = if physical.is_empty() {
                     None // fall back to detect_disks() in hardware::detect
                 } else {
                     Some(
@@ -411,16 +172,16 @@ fn main() {
                                     drive_index.and_then(|i| wmi_disk_models.get(&i).cloned())
                                 );
                                 let k = match kind {
-                                    SysDiskKind::SSD => crate::hardware::DiskKind::Ssd,
-                                    SysDiskKind::HDD => crate::hardware::DiskKind::Hdd,
-                                    _ => crate::hardware::DiskKind::Unknown,
+                                    SysDiskKind::SSD => DiskKind::Ssd,
+                                    SysDiskKind::HDD => DiskKind::Hdd,
+                                    _ => DiskKind::Unknown,
                                 };
-                                crate::hardware::DiskInfo { name, kind: k }
+                                DiskInfo { name, kind: k }
                             })
                             .collect(),
                     )
                 };
-                collector_state.profile = crate::hardware::detect(
+                collector_state.profile = detect(
                     Some(&collector_state.pdh),
                     wmi_con.as_ref(),
                     disk_infos,
@@ -449,55 +210,32 @@ fn main() {
                 }
                 app_handle.emit("hardware-profile-ready", ()).ok();
 
-                let mut tick: u32 = 0;
-                loop {
-                    let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // Every 4th tick: full poll (one PdhCollectQueryData). Otherwise: registry only (CPU + GPU, one PdhCollectQueryData in GpuSensorProvider).
-                        let full_poll_tick = is_full_poll_tick(tick);
-                        let raw = if full_poll_tick {
-                            Some(collector::poll(&mut collector_state, wmi_con.as_ref()))
-                        } else {
-                            None
-                        };
-                        let reg_raw = if !full_poll_tick {
-                            registry.poll_all(&mut collector_state, wmi_con.as_ref())
-                        } else {
-                            (0..registry.len()).map(|_| None).collect()
-                        };
-
-                        let snapshot = {
-                            let store = app_handle.state::<SafeHistoryStore>();
-                            let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Some(ref r) = raw {
-                                collector::commit_disk_network(&mut s, r);
-                                collector::commit_cpu(&mut s, r);
-                                collector::commit_gpu(&mut s, r);
-                                let ts = Utc::now().timestamp_millis() as u64;
-                                s.push_timestamp(ts);
-                            }
-                            registry.commit_all(&mut s, &reg_raw);
-                            build_snapshot(&s, full_poll_tick)
-                        };
-
-                        snapshot
-                    }));
-
-                    match tick_result {
-                        Ok(snapshot) => {
-                            app_handle.emit("metrics-update", snapshot).ok();
+                // The store handle is resolved once before the loop; the loop
+                // itself is sink-agnostic and lives in the library
+                // (sys_monitor_tauri::collector::run_loop), so the Tauri app and
+                // the headless cadence probe share the exact same code path.
+                let store = app_handle.state::<SafeHistoryStore>();
+                run_collector_loop(
+                    &mut collector_state,
+                    wmi_con.as_ref(),
+                    &mut registry,
+                    &store,
+                    None, // production: loop forever
+                    |snap| {
+                        if cadence_log {
+                            let rec = sys_monitor_tauri::cadence::CadenceRecord::from_snapshot(
+                                &store,
+                                snap.on_tick,
+                                app_start.elapsed().as_millis() as u64,
+                            );
+                            eprintln!("{}", rec.to_json_line());
                         }
-                        Err(_) => {
-                            eprintln!("[Collector] background thread panicked");
-                            app_handle
-                                .emit("collector-error", "metrics collection stopped — restart the app")
-                                .ok();
-                            break;
-                        }
-                    }
-
-                    tick = tick.wrapping_add(1);
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
+                        app_handle.emit("metrics-update", snap).ok();
+                    },
+                    |msg| {
+                        app_handle.emit("collector-error", msg).ok();
+                    },
+                );
             });
 
             Ok(())
@@ -514,160 +252,6 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-
-    fn deque(vals: &[f64]) -> VecDeque<f64> {
-        vals.iter().copied().collect()
-    }
-
-    // --- slice_history ---
-
-    #[test]
-    fn test_slice_history_window_smaller_than_len() {
-        let d = deque(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-        assert_eq!(slice_history(&d, 3), vec![3.0, 4.0, 5.0]);
-    }
-
-    #[test]
-    fn test_slice_history_window_equals_len() {
-        let d = deque(&[1.0, 2.0, 3.0]);
-        assert_eq!(slice_history(&d, 3), vec![1.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn test_slice_history_window_larger_than_len_returns_all() {
-        let d = deque(&[10.0, 20.0]);
-        assert_eq!(slice_history(&d, 100), vec![10.0, 20.0]);
-    }
-
-    #[test]
-    fn test_slice_history_window_zero_returns_all() {
-        let d = deque(&[1.0, 2.0, 3.0]);
-        assert_eq!(slice_history(&d, 0), vec![1.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn test_slice_history_empty_deque() {
-        let d: VecDeque<f64> = VecDeque::new();
-        assert_eq!(slice_history(&d, 10), Vec::<f64>::new());
-    }
-
-    #[test]
-    fn test_slice_history_window_one() {
-        let d = deque(&[7.0, 8.0, 9.0]);
-        assert_eq!(slice_history(&d, 1), vec![9.0]);
-    }
-
-    // --- is_full_poll_tick cadence gate (TEST-001) ---
-
-    #[test]
-    fn test_is_full_poll_tick_true_on_multiples_of_four() {
-        for tick in [0u32, 4, 8, 12, 100] {
-            assert!(is_full_poll_tick(tick), "tick {tick} should be a full poll");
-        }
-    }
-
-    #[test]
-    fn test_is_full_poll_tick_false_on_non_multiples_of_four() {
-        for tick in [1u32, 2, 3, 5, 6, 7, 101] {
-            assert!(
-                !is_full_poll_tick(tick),
-                "tick {tick} should not be a full poll"
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_full_poll_tick_pattern_over_range() {
-        let results: Vec<bool> = (0..9).map(is_full_poll_tick).collect();
-        assert_eq!(
-            results,
-            vec![true, false, false, false, true, false, false, false, true]
-        );
-    }
-
-    // Extended range (5.3): exactly 1/4 of ticks are full-poll ticks over a
-    // sustained run, not just the first few — this is the cadence that gates
-    // 1Hz history commits for as long as the collector thread runs.
-    #[test]
-    fn test_is_full_poll_tick_cadence_holds_over_sustained_range() {
-        let full_poll_count = (0u32..400).filter(|&t| is_full_poll_tick(t)).count();
-        assert_eq!(
-            full_poll_count, 100,
-            "exactly 1/4 of 400 ticks must be full polls"
-        );
-
-        for tick in 0u32..400 {
-            assert_eq!(
-                is_full_poll_tick(tick),
-                tick.is_multiple_of(4),
-                "tick {tick} cadence mismatch"
-            );
-        }
-    }
-
-    // --- build_snapshot on_tick pass-through ---
-
-    #[test]
-    fn test_build_snapshot_on_tick_true() {
-        let s = state::HistoryStore::new("test");
-        let snap = build_snapshot(&s, true);
-        assert!(snap.on_tick);
-    }
-
-    #[test]
-    fn test_build_snapshot_on_tick_false() {
-        let s = state::HistoryStore::new("test");
-        let snap = build_snapshot(&s, false);
-        assert!(!snap.on_tick);
-    }
-
-    // --- build_snapshot latest-value preference ---
-
-    #[test]
-    fn test_build_snapshot_prefers_cpu_latest() {
-        let mut s = state::HistoryStore::new("test");
-        s.cpu_latest = Some(42.0);
-        s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s, true);
-        assert_eq!(snap.cpu, 42.0);
-    }
-
-    #[test]
-    fn test_build_snapshot_prefers_gpu_latest() {
-        let mut s = state::HistoryStore::new("test");
-        s.gpu_entries = vec![(
-            "gpu0".to_string(),
-            "NVIDIA GeForce".to_string(),
-            deque(&[10.0, 20.0]),
-        )];
-        s.gpu_latest.insert("gpu0".to_string(), 75.0);
-        let snap = build_snapshot(&s, true);
-        assert_eq!(snap.gpus.len(), 1);
-        assert_eq!(snap.gpus[0].util, 75.0);
-    }
-
-    #[test]
-    fn test_build_snapshot_cpu_fallback_without_latest() {
-        let mut s = state::HistoryStore::new("test");
-        s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s, true);
-        assert_eq!(snap.cpu, 30.0);
-    }
-
-    #[test]
-    fn test_build_snapshot_gpu_fallback_without_latest() {
-        let mut s = state::HistoryStore::new("test");
-        s.gpu_entries = vec![(
-            "gpu0".to_string(),
-            "NVIDIA GeForce".to_string(),
-            deque(&[10.0, 25.0]),
-        )];
-        let snap = build_snapshot(&s, true);
-        assert_eq!(snap.gpus[0].util, 25.0);
-    }
-
     // --- background thread panic recovery ---
 
     #[test]

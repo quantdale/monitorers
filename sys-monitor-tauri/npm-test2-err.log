@@ -1,0 +1,437 @@
+[2m3:05:29 PM[22m [33m[1m[vite][22m[39m [33mwarning: `esbuild` option was specified by "vite:react-babel" plugin. This option is deprecated, please use `oxc` instead.[39m
+[2m3:05:29 PM[22m [33m[1m[vite][22m[39m [33mwarning: `optimizeDeps.esbuildOptions` option was specified by "vite:react-babel" plugin. This option is deprecated, please use `optimizeDeps.rolldownOptions` instead.[39m
+[33mBoth esbuild and oxc options were set. oxc options will be used and esbuild options will be ignored.[39m The following esbuild options were set: `{ jsx: 'automatic', jsxImportSource: undefined }`
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2msets historyLoadError instead of only warning when get_history rejects
+[22m[39mWarning: `ReactDOMTestUtils.act` is deprecated in favor of `React.act`. Import `act` from `react` instead of `react-dom/test-utils`. See https://react.dev/warnings/react-dom-test-utils for more info.
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2msets historyLoadError instead of only warning when get_history rejects
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2msets historyLoadError instead of only warning when get_history rejects
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mcollectorError stays set for the lifetime of the hook once received, even after further metrics-update events
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mcollectorError stays set for the lifetime of the hook once received, even after further metrics-update events
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mcollectorError stays set for the lifetime of the hook once received, even after further metrics-update events
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mhistory array length matches the number of on_tick events, not the total event count
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mhistory array length matches the number of on_tick events, not the total event count
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: `ReactDOMTestUtils.act` is deprecated in favor of `React.act`. Import `act` from `react` instead of `react-dom/test-utils`. See https://react.dev/warnings/react-dom-test-utils for more info.
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useMetrics.hook.test.ts[2m > [22m[2museMetrics (Tauri event wiring)[2m > [22m[2mhistory array length matches the number of on_tick events, not the total event count
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings load failure (4.1 / ERR-001)[2m > [22m[2msets the error state instead of leaving loaded false forever when Store.load rejects
+[22m[39mWarning: `ReactDOMTestUtils.act` is deprecated in favor of `React.act`. Import `act` from `react` instead of `react-dom/test-utils`. See https://react.dev/warnings/react-dom-test-utils for more info.
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings load failure (4.1 / ERR-001)[2m > [22m[2msets the error state instead of leaving loaded false forever when Store.load rejects
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings load failure (4.1 / ERR-001)[2m > [22m[2msets the error state instead of leaving loaded false forever when Store.load rejects
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.persistence.test.ts[2m > [22m[2museSettings persistence across restart (4.3)[2m > [22m[2ma fresh useSettings load from the same store returns previously saved non-default values
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mfalls back per-field to compiled-in defaults on invalid shape/type, leaving valid fields untouched
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mfalls back per-field to compiled-in defaults on invalid shape/type, leaving valid fields untouched
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mfalls back per-field to compiled-in defaults on invalid shape/type, leaving valid fields untouched
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mfalls back per-field to compiled-in defaults on invalid shape/type, leaving valid fields untouched
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mtreats a missing settingsVersion as valid rather than rejecting the load
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mtreats a missing settingsVersion as valid rather than rejecting the load
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mtreats a missing settingsVersion as valid rather than rejecting the load
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2mtreats a missing settingsVersion as valid rather than rejecting the load
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2ma settingsVersion mismatch still preserves valid fields rather than resetting them
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2ma settingsVersion mismatch still preserves valid fields rather than resetting them
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2ma settingsVersion mismatch still preserves valid fields rather than resetting them
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.errors.test.ts[2m > [22m[2museSettings versioning and per-field validation (4.2 / ARC-005)[2m > [22m[2ma settingsVersion mismatch still preserves valid fields rather than resetting them
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2mreturns default values on first load
+[22m[39mWarning: `ReactDOMTestUtils.act` is deprecated in favor of `React.act`. Import `act` from `react` instead of `react-dom/test-utils`. See https://react.dev/warnings/react-dom-test-utils for more info.
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2msave updates windowSecs value
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2msave adds a card ID to hiddenCardIds
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2msave can remove a hidden card ID by updating the array
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2mseveral rapid, non-awaited save() calls to the same key converge to the last-applied value
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/hooks/useSettings.test.ts[2m > [22m[2museSettings (non-Tauri)[2m > [22m[2mconcurrent save() calls to different keys both land (no clobbering across keys)
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at TestComponent (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/hooks/useSettings.test.ts:16:52)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/components/HardwareSidebar.test.tsx[2m > [22m[2mHardwareSidebar (render)[2m > [22m[2mrenders a card per profile entry when open
+[22m[39mWarning: `ReactDOMTestUtils.act` is deprecated in favor of `React.act`. Import `act` from `react` instead of `react-dom/test-utils`. See https://react.dev/warnings/react-dom-test-utils for more info.
+Warning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at SortableSidebarCard (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/SortableSidebarCard.tsx:11:32)
+    at SortableContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\sortable\dist\sortable.cjs.development.js:300:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at SortableSidebarCard (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/SortableSidebarCard.tsx:11:32)
+    at SortableContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\sortable\dist\sortable.cjs.development.js:300:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at SortableSidebarCard (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/SortableSidebarCard.tsx:11:32)
+    at SortableContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\sortable\dist\sortable.cjs.development.js:300:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at SortableSidebarCard (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/SortableSidebarCard.tsx:11:32)
+    at SortableContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\sortable\dist\sortable.cjs.development.js:300:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at SortableSidebarCard (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/SortableSidebarCard.tsx:11:32)
+    at SortableContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\sortable\dist\sortable.cjs.development.js:300:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at Accessibility (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:95:5)
+    at DndContext (D:\Documents\tryPython\monitorers\sys-monitor-tauri\node_modules\@dnd-kit\core\dist\core.cjs.development.js:2856:5)
+    at div
+    at div
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+Warning: The current testing environment is not configured to support act(...)
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+
+[90mstderr[2m | src/components/HardwareSidebar.test.tsx[2m > [22m[2mHardwareSidebar (render)[2m > [22m[2mrenders a card per profile entry when open
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+
+[90mstderr[2m | src/components/HardwareSidebar.test.tsx[2m > [22m[2mHardwareSidebar (render)[2m > [22m[2mshows "Detecting hardware…" while profile is null
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+Warning: The current testing environment is not configured to support act(...)
+    at HardwareSidebar (D:/Documents/tryPython/monitorers/sys-monitor-tauri/src/components/HardwareSidebar.tsx:110:28)
+
+[90mstderr[2m | src/components/HardwareSidebar.test.tsx[2m > [22m[2mHardwareSidebar (render)[2m > [22m[2mshows "Detecting hardware…" while profile is null
+[22m[39mWarning: The current testing environment is not configured to support act(...)
+

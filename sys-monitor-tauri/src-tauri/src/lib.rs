@@ -1,0 +1,24 @@
+//! Library facade for the sys-monitor-tauri backend.
+//!
+//! Splits the collection logic out of the historical `main.rs` monolith so that
+//! both the Tauri app binary (`main.rs`) and the headless cadence probe
+//! (`src/bin/cadence_probe.rs`) can share the real collector loop
+//! (`run_collector_loop`) and the snapshot/payload types without a live Tauri
+//! `AppHandle`. The bin target stays a thin Tauri shell; everything
+//! collection-related lives in this library crate.
+
+pub mod cadence;
+pub mod collector;
+pub mod hardware;
+pub mod pdh;
+pub mod sensor;
+pub mod state;
+
+pub use cadence::{check_records, parse_jsonl, CadenceCheck, CadenceRecord};
+pub use collector::{
+    build_history_payload, build_snapshot, collect_pdh, is_full_poll_tick, physical_disk_list,
+    query_disk_models_wmi, run_collector_loop, slice_history, slice_timestamps, DiskHistory,
+    DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot, SCHEMA_VERSION,
+};
+pub use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
+pub use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};

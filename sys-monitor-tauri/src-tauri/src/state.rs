@@ -115,6 +115,12 @@ impl CollectorState {
     }
 }
 
+impl Default for CollectorState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── HistoryStore ─────────────────────────────────────────────────────────────
 // Holds only history buffers and latest scalar readings. This is what goes
 // behind the Mutex.

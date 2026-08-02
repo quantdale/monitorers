@@ -8,7 +8,7 @@ use nvml_wrapper::Nvml;
 pub fn init_nvml() -> Option<Nvml> {
     match Nvml::init() {
         Ok(nvml) => {
-            println!("[NVML] Initialized successfully");
+            eprintln!("[NVML] Initialized successfully");
             Some(nvml)
         }
         Err(e) => {
