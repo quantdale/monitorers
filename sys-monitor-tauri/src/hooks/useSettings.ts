@@ -102,11 +102,18 @@ export function useSettings() {
     async (patch: Partial<Settings>) => {
       setSettings((prev) => ({ ...prev, ...patch }));
       if (store) {
-        for (const [k, v] of Object.entries(patch)) {
-          await store.set(k, v);
+        try {
+          for (const [k, v] of Object.entries(patch)) {
+            await store.set(k, v);
+          }
+          await store.set('settingsVersion', SETTINGS_VERSION);
+          await store.save();
+        } catch (err) {
+          // In-memory state is already updated, so the session keeps working;
+          // only persistence is lost. Log instead of leaving an unhandled
+          // rejection from the fire-and-forget call sites.
+          console.warn('[useSettings] failed to persist settings:', err);
         }
-        await store.set('settingsVersion', SETTINGS_VERSION);
-        await store.save();
       }
     },
     [store]

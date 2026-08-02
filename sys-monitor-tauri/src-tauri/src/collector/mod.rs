@@ -123,6 +123,26 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
 
 // ── POLL AND COMMIT ───────────────────────────────────────────────────────────
 
+/// How long a CPU-temperature WMI reading is considered fresh. WMI queries are
+/// expensive relative to the 250ms tick; temps change slowly, so 1Hz suffices.
+const CPU_TEMP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Query the CPU temperature, serving from a 1-second cache when possible.
+/// A failed query is not cached, so the next poll retries immediately.
+pub fn query_cpu_temp_cached(
+    cache: &mut Option<(std::time::Instant, f64)>,
+    wmi_con: Option<&wmi::WMIConnection>,
+) -> Option<f64> {
+    if let Some((at, v)) = cache {
+        if at.elapsed() < CPU_TEMP_CACHE_TTL {
+            return Some(*v);
+        }
+    }
+    let t = cpu::query_cpu_temp_c(wmi_con);
+    *cache = t.map(|v| (std::time::Instant::now(), v));
+    t
+}
+
 /// Run PdhCollectQueryData so that GPU (and disk) counter reads see fresh data.
 /// Call this before query_gpu_utilization_pdh when polling only GPU via sensor registry.
 pub fn collect_pdh(collector: &crate::state::CollectorState) -> bool {
@@ -144,7 +164,7 @@ pub fn poll(
     collector.system.refresh_cpu_usage();
     let cpu_usage = collector.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
 
-    let cpu_temp_c = cpu::query_cpu_temp_c(wmi_con);
+    let cpu_temp_c = query_cpu_temp_cached(&mut collector.cpu_temp_cache, wmi_con);
     if cpu_temp_c.is_none() {
         collector.cpu_temp_error_lock.get_or_init(|| {
             eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
@@ -194,8 +214,13 @@ pub fn poll(
             )
         };
 
-    let gpu_updates =
-        gpu::query_gpu_utilization_pdh(&collector.pdh, wmi_con, &collector.gpu_error_lock);
+    let gpu_updates = gpu::query_gpu_utilization_pdh(
+        &collector.pdh,
+        wmi_con,
+        &collector.gpu_error_lock,
+        &mut collector.gpu_vendor_map,
+        &mut collector.gpu_vendor_map_last_build,
+    );
 
     #[cfg(feature = "nvml")]
     let (
@@ -409,6 +434,40 @@ mod tests {
             brand.to_string()
         };
         assert_eq!(name, "CPU");
+    }
+
+    // --- query_cpu_temp_cached ---
+
+    #[test]
+    fn test_cpu_temp_cache_serves_fresh_value_without_wmi() {
+        let mut collector = crate::state::CollectorState::new();
+        collector.cpu_temp_cache = Some((std::time::Instant::now(), 45.5));
+        // Fresh cache entry: returned without any WMI connection.
+        assert_eq!(
+            query_cpu_temp_cached(&mut collector.cpu_temp_cache, None),
+            Some(45.5)
+        );
+    }
+
+    #[test]
+    fn test_cpu_temp_cache_expired_entry_re_queries() {
+        let mut collector = crate::state::CollectorState::new();
+        let stale = std::time::Instant::now() - std::time::Duration::from_secs(5);
+        collector.cpu_temp_cache = Some((stale, 45.5));
+        // Expired entry + no WMI connection => re-query fails and the cache
+        // is invalidated (so the next poll retries immediately).
+        assert_eq!(
+            query_cpu_temp_cached(&mut collector.cpu_temp_cache, None),
+            None
+        );
+        assert_eq!(collector.cpu_temp_cache, None);
+    }
+
+    #[test]
+    fn test_cpu_temp_cache_failure_is_not_cached() {
+        let mut cache: Option<(std::time::Instant, f64)> = None;
+        assert_eq!(query_cpu_temp_cached(&mut cache, None), None);
+        assert_eq!(cache, None, "a failed query must not be cached");
     }
 
     // --- scalar commits ---

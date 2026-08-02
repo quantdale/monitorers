@@ -132,7 +132,17 @@ fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -
         _ => return vec![],
     };
     let lock = OnceLock::new();
-    let entries = crate::collector::query_gpu_utilization_pdh(pdh_ref, Some(wmi_ref), &lock);
+    // One-time startup call — a throwaway cache avoids rebuilding the WMI
+    // vendor map here while leaving the steady-state cache untouched.
+    let mut vendor_map: Option<std::collections::HashMap<String, String>> = None;
+    let mut last_build = std::time::Instant::now();
+    let entries = crate::collector::query_gpu_utilization_pdh(
+        pdh_ref,
+        Some(wmi_ref),
+        &lock,
+        &mut vendor_map,
+        &mut last_build,
+    );
     entries
         .into_iter()
         .map(|(_key, display_name, _util)| {

@@ -32,6 +32,7 @@ export function SortableCard(props: Props) {
   return (
     <div
       ref={setNodeRef}
+      data-testid={`sortable-card-${props.id}`}
       style={{
         transform: CSS.Transform.toString(transform),
         transition,

@@ -62,8 +62,9 @@ Run all checks from both sections above.
   before writing the task summary
 
 ### Test counts (as of the latest merged change; these drift as tests are added):
-- Rust: 88 tests expected. If count drops, investigate before committing.
-- Frontend: 78 tests expected. If count drops, investigate before committing.
+- Rust: 99 tests expected. If count drops, investigate before committing.
+- Frontend: 83 tests expected. If count drops, investigate before committing.
+- E2E (Playwright, mock-data harness on Vite): 9 tests expected (`npm run e2e` from `sys-monitor-tauri/`).
 
 ---
 
@@ -128,7 +129,7 @@ monitorers/
 - Always use .unwrap_or_else(|e| e.into_inner()) on mutex locks (poison-safe)
 - push_history() always used for VecDeque appends — never push directly
 - All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
-- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 2
+- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 3
 - All push_history writes must happen on full ticks (1Hz) only.
   Providers may poll at 250ms for live snapshot freshness but must
   never commit to history more than once per second.
@@ -283,7 +284,7 @@ cargo test collector::disk::tests # one module
 
 ### Frontend tests
 
-**Vitest** (78 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
+**Vitest** (83 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
 - Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, formatters in `App.tsx`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)

@@ -172,6 +172,36 @@ pub fn build_gpu_vendor_map(
 /// Per-GPU result: (luid, display_name, utilization%).
 pub type GpuUtilEntry = (String, String, f64);
 
+/// How often a stale/outdated vendor map may be rebuilt via WMI. The map is
+/// built once per session; this rate limit only applies to self-healing
+/// rebuilds (new LUIDs appearing, or a failed first enumeration), so a WMI
+/// outage can't turn the collector into a per-tick WMI query loop.
+const VENDOR_MAP_REBUILD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether the cached LUID→caption map needs rebuilding from WMI.
+///
+/// - `None` (never built) → rebuild immediately.
+/// - Empty map (a prior enumeration failed) → rebuild, but at most once per
+///   `VENDOR_MAP_REBUILD_INTERVAL` so a persistent WMI failure can't hot-loop.
+/// - Non-empty map → rebuild only when a PDH-reported LUID is missing
+///   (hot-plug / late-appearing dGPU engine), also rate-limited.
+pub fn should_rebuild_vendor_map(
+    cache: &Option<HashMap<String, String>>,
+    last_build: std::time::Instant,
+    pdh_luids: &[String],
+) -> bool {
+    let Some(map) = cache else {
+        return true;
+    };
+    if map.is_empty() {
+        return last_build.elapsed() >= VENDOR_MAP_REBUILD_INTERVAL;
+    }
+    if last_build.elapsed() < VENDOR_MAP_REBUILD_INTERVAL {
+        return false;
+    }
+    pdh_luids.iter().any(|l| !map.contains_key(l))
+}
+
 /// Merge per-LUID utilization totals into per-caption entries.
 ///
 /// Known characterization gap: multiple LUIDs that classify to the same
@@ -228,10 +258,17 @@ fn merge_gpu_utilization_by_caption(
 ///
 /// `wmi_con` is the caller's MTA-thread WMI connection used for vendor-name
 /// classification. It lives in the background thread's stack frame.
+///
+/// `gpu_vendor_map` / `vendor_map_last_build` cache the LUID→caption map across
+/// polls. Building it runs two WMI queries, so it must happen once, not on
+/// every ~250ms GPU poll (the pre-cache behavior made the collector spend most
+/// of each tick inside WMI — see should_rebuild_vendor_map).
 pub fn query_gpu_utilization_pdh(
     pdh: &crate::state::PdhHandles,
     wmi_con: Option<&wmi::WMIConnection>,
     gpu_error_lock: &OnceLock<()>,
+    gpu_vendor_map: &mut Option<HashMap<String, String>>,
+    vendor_map_last_build: &mut std::time::Instant,
 ) -> Vec<GpuUtilEntry> {
     let mut result = Vec::new();
     if pdh.query.is_none() {
@@ -253,11 +290,25 @@ pub fn query_gpu_utilization_pdh(
         *luid_3d_totals.entry(luid).or_insert(0.0) += util;
     }
 
-    // Build vendor map with PDH LUIDs included so dGPU engines that only appear
-    // in PDH (not in GPUEngine WMI) get a caption.
+    // Build (or refresh) the vendor map with PDH LUIDs included so dGPU
+    // engines that only appear in PDH (not in GPUEngine WMI) get a caption.
+    // Cached across polls: WMI enumeration is expensive (~2 queries per call)
+    // and the hardware only changes on hot-plug.
     let vendor_map = match wmi_con {
-        Some(con) => build_gpu_vendor_map(con, luid_3d_totals.keys().cloned()),
-        None => HashMap::new(),
+        Some(con) => {
+            let pdh_luids: Vec<String> = luid_3d_totals.keys().cloned().collect();
+            if should_rebuild_vendor_map(gpu_vendor_map, *vendor_map_last_build, &pdh_luids) {
+                let rebuilt = build_gpu_vendor_map(con, pdh_luids.into_iter());
+                *gpu_vendor_map = Some(rebuilt);
+                *vendor_map_last_build = std::time::Instant::now();
+            }
+            gpu_vendor_map.clone().unwrap_or_default()
+        }
+        None => {
+            // WMI is gone — drop the stale map so it is rebuilt on recovery.
+            *gpu_vendor_map = None;
+            HashMap::new()
+        }
     };
 
     let mut entries: Vec<(String, GpuClass, f64)> =
@@ -340,6 +391,84 @@ mod tests {
     #[test]
     fn test_extract_luid_malformed_returns_none() {
         assert_eq!(extract_luid_from_name("pid_99_luid_notahex"), None);
+    }
+
+    // --- should_rebuild_vendor_map ---
+
+    fn fresh_instant() -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    #[test]
+    fn test_should_rebuild_never_built() {
+        assert!(should_rebuild_vendor_map(
+            &None,
+            fresh_instant(),
+            &["0x00017D0F".to_string()]
+        ));
+        assert!(should_rebuild_vendor_map(&None, fresh_instant(), &[]));
+    }
+
+    #[test]
+    fn test_should_not_rebuild_while_cached_map_covers_all_luids() {
+        let mut cache = HashMap::new();
+        cache.insert(
+            "0x00017D0F".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        // A map that was just built: rate limit prevents churn.
+        assert!(!should_rebuild_vendor_map(
+            &Some(cache.clone()),
+            fresh_instant(),
+            &["0x00017D0F".to_string()]
+        ));
+        // A map that is old but still covers all PDH LUIDs: no rebuild either.
+        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        assert!(!should_rebuild_vendor_map(
+            &Some(cache),
+            long_ago,
+            &["0x00017D0F".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_should_rebuild_when_new_luid_appears_after_interval() {
+        let mut cache = HashMap::new();
+        cache.insert(
+            "0x00017D0F".to_string(),
+            "NVIDIA GeForce RTX 3060".to_string(),
+        );
+        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        // A brand-new PDH LUID (hot-plug / late-appearing engine) triggers a
+        // rebuild, but only once the rate-limit window has elapsed.
+        assert!(should_rebuild_vendor_map(
+            &Some(cache.clone()),
+            long_ago,
+            &["0x00017D0F".to_string(), "0x00017E00".to_string()]
+        ));
+        assert!(!should_rebuild_vendor_map(
+            &Some(cache),
+            fresh_instant(),
+            &["0x00017D0F".to_string(), "0x00017E00".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_should_rebuild_failed_enumeration_is_rate_limited() {
+        // Empty map = a prior WMI enumeration failed. Retried periodically,
+        // never on every poll.
+        let empty: HashMap<String, String> = HashMap::new();
+        assert!(!should_rebuild_vendor_map(
+            &Some(empty.clone()),
+            fresh_instant(),
+            &[]
+        ));
+        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        assert!(should_rebuild_vendor_map(
+            &Some(empty),
+            long_ago,
+            &["0x00017D0F".to_string()]
+        ));
     }
 
     // --- merge_gpu_utilization_by_caption (known defect characterization, 3.2/3.3) ---

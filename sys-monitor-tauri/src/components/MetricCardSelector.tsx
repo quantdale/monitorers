@@ -36,7 +36,10 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
     }
   }, [open]);
 
-  const visibleCount = items.length - hiddenIds.size;
+  // Count only items that are actually present and not hidden. Using
+  // items.length - hiddenIds.size here would undercount when hiddenIds holds
+  // stale ids for hardware that no longer exists (e.g. an unplugged disk).
+  const visibleCount = items.filter((item) => !hiddenIds.has(item.id)).length;
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>

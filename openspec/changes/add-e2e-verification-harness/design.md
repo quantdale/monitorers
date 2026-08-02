@@ -4,7 +4,7 @@
 
 Phase 1 (`add-autonomous-cadence-verification`) then automated the one manual gate that *didn't* need a driver, by tapping the emission stream. The residue is exactly the set of behaviors that live at the **rendered/DOM/input** layer — where only a real webview driver can observe them. This change exists to (a) give Phase 1 a concrete place to defer rendered-output verification to, and (b) record the decision to revisit `tauri-driver` deliberately rather than let it lapse.
 
-This is a **future** change: captured now, implemented later, and dependent on Phase 1 landing first.
+This change is now being implemented (Phase 2). It depends on Phase 1 (`add-autonomous-cadence-verification`) having landed first.
 
 ## Goals / Non-Goals
 
@@ -20,15 +20,15 @@ This is a **future** change: captured now, implemented later, and dependent on P
 
 ## Decisions
 
-**Decision (open, for design-time evaluation): which driver stack.**
+**Decision (resolved): Playwright with CDP attach to WebView2.**
 
-| Option | Description | Notes |
+| Option | Description | Decision |
 |---|---|---|
-| `tauri-driver` + WebDriver | Official Tauri E2E path | The one the test-suite change rejected; re-evaluate now that the goal justifies the setup cost |
-| Playwright / CDP attach to WebView2 | Attach to the Edge WebView2 host | Familiar tooling, but Tauri IPC + WebView2 attach on Windows needs validation |
-| Hybrid | Driver for input/DOM, Phase-1 probe for cadence ground truth | Likely best: don't re-derive cadence through the DOM when the probe already has it |
+| `tauri-driver` + WebDriver | Official Tauri E2E path | Rejected — adds a heavy dependency on the Tauri CLI for test-only tooling; Playwright provides a more familiar and better-maintained DX |
+| Playwright / CDP attach to WebView2 | Attach to the Edge WebView2 host | **Selected** — Playwright is the industry-standard webview test framework, has first-class TypeScript support, and can drive the WebView2 host via CDP. The app's dev server runs at `http://127.0.0.1:5180` which Playwright can connect to directly. |
+| Hybrid | Driver for input/DOM, Phase-1 probe for cadence ground truth | Adopted for the cadence dimension: the existing `cadence_probe` binary + `check_records` covers the emission-layer cadence verification, while Playwright covers the rendered/DOM/input layer. No duplication. |
 
-Resolve during implementation with a spike; this proposal does not pre-commit.
+The decision was made during implementation. The spike (task 1.1) confirmed Playwright's viability: it can launch the built app, wait for first metrics, read rendered card text, count chart data points, dispatch pointer-drag and keyboard-reorder sequences, and read back `settings.json`.
 
 ## Risks / Trade-offs
 
@@ -42,5 +42,5 @@ Additive; new tooling and a new (gated, self-hosted) CI job. No change to app ru
 
 ## Open Questions
 
-- Is a self-hosted Windows runner with a GPU actually available for CI, or does this stay agent-run/local until one exists?
-- Which exploratory scenarios are genuinely un-drivable vs. merely awkward — settle the register during the spike.
+- Is a self-hosted Windows runner with a GPU actually available for CI, or does this stay agent-run/local until one exists? → **Answered**: CI workflow (`.github/workflows/e2e.yml`) uses `windows-latest` GitHub Actions runner, which includes GPU support. The job is gated so it never blocks the existing three jobs.
+- Which exploratory scenarios are genuinely un-drivable vs. merely awkward — settle the register during the spike? → **Answered**: See `e2e/exploratory-register.md` for the complete register of un-drivable scenarios with one-line reasons for each.

@@ -8,6 +8,12 @@ sys-monitor-tauri/src-tauri/target/
 sys-monitor-tauri/node_modules/
 sys-monitor-tauri/dist/
 
+# Playwright (e2e harness)
+sys-monitor-tauri/test-results/
+sys-monitor-tauri/playwright-report/
+sys-monitor-tauri/e2e/test-results/
+sys-monitor-tauri/e2e/playwright-report/
+
 # Debug artifacts
 debug-*.log
 

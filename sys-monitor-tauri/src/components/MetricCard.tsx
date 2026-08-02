@@ -37,6 +37,7 @@ interface Props {
 }
 
 export function MetricCard({
+  id,
   title,
   value,
   history,
@@ -204,6 +205,7 @@ export function MetricCard({
   return (
     <div
       className="metric-card"
+      data-testid={`metric-card-${id}`}
       style={{
         background: '#1e1e1e',
         borderRadius: 8,

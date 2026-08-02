@@ -415,6 +415,7 @@ export default function App() {
         >
       {metrics?.collectorError && (
         <div
+          data-testid="collector-error-banner"
           style={{
             background: 'rgba(231, 76, 60, 0.15)',
             border: '1px solid rgba(231, 76, 60, 0.7)',

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use sysinfo::{Disks, Networks, System};
 
 pub use crate::pdh::PdhHandles;
@@ -52,6 +53,15 @@ pub struct CollectorState {
     pub nvapi_initialized: bool,
     pub gpu_error_lock: OnceLock<()>,
     pub cpu_temp_error_lock: OnceLock<()>,
+    /// Cached WMI LUID→caption map for GPU classification. Building it runs
+    /// two WMI queries, so it is rebuilt only when needed (see
+    /// collector::gpu::should_rebuild_vendor_map), never per poll.
+    pub gpu_vendor_map: Option<HashMap<String, String>>,
+    /// When the cached GPU vendor map was last built (rebuild rate limiter).
+    pub gpu_vendor_map_last_build: Instant,
+    /// 1-second TTL cache for the CPU temperature WMI query — temps change
+    /// slowly, and the raw query is ~2x the collector's per-tick budget.
+    pub cpu_temp_cache: Option<(Instant, f64)>,
     #[cfg(feature = "nvml")]
     pub nvml: Option<nvml_wrapper::Nvml>,
 }
@@ -109,6 +119,12 @@ impl CollectorState {
             nvapi_initialized,
             gpu_error_lock: OnceLock::new(),
             cpu_temp_error_lock: OnceLock::new(),
+            // `gpu_vendor_map: None` means "never built" — the first poll
+            // builds it. `last_build` is initialised to the recent past so the
+            // very first rebuild isn't rate-limited.
+            gpu_vendor_map: None,
+            gpu_vendor_map_last_build: Instant::now(),
+            cpu_temp_cache: None,
             #[cfg(feature = "nvml")]
             nvml,
         }

@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { configDefaults } from "vitest/config";
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -22,5 +23,7 @@ export default defineConfig(async () => ({
   test: {
     environment: 'jsdom',
     globals: true,
+    // Playwright specs under e2e/ are run by `npm run e2e`, not by vitest.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 }));

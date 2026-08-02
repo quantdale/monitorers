@@ -3,7 +3,7 @@
 
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 use crate::collector::query_nvidia_gpu_temp;
-use crate::collector::{self, query_cpu_temp_c, query_gpu_utilization_pdh};
+use crate::collector::{self, query_cpu_temp_cached, query_gpu_utilization_pdh};
 use crate::state::{CollectorState, HistoryStore, RawPoll};
 use std::time::Instant;
 
@@ -34,7 +34,7 @@ impl SensorProvider for CpuSensorProvider {
     ) -> RawPoll {
         state.system.refresh_cpu_usage();
         let cpu_usage = state.system.global_cpu_usage().clamp(0.0, 100.0_f32) as f64;
-        let cpu_temp_c = query_cpu_temp_c(wmi_con);
+        let cpu_temp_c = query_cpu_temp_cached(&mut state.cpu_temp_cache, wmi_con);
         if cpu_temp_c.is_none() {
             state.cpu_temp_error_lock.get_or_init(|| {
                 eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
@@ -67,7 +67,13 @@ impl SensorProvider for GpuSensorProvider {
         wmi_con: Option<&wmi::WMIConnection>,
     ) -> RawPoll {
         let _ = collector::collect_pdh(state);
-        let gpu_updates = query_gpu_utilization_pdh(&state.pdh, wmi_con, &state.gpu_error_lock);
+        let gpu_updates = query_gpu_utilization_pdh(
+            &state.pdh,
+            wmi_con,
+            &state.gpu_error_lock,
+            &mut state.gpu_vendor_map,
+            &mut state.gpu_vendor_map_last_build,
+        );
 
         #[cfg(feature = "nvml")]
         let (

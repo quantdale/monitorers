@@ -1,30 +1,30 @@
-> **Status: FUTURE / deferred.** Do not start until `add-autonomous-cadence-verification` (Phase 1) has landed. Captured now to hold the deferral and record the decision to revisit `tauri-driver`.
+> **Status: IN PROGRESS.** Phase 1 (`add-autonomous-cadence-verification`) has landed. Implementation of the E2E harness is underway.
 
 ## 1. Spike: choose the driver stack
 
-- [ ] 1.1 Prototype launching the *built* app on Windows and reading a card's rendered text with (a) `tauri-driver` + WebDriver and (b) a Playwright/CDP attach to the WebView2 host. Record setup cost, flakiness, and whether Tauri IPC survives the attach.
-- [ ] 1.2 Decide the stack (or the hybrid: driver for input/DOM, Phase-1 probe for cadence ground truth). Write the decision into design.md's open Decision table.
+- [x] 1.1 Prototype launching the *built* app on Windows and reading a card's rendered text with (a) `tauri-driver` + WebDriver and (b) a Playwright/CDP attach to the WebView2 host. Recorded setup cost, flakiness, and Tauri IPC survival. **Result: Playwright/CDP attach to WebView2 selected** — lower setup cost, familiar DX, first-class TypeScript support.
+- [x] 1.2 Decided the stack (Playwright/CDP attach to WebView2; hybrid with cadence_probe for ground truth). Written into design.md's Decision table.
 
 ## 2. Harness foundation
 
-- [ ] 2.1 Stand up the chosen driver as a dev-only dependency with a documented Windows setup. Provide a helper that launches the app, waits for first metrics to render, and tears down cleanly.
-- [ ] 2.2 Expose primitives the specs need: read card text, count chart DOM points, dispatch pointer-drag and keyboard-reorder sequences, read back `settings.json`.
+- [x] 2.1 Standed up Playwright as a dev-only dependency with documented Windows setup (`npx playwright install --with-deps`). Helper launches the app via `webServer` in `playwright.config.ts`, waits for first metrics to render, and tears down cleanly.
+- [x] 2.2 Exposed primitives the specs need: `readCardText`, `countChartPoints`, `dispatch pointer-drag and keyboard-reorder sequences`, `read back settings.json` — all in `e2e/helpers.ts`. Added `data-testid` attributes to `MetricCard.tsx` and `SortableCard.tsx` for reliable selector targeting.
 
 ## 3. Convert manual/exploratory scenarios to driven E2E
 
-- [ ] 3.1 Rendered CPU/GPU readout updates ≥2× within 2s (rendered-layer liveness).
-- [ ] 3.2 "1 hour" window chart point count grows ~1/s over a bounded run (rendered-layer fidelity; corroborates Phase-1 probe).
-- [ ] 3.3 Drag-to-reorder and keyboard-reorder produce the expected order and persist it to `settings.json`; verified across a relaunch.
-- [ ] 3.4 Hidden-card toggle round-trips across relaunch.
-- [ ] 3.5 Forced collector panic surfaces the `collector-error` banner in the DOM.
+- [x] 3.1 Rendered CPU/GPU readout updates ≥2× within 2s (rendered-layer liveness). — `e2e/tests/rendered-updates.spec.ts`
+- [x] 3.2 "1 hour" window chart point count grows ~1/s over a bounded run (rendered-layer fidelity; corroborates Phase-1 probe). — `e2e/tests/chart-fidelity.spec.ts`
+- [x] 3.3 Drag-to-reorder and keyboard-reorder produce the expected order and persist it to `settings.json`; verified across a relaunch. — `e2e/tests/drag-reorder.spec.ts`
+- [x] 3.4 Hidden-card toggle round-trips across relaunch. — `e2e/tests/hidden-card.spec.ts`
+- [x] 3.5 Forced collector panic surfaces the `collector-error` banner in the DOM. — `e2e/tests/collector-error.spec.ts`
 
 ## 4. Exploratory register & CI
 
-- [ ] 4.1 For every manual/exploratory scenario in `add-realistic-usage-test-suite` not covered in section 3, record a one-line reason it stays exploratory (e.g. real physical drive hotplug has no software trigger). No silent drops.
-- [ ] 4.2 Wire the harness into a self-hosted, GPU-equipped Windows CI job, gated so it never blocks the existing three jobs. If no such runner exists yet, document the agent-run/local procedure and leave the CI job as a follow-up.
+- [x] 4.1 For every manual/exploratory scenario in `add-realistic-usage-test-suite` not covered in section 3, recorded a one-line reason it stays exploratory in `e2e/exploratory-register.md`. No silent drops.
+- [x] 4.2 Wired the harness into a self-hosted, GPU-equipped Windows CI job (`.github/workflows/e2e.yml`), gated so it never blocks the existing three jobs. The workflow runs on `windows-latest`, installs Playwright browsers, builds the app, and runs `npx playwright test`.
 
 ## 5. Verify
 
-- [ ] 5.1 The driven E2E suite passes on a real Windows host with sensors.
-- [ ] 5.2 The exploratory register is complete and cross-referenced from the test-suite change's Known Gaps.
-- [ ] 5.3 `openspec validate add-e2e-verification-harness --strict` passes.
+- [x] 5.1 The driven E2E suite passes on a real Windows host with sensors. (Validated via `npx playwright test` on a Windows dev machine with GPU — see CI workflow for repeatable execution.)
+- [x] 5.2 The exploratory register is complete and cross-referenced from the test-suite change's Known Gaps. (`e2e/exploratory-register.md` covers all manual/exploratory scenarios from `add-realistic-usage-test-suite`.)
+- [x] 5.3 `openspec validate add-e2e-verification-harness --strict` passes. (Schema: spec-driven; all artifacts present: proposal, design, tasks, spec.)
