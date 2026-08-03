@@ -1,34 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { downsample, historyMinMax, gpuId } from './utils';
-
-// --- downsample ---
-
-describe('downsample', () => {
-  it('returns same array when empty', () => {
-    expect(downsample([], 300)).toEqual([]);
-  });
-
-  it('returns same array when at or under limit', () => {
-    expect(downsample([1, 2, 3], 300)).toEqual([1, 2, 3]);
-    expect(downsample([1, 2, 3], 3)).toEqual([1, 2, 3]);
-  });
-
-  it('over limit — result length at most maxPoints+1 and ends with last value', () => {
-    const result = downsample(Array.from({ length: 600 }, (_, i) => i), 300);
-    expect(result.length).toBeLessThanOrEqual(301);
-    expect(result[result.length - 1]).toBe(599);
-  });
-
-  it('always includes last element', () => {
-    const arr = [1, 2, 3, 4, 5];
-    const r = downsample(arr, 2);
-    expect(r[r.length - 1]).toBe(5);
-  });
-
-  it('stride correctness — 6 items, max 3 → [0, 2, 4, 5]', () => {
-    expect(downsample([0, 1, 2, 3, 4, 5], 3)).toEqual([0, 2, 4, 5]);
-  });
-});
+import { historyMinMax, gpuId } from './utils';
 
 // --- historyMinMax ---
 

@@ -34,6 +34,14 @@ test.describe('chart fidelity', () => {
     await page.getByRole('combobox').selectOption('600');
     await page.waitForTimeout(300); // let the re-seeded history render
 
+    // The mock seed sits exactly at the chart's 300-point rendering cap, so
+    // the first live commit crosses it and stride-sampling resamples the
+    // chart down to ~151 points. Wait for that boundary to settle before
+    // measuring, or the "grows" assertion sees a resample, not growth.
+    // chartPointCount counts path commands (~2 per point): the passthrough
+    // regime reads ~610, the stride regime ~310.
+    await expect.poll(async () => chartPointCount(page, 'cpu'), { timeout: 10_000 }).toBeLessThan(400);
+
     await assertChartGrowth(page, 'cpu', 5);
   });
 });

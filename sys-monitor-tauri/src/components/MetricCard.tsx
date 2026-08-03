@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
+import { computeChartPoints } from '../chartPoints';
 
 const MAX_CHART_POINTS = 300;
 
@@ -55,43 +56,14 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
-  const ts = timestamps ?? [];
-
-  let data: { t: number; v: number; v2?: number }[] = [];
-  if (hasChart) {
-    const src = history!;
-    const len = src.length;
-    const addPoint = (idx: number) => {
-      const rawV = src[idx];
-      const v = rawV == null || Number.isNaN(rawV) ? 0 : rawV;
-      const vClamped = Math.max(0, v);
-      let v2: number | undefined;
-      if (hasSecondary && secondaryHistory) {
-        const rawV2 = secondaryHistory[idx];
-        const v2Sanitised = rawV2 == null || Number.isNaN(rawV2) ? 0 : rawV2;
-        v2 = Math.max(0, v2Sanitised);
-      }
-      const t = ts[idx] ?? idx;
-      data.push({ t, v: vClamped, v2 });
-    };
-
-    if (len === 1) {
-      addPoint(0);
-    } else if (len <= MAX_CHART_POINTS) {
-      for (let i = 0; i < len; i += 1) {
-        addPoint(i);
-      }
-    } else {
-      const stride = Math.ceil(len / MAX_CHART_POINTS);
-      for (let i = 0; i < len; i += stride) {
-        addPoint(i);
-      }
-      const lastIndex = len - 1;
-      if ((data.length === 0 && len > 0) || data[data.length - 1].t !== (ts[lastIndex] ?? lastIndex)) {
-        addPoint(lastIndex);
-      }
-    }
-  }
+  const data = hasChart
+    ? computeChartPoints({
+        history: history!,
+        timestamps,
+        secondaryHistory: hasSecondary ? secondaryHistory : undefined,
+        maxPoints: MAX_CHART_POINTS,
+      })
+    : [];
 
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 

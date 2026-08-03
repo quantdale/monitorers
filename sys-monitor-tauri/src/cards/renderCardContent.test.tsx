@@ -1,0 +1,146 @@
+import React from 'react';
+import { describe, it, expect, afterEach } from 'vitest';
+import { createRoot, type Root } from 'react-dom/client';
+import { act } from 'react-dom/test-utils';
+import { DndContext } from '@dnd-kit/core';
+import { renderCardContent } from './renderCardContent';
+import type { SlicedHistory } from '../hooks/useMetrics';
+
+function sliced(overrides: Partial<SlicedHistory> = {}): SlicedHistory {
+  return {
+    timestamps: [1000, 2000],
+    cpu: [10, 20],
+    latestCpu: 12.345,
+    cpu_name: 'Intel Core i7',
+    cpu_temp_c: 52,
+    mem: [80, 81],
+    mem_used_gb: 8.4,
+    mem_total_gb: 16,
+    disks: [],
+    net_recv: [0, 1200],
+    net_sent: [0, 500],
+    gpus: [],
+    nvidia_power_w: null,
+    nvidia_mem_used_mb: null,
+    nvidia_mem_total_mb: null,
+    nvidia_fan_speed_pct: null,
+    nvidia_clock_mhz: null,
+    collectorError: null,
+    ...overrides,
+  };
+}
+
+describe('renderCardContent', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+  });
+
+  function mount(node: React.ReactNode): HTMLDivElement {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    act(() => {
+      root = createRoot(container);
+      root.render(<DndContext>{node}</DndContext>);
+    });
+    return container;
+  }
+
+  it('cpu card — title, live %, temperature badge', () => {
+    const c = mount(
+      renderCardContent({ id: 'cpu', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Intel Core i7');
+    expect(c.textContent).toContain('12.3%');
+    expect(c.textContent).toContain('52 °C');
+  });
+
+  it('memory card — title, %, used/total GB badge', () => {
+    const c = mount(
+      renderCardContent({ id: 'memory', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Memory');
+    expect(c.textContent).toContain('81.0%');
+    expect(c.textContent).toContain('8.4 / 16.0 GB');
+  });
+
+  it('disk card — key, active time, throughput, response, temperature', () => {
+    const m = sliced({
+      disks: [{ key: 'C:', values: [10, 42], read_mb_s: 10, write_mb_s: 5, avg_response_ms: 3.2, temp_c: 38 }],
+    });
+    const c = mount(
+      renderCardContent({ id: 'disk_C:', metrics: m, viewMode: 'default', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Disk C:');
+    expect(c.textContent).toContain('Active Time 42.0%');
+    expect(c.textContent).toContain('R: 10.0 MB/s · W: 5.0 MB/s');
+    expect(c.textContent).toContain('Avg: 3.2 ms');
+    expect(c.textContent).toContain('38 °C');
+  });
+
+  it('network card — dual throughput badges', () => {
+    const c = mount(
+      renderCardContent({ id: 'network', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Network');
+    expect(c.textContent).toContain('↓ 1.2 MB/s');
+    expect(c.textContent).toContain('↑ 500 KB/s');
+  });
+
+  it('gpu card with nvidia data — vendor badge, temp, power/vram/fan/clock', () => {
+    const m = sliced({
+      gpus: [{ name: 'GeForce RTX 4050', vendor: 'nvidia', values: [40, 45], temp_c: 65, latest: 45 }],
+      nvidia_power_w: 250,
+      nvidia_mem_used_mb: 2048,
+      nvidia_mem_total_mb: 8192,
+      nvidia_fan_speed_pct: 55,
+      nvidia_clock_mhz: 1600,
+    });
+    const c = mount(
+      renderCardContent({ id: 'gpu_geforce_rtx_4050', metrics: m, viewMode: 'default', hasNvidiaData: true })
+    );
+    expect(c.textContent).toContain('GeForce RTX 4050');
+    expect(c.textContent).toContain('45.0%');
+    expect(c.textContent).toContain('NVIDIA');
+    expect(c.textContent).toContain('65.0°C');
+    expect(c.textContent).toContain('250.0 W');
+    expect(c.textContent).toContain('2048 / 8192 MB');
+    expect(c.textContent).toContain('55%');
+    expect(c.textContent).toContain('1600 MHz');
+  });
+
+  it('gpu card without nvidia data — no NVML badges', () => {
+    const m = sliced({
+      gpus: [{ name: 'Intel(R) Iris Xe Graphics', vendor: 'intel', values: [5], temp_c: null, latest: 5 }],
+    });
+    const c = mount(
+      renderCardContent({ id: 'gpu_intel_r_iris_xe_graphics', metrics: m, viewMode: 'default', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Iris Xe Graphics');
+    expect(c.textContent).toContain('Intel');
+    expect(c.textContent).not.toContain('MHz');
+    expect(c.textContent).not.toContain('MB');
+  });
+
+  it('list view — min/max line from history', () => {
+    const c = mount(
+      renderCardContent({ id: 'cpu', metrics: sliced(), viewMode: 'list', hasNvidiaData: false })
+    );
+    expect(c.textContent).toContain('Min: 10.0%  Max: 20.0%');
+  });
+
+  it('unknown id → null', () => {
+    expect(renderCardContent({ id: 'bogus', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();
+  });
+
+  it('disk id not in current metrics → null', () => {
+    expect(renderCardContent({ id: 'disk_D:', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();
+  });
+
+  it('gpu id not in current metrics → null', () => {
+    expect(renderCardContent({ id: 'gpu_intel_r_iris_xe_graphics', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();
+  });
+});
