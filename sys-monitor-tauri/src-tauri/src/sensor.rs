@@ -66,7 +66,7 @@ impl SensorProvider for GpuSensorProvider {
         state: &mut CollectorState,
         wmi_con: Option<&wmi::WMIConnection>,
     ) -> RawPoll {
-        let _ = collector::collect_pdh(state);
+        let pdh_ok = collector::collect_pdh(state);
         let gpu_updates = query_gpu_utilization_pdh(
             &state.pdh,
             wmi_con,
@@ -106,6 +106,7 @@ impl SensorProvider for GpuSensorProvider {
         RawPoll {
             gpu_updates,
             nvidia_temp,
+            pdh_ok,
             #[cfg(feature = "nvml")]
             nvidia_power_w,
             #[cfg(feature = "nvml")]

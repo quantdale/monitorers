@@ -8,6 +8,13 @@ import { isTauri } from '../utils';
 // mechanism crosses the IPC boundary between Rust and TypeScript).
 const MAX_HISTORY = 3600;
 
+/**
+ * How long (ms) a disk/GPU card is retained on the frontend after its last
+ * appearance in a live snapshot. Mirrors the backend's PRUNE_MISS_THRESHOLD
+ * (4 consecutive missing full ticks ≈ 4s); slightly longer absorbs clock skew.
+ */
+const PRUNE_GRACE_MS = 5000;
+
 export const EXPECTED_SCHEMA_VERSION = 3;
 
 export function assertSchemaVersion(actual: number, payloadName: string): void {
@@ -24,6 +31,7 @@ export function assertSchemaVersion(actual: number, payloadName: string): void {
 function mockHistoryPayload(): HistoryPayload {
   const n = 300;
   const t = (i: number) => (i / n) * Math.PI * 4;
+  const now = Date.now();
   return {
     schema_version: 3,
     timestamps: Array.from({ length: n }, (_, i) => i * 1000),
@@ -32,14 +40,14 @@ function mockHistoryPayload(): HistoryPayload {
     cpu_temp_c: 52,
     mem: Array.from({ length: n }, (_, i) => 50 + 35 * Math.sin(t(i) + 0.5)),
     disks: [
-      { key: 'C:', values: Array.from({ length: n }, (_, i) => Math.max(0, 10 + 30 * Math.sin(t(i) + 1))), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
-      { key: 'D:', values: Array.from({ length: n }, (_, i) => Math.max(0, 5 + 15 * Math.sin(t(i) + 2))), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
+      { key: 'C:', values: Array.from({ length: n }, (_, i) => Math.max(0, 10 + 30 * Math.sin(t(i) + 1))), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42, last_seen_ts: now },
+      { key: 'D:', values: Array.from({ length: n }, (_, i) => Math.max(0, 5 + 15 * Math.sin(t(i) + 2))), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38, last_seen_ts: now },
     ],
     net_recv: Array.from({ length: n }, (_, i) => 100 + 200 * Math.sin(t(i) + 2.5)),
     net_sent: Array.from({ length: n }, (_, i) => 50 + 150 * Math.sin(t(i) + 3)),
     gpus: [
-      { name: 'UHD Graphics', values: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)), temp_c: 48 },
-      { name: 'RTX 4050', values: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)), temp_c: 55 },
+      { name: 'UHD Graphics', values: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)), temp_c: 48, last_seen_ts: now },
+      { name: 'RTX 4050', values: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)), temp_c: 55, last_seen_ts: now },
     ],
   };
 }
@@ -88,29 +96,63 @@ export function appendToHistory(arr: number[], value: number, maxLen: number): n
   return next;
 }
 
+/** Pad a values array with NaN up to `timestampsLength - 1` so the next
+ *  appended point lands on the same index as the newest global timestamp.
+ *  New/mid-session cards then render at their true x-position instead of the
+ *  left edge of the window (NaN is clamped to 0 by render and draws nothing
+ *  before the card's first real point). */
+function padToTimestamps(
+  values: number[],
+  timestampsLength: number,
+  maxLen: number
+): number[] {
+  const pad = Math.min(maxLen - 1, Math.max(0, timestampsLength - 1 - values.length));
+  if (pad === 0) return values;
+  return [...values, ...Array(pad).fill(NaN)];
+}
+
 export function mergeDiskHistory(
   prev: DiskHistory[],
-  snapshotDisks: MetricsSnapshot['disks']
+  snapshotDisks: MetricsSnapshot['disks'],
+  timestampsLength: number
 ): DiskHistory[] {
-  // Append new values to existing disk histories.
-  // If a disk key appears in snapshot but not in history, add it.
-  const updated = prev.map((d) => {
-    const update = snapshotDisks.find((x) => x.key === d.key);
-    if (!update) return d;
-    return {
-      key: d.key,
-      values: appendToHistory(d.values, update.active, MAX_HISTORY),
-      read_mb_s: update.read_mb_s,
-      write_mb_s: update.write_mb_s,
-      avg_response_ms: update.avg_response_ms,
-      temp_c: update.temp_c ?? null,
-    };
-  });
+  const now = Date.now();
+  const updated: DiskHistory[] = [];
 
-  // Add newly discovered disks.
+  // Existing disks: append when present; keep (frozen) while a ghost within the
+  // grace window; drop once a ghost has been absent past PRUNE_GRACE_MS.
+  for (const d of prev) {
+    const update = snapshotDisks.find((x) => x.key === d.key);
+    if (update) {
+      updated.push({
+        key: d.key,
+        values: appendToHistory(padToTimestamps(d.values, timestampsLength, MAX_HISTORY), update.active, MAX_HISTORY),
+        read_mb_s: update.read_mb_s,
+        write_mb_s: update.write_mb_s,
+        avg_response_ms: update.avg_response_ms,
+        temp_c: update.temp_c ?? null,
+        last_seen_ts: now,
+      });
+    } else if ((now - (d.last_seen_ts ?? now)) <= PRUNE_GRACE_MS) {
+      // Ghost within grace window: keep frozen (values unchanged).
+      updated.push(d);
+    }
+    // Otherwise the ghost is pruned (card removed).
+  }
+
+  // Newly discovered disks: NaN-pad to align with the global timestamps array,
+  // then append the first value.
   for (const snap of snapshotDisks) {
     if (!updated.find((d) => d.key === snap.key)) {
-      updated.push({ key: snap.key, values: [snap.active], read_mb_s: snap.read_mb_s, write_mb_s: snap.write_mb_s, avg_response_ms: snap.avg_response_ms, temp_c: snap.temp_c ?? null });
+      updated.push({
+        key: snap.key,
+        values: appendToHistory(Array(Math.max(0, timestampsLength - 1)).fill(NaN), snap.active, MAX_HISTORY),
+        read_mb_s: snap.read_mb_s,
+        write_mb_s: snap.write_mb_s,
+        avg_response_ms: snap.avg_response_ms,
+        temp_c: snap.temp_c ?? null,
+        last_seen_ts: now,
+      });
     }
   }
 
@@ -136,22 +178,37 @@ export function mergeLatestGpu(
 
 export function mergeGpuHistory(
   prev: GpuHistory[],
-  snapshotGpus: MetricsSnapshot['gpus']
+  snapshotGpus: MetricsSnapshot['gpus'],
+  timestampsLength: number
 ): GpuHistory[] {
-  const updated = prev.map((g) => {
+  const now = Date.now();
+  const updated: GpuHistory[] = [];
+
+  for (const g of prev) {
     const update = snapshotGpus.find((x) => x.name === g.name);
-    if (!update) return g;
-    return {
-      name: g.name,
-      values: appendToHistory(g.values, update.util, MAX_HISTORY),
-      temp_c: update.temp_c ?? g.temp_c ?? null,
-    };
-  });
-  for (const snap of snapshotGpus) {
-    if (!updated.find((g) => g.name === snap.name)) {
-      updated.push({ name: snap.name, values: [snap.util], temp_c: snap.temp_c ?? null });
+    if (update) {
+      updated.push({
+        name: g.name,
+        values: appendToHistory(padToTimestamps(g.values, timestampsLength, MAX_HISTORY), update.util, MAX_HISTORY),
+        temp_c: update.temp_c ?? g.temp_c ?? null,
+        last_seen_ts: now,
+      });
+    } else if ((now - (g.last_seen_ts ?? now)) <= PRUNE_GRACE_MS) {
+      updated.push(g);
     }
   }
+
+  for (const snap of snapshotGpus) {
+    if (!updated.find((g) => g.name === snap.name)) {
+      updated.push({
+        name: snap.name,
+        values: appendToHistory(Array(Math.max(0, timestampsLength - 1)).fill(NaN), snap.util, MAX_HISTORY),
+        temp_c: snap.temp_c ?? null,
+        last_seen_ts: now,
+      });
+    }
+  }
+
   return updated;
 }
 
@@ -243,6 +300,7 @@ function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
     // instead of hanging on the load error (METRICS-001).
     if (!prev) return seedHistoryFromSnapshot(snap);
     const now = Date.now();
+    const newTsLen = Math.min(MAX_HISTORY, prev.timestamps.length + 1);
     return {
       schema_version: prev.schema_version,
       timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
@@ -250,10 +308,10 @@ function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
       cpu_name: snap.cpu_name ?? prev.cpu_name,
       cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
       mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
-      disks: mergeDiskHistory(prev.disks, snap.disks),
+      disks: mergeDiskHistory(prev.disks, snap.disks, newTsLen),
       net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
       net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
-      gpus: mergeGpuHistory(prev.gpus, snap.gpus),
+      gpus: mergeGpuHistory(prev.gpus, snap.gpus, newTsLen),
     };
   });
 }
@@ -273,10 +331,10 @@ export function seedHistoryFromSnapshot(snap: MetricsSnapshot): HistoryPayload {
     cpu_name: snap.cpu_name ?? 'CPU',
     cpu_temp_c: snap.cpu_temp_c ?? null,
     mem: [snap.mem],
-    disks: mergeDiskHistory([], snap.disks),
+    disks: mergeDiskHistory([], snap.disks, 1),
     net_recv: [snap.net_recv_kb],
     net_sent: [snap.net_sent_kb],
-    gpus: mergeGpuHistory([], snap.gpus),
+    gpus: mergeGpuHistory([], snap.gpus, 1),
   };
 }
 
@@ -315,9 +373,14 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
         .then((payload) => {
           assertSchemaVersion(payload.schema_version, 'HistoryPayload');
+          const now = Date.now();
           setHistory({
             ...payload,
             timestamps: payload.timestamps ?? [],
+            // Backend payloads carry no last_seen_ts; seed it so ghost pruning
+            // has a baseline (cards are "present" at load time).
+            disks: (payload.disks ?? []).map((d) => ({ ...d, last_seen_ts: now })),
+            gpus: (payload.gpus ?? []).map((g) => ({ ...g, last_seen_ts: now })),
           });
         })
         .catch((err) => {

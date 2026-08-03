@@ -298,6 +298,12 @@ pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 /// Also refreshes `gpu_latest` so it's never stale relative to the value just
 /// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    // On PDH failure, freeze GPU history and latest at last-known values.
+    // Do not commit stale/zero readings from a failed PdhCollectQueryData.
+    if !poll.pdh_ok {
+        return;
+    }
+
     let mut existing: HashMap<String, (String, VecDeque<f64>)> = store
         .gpu_entries
         .drain(..)
@@ -370,6 +376,21 @@ pub fn commit_cpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
 
 /// Commit only GPU scalar fields (no history push) for high-frequency snapshots.
 pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    // On PDH failure, freeze gpu_latest at last-known values.
+    // Do not commit stale/zero readings from a failed PdhCollectQueryData.
+    if !poll.pdh_ok {
+        store.nvidia_temp = poll.nvidia_temp;
+        #[cfg(feature = "nvml")]
+        {
+            store.nvidia_power_w = poll.nvidia_power_w;
+            store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
+            store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
+            store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
+            store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
+        }
+        return;
+    }
+
     // Refresh only keys present in this poll; ghost keys inside the prune
     // grace window keep their last-known util, mirroring commit_gpu's merge
     // (otherwise their latest value vanishes on the 3 non-full ticks between
@@ -401,34 +422,37 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
     store.mem_total_gb = poll.mem_total_gb;
     push_history(&mut store.net_recv_history, poll.net_recv_kb_s, MAX_HISTORY);
     push_history(&mut store.net_sent_history, poll.net_sent_kb_s, MAX_HISTORY);
-    for disk_key in &poll.disk_display_order {
-        if !store.disk_active_histories.contains_key(disk_key) {
-            store.disk_display_order.push(disk_key.clone());
-            store
-                .disk_active_histories
-                .insert(disk_key.clone(), VecDeque::with_capacity(MAX_HISTORY));
-        }
-        if let (Some(history), Some(&pct)) = (
-            store.disk_active_histories.get_mut(disk_key),
-            poll.disk_active.get(disk_key),
-        ) {
-            push_history(history, pct, MAX_HISTORY);
-        }
-    }
-    store.disk_read_mb_s = poll.disk_read_mb_s.clone();
-    store.disk_write_mb_s = poll.disk_write_mb_s.clone();
-    store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
 
-    // Ghost pruning with a grace window. `poll_disk` rebuilds the display
-    // order from the live PDH instance list every full tick, so a disk absent
-    // for PRUNE_MISS_THRESHOLD consecutive full polls is gone (hot-unplug) —
-    // without this, an unplugged disk's snapshot entry, history and card kept
-    // freezing forever at their last reading. Pruning only runs when the tick
-    // itself had a successful PdhCollectQueryData (`poll.pdh_ok`): on a
-    // PDH-failed tick an empty display order means "PDH unavailable", not
-    // "every disk vanished", and pruning then would needlessly churn disk
-    // card order via the frontend's append-on-reappear merge.
+    // On PDH failure, freeze disk active histories and throughput maps at last-known values.
+    // Do not commit empty maps from a failed PdhCollectQueryData.
     if poll.pdh_ok {
+        for disk_key in &poll.disk_display_order {
+            if !store.disk_active_histories.contains_key(disk_key) {
+                store.disk_display_order.push(disk_key.clone());
+                store
+                    .disk_active_histories
+                    .insert(disk_key.clone(), VecDeque::with_capacity(MAX_HISTORY));
+            }
+            if let (Some(history), Some(&pct)) = (
+                store.disk_active_histories.get_mut(disk_key),
+                poll.disk_active.get(disk_key),
+            ) {
+                push_history(history, pct, MAX_HISTORY);
+            }
+        }
+        store.disk_read_mb_s = poll.disk_read_mb_s.clone();
+        store.disk_write_mb_s = poll.disk_write_mb_s.clone();
+        store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
+
+        // Ghost pruning with a grace window. `poll_disk` rebuilds the display
+        // order from the live PDH instance list every full tick, so a disk absent
+        // for PRUNE_MISS_THRESHOLD consecutive full polls is gone (hot-unplug) —
+        // without this, an unplugged disk's snapshot entry, history and card kept
+        // freezing forever at their last reading. Pruning only runs when the tick
+        // itself had a successful PdhCollectQueryData (`poll.pdh_ok`): on a
+        // PDH-failed tick an empty display order means "PDH unavailable", not
+        // "every disk vanished", and pruning then would needlessly churn disk
+        // card order via the frontend's append-on-reappear merge.
         let present: HashSet<&str> = poll
             .disk_display_order
             .iter()
@@ -575,6 +599,7 @@ mod tests {
     fn test_commit_gpu_scalar_updates_latest_not_history() {
         let mut store = crate::state::HistoryStore::new("test");
         let poll = crate::state::RawPoll {
+            pdh_ok: true,
             gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 150.0)],
             nvidia_temp: Some(70.0),
             ..Default::default()
@@ -593,6 +618,7 @@ mod tests {
         let mut store = crate::state::HistoryStore::new("test");
         store.gpu_latest.insert("gpu0".to_string(), 42.0);
         let poll = crate::state::RawPoll {
+            pdh_ok: true,
             gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), 50.0)],
             ..Default::default()
         };
@@ -623,6 +649,7 @@ mod tests {
         let mut store = crate::state::HistoryStore::new("test");
         store.gpu_latest.insert("gpu0".to_string(), 999.0); // stale value
         let poll = crate::state::RawPoll {
+            pdh_ok: true,
             gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 65.0)],
             ..Default::default()
         };
@@ -897,5 +924,117 @@ mod tests {
         // Both ring buffers dropped the same oldest 50 entries in lockstep.
         assert_eq!(store.timestamps.front().copied(), Some(50));
         assert_eq!(store.cpu_history.front().copied(), Some(50.0));
+    }
+
+    // --- PDH failure gating (GPU/disk freeze on pdh_ok == false) ---
+
+    #[test]
+    fn test_commit_gpu_freezes_on_pdh_failure() {
+        let mut store = crate::state::HistoryStore::new("test");
+        // First, a successful poll establishes baseline
+        let good_poll = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 45.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &good_poll);
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&45.0));
+        let (_, _, hist) = &store.gpu_entries[0];
+        assert_eq!(hist.back().copied(), Some(45.0));
+
+        // Now a PDH-failed tick with a different value (should be ignored)
+        let bad_poll = crate::state::RawPoll {
+            pdh_ok: false,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &bad_poll);
+        // History and latest must remain at the last good value (45.0)
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&45.0));
+        let (_, _, hist) = &store.gpu_entries[0];
+        assert_eq!(
+            hist.back().copied(),
+            Some(45.0),
+            "GPU history must freeze on PDH failure"
+        );
+        assert_eq!(hist.len(), 1, "No new history entry on PDH failure");
+    }
+
+    #[test]
+    fn test_commit_disk_network_freezes_throughput_on_pdh_failure() {
+        let mut store = crate::state::HistoryStore::new("test");
+        // First, a successful poll establishes baseline
+        let mut good_poll = crate::state::RawPoll {
+            pdh_ok: true,
+            disk_display_order: vec!["C:".to_string()],
+            ..Default::default()
+        };
+        good_poll.disk_active.insert("C:".to_string(), 10.0);
+        good_poll.disk_read_mb_s.insert("C:".to_string(), 12.5);
+        good_poll.disk_write_mb_s.insert("C:".to_string(), 8.2);
+        good_poll.disk_avg_response_ms.insert("C:".to_string(), 3.2);
+        commit_disk_network(&mut store, &good_poll);
+        assert_eq!(store.disk_read_mb_s.get("C:"), Some(&12.5));
+        assert_eq!(store.disk_write_mb_s.get("C:"), Some(&8.2));
+        assert_eq!(store.disk_avg_response_ms.get("C:"), Some(&3.2));
+
+        // Now a PDH-failed tick with empty maps (should be ignored)
+        let bad_poll = crate::state::RawPoll {
+            pdh_ok: false,
+            ..Default::default()
+        };
+        commit_disk_network(&mut store, &bad_poll);
+        // Throughput maps must remain at last good values
+        assert_eq!(
+            store.disk_read_mb_s.get("C:"),
+            Some(&12.5),
+            "Disk read must freeze on PDH failure"
+        );
+        assert_eq!(
+            store.disk_write_mb_s.get("C:"),
+            Some(&8.2),
+            "Disk write must freeze on PDH failure"
+        );
+        assert_eq!(
+            store.disk_avg_response_ms.get("C:"),
+            Some(&3.2),
+            "Disk avg response must freeze on PDH failure"
+        );
+    }
+
+    #[test]
+    fn test_commit_gpu_scalar_freezes_on_pdh_failure() {
+        let mut store = crate::state::HistoryStore::new("test");
+        store.gpu_latest.insert("gpu0".to_string(), 45.0);
+
+        // PDH-failed scalar poll
+        let bad_poll = crate::state::RawPoll {
+            pdh_ok: false,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            ..Default::default()
+        };
+        commit_gpu_scalar(&mut store, &bad_poll);
+        // gpu_latest must remain at last good value
+        assert_eq!(
+            store.gpu_latest.get("gpu0"),
+            Some(&45.0),
+            "GPU scalar must freeze on PDH failure"
+        );
+    }
+
+    #[test]
+    fn test_commit_gpu_scalar_updates_on_pdh_success() {
+        let mut store = crate::state::HistoryStore::new("test");
+        store.gpu_latest.insert("gpu0".to_string(), 45.0);
+
+        // PDH-successful scalar poll with new value
+        let good_poll = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 60.0)],
+            ..Default::default()
+        };
+        commit_gpu_scalar(&mut store, &good_poll);
+        // gpu_latest must update to new value
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&60.0));
     }
 }

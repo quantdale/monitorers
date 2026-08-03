@@ -43,12 +43,26 @@ export interface DiskHistory {
   write_mb_s: number;
   avg_response_ms: number;
   temp_c?: number | null;
+  /**
+   * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
+   * this disk was last seen in a live snapshot. Not part of the Rust IPC
+   * payload (which has no such field); seeded on load and updated by the
+   * merge functions. Optional so backend payloads remain valid.
+   */
+  last_seen_ts?: number;
 }
 
 export interface GpuHistory {
   name: string;
   values: number[];
   temp_c?: number | null;
+  /**
+   * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
+   * this GPU was last seen in a live snapshot. Not part of the Rust IPC
+   * payload (which has no such field); seeded on load and updated by the
+   * merge functions. Optional so backend payloads remain valid.
+   */
+  last_seen_ts?: number;
 }
 
 export interface HistoryPayload {
