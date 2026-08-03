@@ -24,7 +24,6 @@ export function TimeRangeSelector({ options, value, onChange }: Props) {
         fontSize: 12,
         fontWeight: 600,
         fontFamily: 'inherit',
-        outline: 'none',
       }}
     >
       {options.map((opt) => (

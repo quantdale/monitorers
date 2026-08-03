@@ -18,7 +18,7 @@ pub use snapshot::{
     SCHEMA_VERSION,
 };
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCollectQueryData, PdhOpenQueryW, PDH_HCOUNTER, PDH_HQUERY,
 };
@@ -28,6 +28,13 @@ use windows::Win32::System::Performance::{
 // Keep in sync with `useMetrics.ts`'s `MAX_HISTORY` (no shared-constant mechanism
 // crosses the IPC boundary between Rust and TypeScript).
 const MAX_HISTORY: usize = crate::state::HISTORY_CAPACITY;
+
+/// Consecutive full ticks a disk/GPU must be absent from the live poll before
+/// it is pruned from the history store (~4s at the 1Hz full-tick cadence).
+/// Absorbs transient PDH/WMI hiccups: hardware that reappears resets its
+/// counter, so a blip can never accumulate toward a false prune (which would
+/// reshuffle card order via the frontend's append-on-reappear merge).
+const PRUNE_MISS_THRESHOLD: u32 = 4;
 
 pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max_len: usize) {
     deque.push_back(value);
@@ -200,7 +207,6 @@ pub fn poll(
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
     let pdh_collected_ok = collect_pdh(collector);
-
     let (disk_active, disk_read_mb_s, disk_write_mb_s, disk_avg_response_ms, disk_display_order) =
         if pdh_collected_ok {
             disk::poll_disk(&mut collector.sysinfo_disks, &collector.pdh)
@@ -273,6 +279,7 @@ pub fn poll(
         disk_write_mb_s,
         disk_avg_response_ms,
         disk_display_order,
+        pdh_ok: pdh_collected_ok,
         net_recv_kb_s,
         net_sent_kb_s,
     }
@@ -291,27 +298,59 @@ pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 /// Also refreshes `gpu_latest` so it's never stale relative to the value just
 /// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    let mut existing: HashMap<String, VecDeque<f64>> = store
+    let mut existing: HashMap<String, (String, VecDeque<f64>)> = store
         .gpu_entries
         .drain(..)
-        .map(|(key, _, hist)| (key, hist))
+        .map(|(key, name, hist)| (key, (name, hist)))
         .collect();
-    store.gpu_entries = poll
-        .gpu_updates
-        .iter()
-        .map(|(key, display_name, util)| {
-            let mut hist = existing
-                .remove(key)
-                .unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
-            push_history(&mut hist, util.clamp(0.0, 100.0), MAX_HISTORY);
-            (key.clone(), display_name.clone(), hist)
-        })
-        .collect();
-    store.gpu_latest = poll
-        .gpu_updates
-        .iter()
-        .map(|(key, _, util)| (key.clone(), util.clamp(0.0, 100.0)))
-        .collect();
+
+    let mut next_entries: Vec<(String, String, VecDeque<f64>)> = Vec::new();
+    let mut next_latest: HashMap<String, f64> = HashMap::new();
+
+    // Keys present in this poll: fresh history append, miss counter reset.
+    for (key, display_name, util) in &poll.gpu_updates {
+        let util = util.clamp(0.0, 100.0);
+        let mut hist = existing
+            .remove(key)
+            .map(|(_, h)| h)
+            .unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
+        push_history(&mut hist, util, MAX_HISTORY);
+        next_entries.push((key.clone(), display_name.clone(), hist));
+        next_latest.insert(key.clone(), util);
+        store.gpu_miss_count.remove(key.as_str());
+    }
+
+    // Previously-known keys absent from this poll are ghosts. Keep them
+    // through a PRUNE_MISS_THRESHOLD grace window (history frozen, last-known
+    // util held) so a transient vendor-map/WMI blip cannot wipe GPU cards;
+    // drop them once the threshold is crossed (a caption leaving the vendor
+    // map for good, e.g. after a hot-plug rebuild). The gate on an empty poll
+    // is essential: empty gpu_updates means PDH or WMI was unavailable this
+    // tick — that is not evidence every GPU vanished, so ghosts are kept.
+    if !poll.gpu_updates.is_empty() {
+        for (key, (name, hist)) in existing {
+            let miss = store.gpu_miss_count.entry(key.clone()).or_insert(0);
+            *miss += 1;
+            if *miss >= PRUNE_MISS_THRESHOLD {
+                store.gpu_miss_count.remove(&key);
+            } else {
+                if let Some(v) = store.gpu_latest.get(&key) {
+                    next_latest.insert(key.clone(), *v);
+                }
+                next_entries.push((key, name, hist));
+            }
+        }
+    } else {
+        for (key, (name, hist)) in existing {
+            if let Some(v) = store.gpu_latest.get(&key) {
+                next_latest.insert(key.clone(), *v);
+            }
+            next_entries.push((key, name, hist));
+        }
+    }
+
+    store.gpu_entries = next_entries;
+    store.gpu_latest = next_latest;
     store.nvidia_temp = poll.nvidia_temp;
     #[cfg(feature = "nvml")]
     {
@@ -331,11 +370,15 @@ pub fn commit_cpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
 
 /// Commit only GPU scalar fields (no history push) for high-frequency snapshots.
 pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    store.gpu_latest = poll
-        .gpu_updates
-        .iter()
-        .map(|(key, _, util)| (key.clone(), util.clamp(0.0, 100.0)))
-        .collect();
+    // Refresh only keys present in this poll; ghost keys inside the prune
+    // grace window keep their last-known util, mirroring commit_gpu's merge
+    // (otherwise their latest value vanishes on the 3 non-full ticks between
+    // full polls, even though their history and entry are still live).
+    let mut next: HashMap<String, f64> = store.gpu_latest.clone();
+    for (key, _, util) in &poll.gpu_updates {
+        next.insert(key.clone(), util.clamp(0.0, 100.0));
+    }
+    store.gpu_latest = next;
     store.nvidia_temp = poll.nvidia_temp;
     #[cfg(feature = "nvml")]
     {
@@ -375,6 +418,48 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
     store.disk_read_mb_s = poll.disk_read_mb_s.clone();
     store.disk_write_mb_s = poll.disk_write_mb_s.clone();
     store.disk_avg_response_ms = poll.disk_avg_response_ms.clone();
+
+    // Ghost pruning with a grace window. `poll_disk` rebuilds the display
+    // order from the live PDH instance list every full tick, so a disk absent
+    // for PRUNE_MISS_THRESHOLD consecutive full polls is gone (hot-unplug) —
+    // without this, an unplugged disk's snapshot entry, history and card kept
+    // freezing forever at their last reading. Pruning only runs when the tick
+    // itself had a successful PdhCollectQueryData (`poll.pdh_ok`): on a
+    // PDH-failed tick an empty display order means "PDH unavailable", not
+    // "every disk vanished", and pruning then would needlessly churn disk
+    // card order via the frontend's append-on-reappear merge.
+    if poll.pdh_ok {
+        let present: HashSet<&str> = poll
+            .disk_display_order
+            .iter()
+            .map(|key| key.as_str())
+            .collect();
+        for disk_key in &store.disk_display_order {
+            if present.contains(disk_key.as_str()) {
+                store.disk_miss_count.remove(disk_key);
+            } else {
+                *store.disk_miss_count.entry(disk_key.clone()).or_insert(0) += 1;
+            }
+        }
+        let mut pruned: Vec<String> = Vec::new();
+        store.disk_miss_count.retain(|key, misses| {
+            if *misses >= PRUNE_MISS_THRESHOLD {
+                pruned.push(key.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if !pruned.is_empty() {
+            store.disk_display_order.retain(|key| !pruned.contains(key));
+            for key in &pruned {
+                store.disk_active_histories.remove(key);
+                store.disk_read_mb_s.remove(key);
+                store.disk_write_mb_s.remove(key);
+                store.disk_avg_response_ms.remove(key);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -501,6 +586,22 @@ mod tests {
     }
 
     #[test]
+    fn test_commit_gpu_scalar_preserves_ghost_latest_during_grace() {
+        // A ghost GPU key inside the prune grace window must keep its
+        // last-known util across non-full (scalar) ticks, mirroring
+        // commit_gpu's keep-ghosts merge.
+        let mut store = crate::state::HistoryStore::new("test");
+        store.gpu_latest.insert("gpu0".to_string(), 42.0);
+        let poll = crate::state::RawPoll {
+            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), 50.0)],
+            ..Default::default()
+        };
+        commit_gpu_scalar(&mut store, &poll);
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&42.0));
+        assert_eq!(store.gpu_latest.get("gpu1"), Some(&50.0));
+    }
+
+    #[test]
     fn test_commit_cpu_updates_latest_alongside_history() {
         let mut store = crate::state::HistoryStore::new("test");
         store.cpu_latest = Some(999.0); // stale value from a prior registry-only tick
@@ -532,6 +633,194 @@ mod tests {
             store.gpu_latest.get("gpu0"),
             Some(&65.0),
             "gpu_latest must not be stale relative to the value just committed to history"
+        );
+    }
+
+    // --- ghost pruning with grace window (DISK-001) ---
+    // A disk/GPU absent from the live poll is dropped only after
+    // PRUNE_MISS_THRESHOLD consecutive full ticks; PDH-failed or WMI-empty
+    // ticks must never be interpreted as hardware vanishing.
+
+    #[test]
+    fn test_commit_disk_network_prunes_disk_missing_for_threshold_ticks() {
+        let mut store = crate::state::HistoryStore::new("test");
+        let mut present = crate::state::RawPoll {
+            pdh_ok: true,
+            disk_display_order: vec!["C:".to_string()],
+            ..Default::default()
+        };
+        present.disk_active.insert("C:".to_string(), 10.0);
+        commit_disk_network(&mut store, &present);
+        assert_eq!(store.disk_display_order, vec!["C:".to_string()]);
+
+        // A single miss must not prune.
+        commit_disk_network(
+            &mut store,
+            &crate::state::RawPoll {
+                pdh_ok: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(store.disk_display_order, vec!["C:".to_string()]);
+
+        // PRUNE_MISS_THRESHOLD - 1 further misses reach the threshold → pruned.
+        for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
+            commit_disk_network(
+                &mut store,
+                &crate::state::RawPoll {
+                    pdh_ok: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert!(
+            store.disk_display_order.is_empty(),
+            "disk must be pruned at the threshold"
+        );
+        assert!(store.disk_active_histories.is_empty());
+        assert!(
+            store.disk_miss_count.is_empty(),
+            "miss counters are cleaned after pruning"
+        );
+    }
+
+    #[test]
+    fn test_commit_disk_network_skips_pruning_when_pdh_unavailable() {
+        // pdh_ok = false (a PDH-failed tick): an empty display order is PDH
+        // being down, not every disk disappearing. Repeated empty polls must
+        // leave the stored disk untouched.
+        let mut store = crate::state::HistoryStore::new("test");
+        let mut present = crate::state::RawPoll {
+            pdh_ok: true,
+            disk_display_order: vec!["C:".to_string()],
+            ..Default::default()
+        };
+        present.disk_active.insert("C:".to_string(), 10.0);
+        commit_disk_network(&mut store, &present);
+
+        for _ in 0..PRUNE_MISS_THRESHOLD * 2 {
+            commit_disk_network(&mut store, &crate::state::RawPoll::default());
+        }
+        assert_eq!(store.disk_display_order, vec!["C:".to_string()]);
+        assert!(
+            store.disk_miss_count.is_empty(),
+            "PDH-failed ticks must not count as misses"
+        );
+    }
+
+    #[test]
+    fn test_commit_disk_network_miss_counter_resets_when_disk_reappears() {
+        // A disk missing for a few ticks then reappearing must reset its
+        // counter — a short hiccup can never accumulate toward a false prune.
+        let mut store = crate::state::HistoryStore::new("test");
+        let mut present = crate::state::RawPoll {
+            pdh_ok: true,
+            disk_display_order: vec!["C:".to_string()],
+            ..Default::default()
+        };
+        present.disk_active.insert("C:".to_string(), 10.0);
+        commit_disk_network(&mut store, &present);
+        for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
+            commit_disk_network(
+                &mut store,
+                &crate::state::RawPoll {
+                    pdh_ok: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(
+            store.disk_display_order.len(),
+            1,
+            "grace window must still hold"
+        );
+
+        commit_disk_network(&mut store, &present); // reappears → counter reset
+        for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
+            commit_disk_network(
+                &mut store,
+                &crate::state::RawPoll {
+                    pdh_ok: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(
+            store.disk_display_order.len(),
+            1,
+            "resets must prevent compounding misses across appearances"
+        );
+        commit_disk_network(
+            &mut store,
+            &crate::state::RawPoll {
+                pdh_ok: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            store.disk_display_order.is_empty(),
+            "pruned only after a full fresh grace window"
+        );
+    }
+
+    #[test]
+    fn test_commit_gpu_prunes_gpu_missing_for_threshold_ticks() {
+        let mut store = crate::state::HistoryStore::new("test");
+        let gpu0 = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 50.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &gpu0);
+        assert_eq!(store.gpu_entries.len(), 1);
+
+        // gpu0's caption dropped out (e.g. vendor-map rebuild after a
+        // hot-plug); gpu1 is what the poll reports now. gpu0 misses start.
+        let gpu1 = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), 60.0)],
+            ..Default::default()
+        };
+        for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
+            commit_gpu(&mut store, &gpu1);
+            assert_eq!(
+                store.gpu_entries.len(),
+                2,
+                "grace window holds before the threshold"
+            );
+        }
+        commit_gpu(&mut store, &gpu1);
+        assert_eq!(
+            store.gpu_entries.len(),
+            1,
+            "gpu0 must be pruned at the threshold"
+        );
+        assert_eq!(store.gpu_entries[0].0, "gpu1");
+        assert!(
+            store.gpu_miss_count.is_empty(),
+            "miss counters are cleaned after pruning"
+        );
+    }
+
+    #[test]
+    fn test_commit_gpu_skips_pruning_when_poll_empty() {
+        // An empty gpu_updates poll means PDH or WMI was unavailable this
+        // tick — it must never be read as "every GPU vanished". gpu_entries
+        // (and thus the UI's GPU cards) survive repeated empty polls.
+        let mut store = crate::state::HistoryStore::new("test");
+        let present = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 50.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &present);
+        for _ in 0..PRUNE_MISS_THRESHOLD * 2 {
+            commit_gpu(&mut store, &crate::state::RawPoll::default());
+        }
+        assert_eq!(store.gpu_entries.len(), 1);
+        assert!(
+            store.gpu_miss_count.is_empty(),
+            "empty polls must not count as misses"
         );
     }
 

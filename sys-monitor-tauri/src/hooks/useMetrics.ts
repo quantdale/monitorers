@@ -238,7 +238,10 @@ function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
   // otherwise every ~250ms event would grow them 4x faster than real time.
   if (!shouldCommitHistory(snap.on_tick)) return;
   setters.setHistory((prev) => {
-    if (!prev) return prev;
+    // No history yet (initial `get_history` failed or was slow): seed a
+    // one-point history from this snapshot so charts start immediately
+    // instead of hanging on the load error (METRICS-001).
+    if (!prev) return seedHistoryFromSnapshot(snap);
     const now = Date.now();
     return {
       schema_version: prev.schema_version,
@@ -255,9 +258,31 @@ function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
   });
 }
 
+/**
+ * Seeds a one-point HistoryPayload from a live MetricsSnapshot. Used when the
+ * initial `get_history` call failed (e.g. it raced backend startup): live
+ * `metrics-update` events keep arriving, and once the first on_tick snapshot
+ * lands the charts can start from that point instead of hanging forever on the
+ * "Couldn't load metrics history" dead end (METRICS-001).
+ */
+export function seedHistoryFromSnapshot(snap: MetricsSnapshot): HistoryPayload {
+  return {
+    schema_version: snap.schema_version,
+    timestamps: [Date.now()],
+    cpu: [snap.cpu],
+    cpu_name: snap.cpu_name ?? 'CPU',
+    cpu_temp_c: snap.cpu_temp_c ?? null,
+    mem: [snap.mem],
+    disks: mergeDiskHistory([], snap.disks),
+    net_recv: [snap.net_recv_kb],
+    net_sent: [snap.net_sent_kb],
+    gpus: mergeGpuHistory([], snap.gpus),
+  };
+}
+
 export interface UseMetricsResult {
   metrics: SlicedHistory | null;
-  /** Set when the initial `get_history` IPC call rejects; distinct from the normal "still loading" state where `metrics` is null but no error occurred. */
+  /** Set when the initial `get_history` IPC call rejects; cleared by the first live `metrics-update` event, which also seeds the charts from the snapshot (METRICS-001). */
   historyLoadError: string | null;
 }
 
@@ -311,6 +336,9 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         const snap = event.payload;
         assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
+        // Any live event proves the collector pipeline is running, so a
+        // historyLoadError from a failed initial `get_history` is moot.
+        setHistoryLoadError(null);
         applySnapshot(snap, {
           setMemGb,
           setNvidiaStats,

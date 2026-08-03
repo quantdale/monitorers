@@ -37,14 +37,26 @@ export function mergeNewCardIds(current: string[], defaultIds: string[]): string
   return merged;
 }
 
-/** Whether a card id corresponds to hardware present in the current snapshot. */
+/**
+ * Whether a card id corresponds to hardware present in the current snapshot.
+ * Per-key, not per-metric: a `disk_C:` id is only present when a disk with
+ * key `C:` is in the snapshot, and a `gpu_<id>` id only when a GPU with the
+ * matching slug is — so an unplugged disk or hot-unplugged GPU hides exactly
+ * its own ghost card while the others stay visible.
+ */
 export function isCardPresent(id: string, metrics: CardMetricsShape | null): boolean {
   if (!metrics) return false;
   if (id === 'cpu') return true;
   if (id === 'memory') return true;
   if (id === 'network') return metrics.net_recv.length > 0 || metrics.net_sent.length > 0;
-  if (id.startsWith('disk_')) return metrics.disks.length > 0;
-  if (id.startsWith('gpu_')) return metrics.gpus.length > 0;
+  if (id.startsWith('disk_')) {
+    const key = id.slice('disk_'.length);
+    return metrics.disks.some((d) => d.key === key);
+  }
+  if (id.startsWith('gpu_')) {
+    // gpuId() already returns the full `gpu_<slug>` id — card ids ARE gpuIds.
+    return metrics.gpus.some((g) => gpuId(g.name) === id);
+  }
   return false;
 }
 

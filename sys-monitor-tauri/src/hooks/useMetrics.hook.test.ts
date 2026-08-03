@@ -125,6 +125,75 @@ describe('useMetrics (Tauri event wiring)', () => {
     unmount();
   });
 
+  // --- METRICS-001: a failed initial get_history is recovered by live events ---
+
+  it('seeds charts from the first on_tick snapshot after get_history failed, and clears the error', async () => {
+    historyInvokeError = new Error('IPC channel closed');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result, historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(historyLoadError()).toBe('IPC channel closed');
+    expect(() => result()).toThrow('metrics not loaded yet'); // still null
+
+    // A live snapshot with on_tick lands: the error is moot, history seeds.
+    act(() => {
+      emit('metrics-update', {
+        ...baseSnapshot(true),
+        disks: [{ key: 'C:', active: 12, read_mb_s: 1, write_mb_s: 2, avg_response_ms: 3, temp_c: 40 }],
+        gpus: [{ name: 'GeForce RTX 4050', vendor: 'nvidia', util: 33, temp_c: 55 }],
+      });
+    });
+
+    expect(historyLoadError()).toBeNull();
+    expect(result().cpu).toEqual([42]);
+    expect(result().disks).toHaveLength(1);
+    expect(result().disks[0].key).toBe('C:');
+    expect(result().gpus).toHaveLength(1);
+    expect(result().gpus[0].latest).toBe(33);
+
+    // Subsequent on_tick snapshots keep appending normally.
+    act(() => {
+      emit('metrics-update', baseSnapshot(true));
+    });
+    expect(result().cpu).toEqual([42, 42]);
+
+    warnSpy.mockRestore();
+    unmount();
+  });
+
+  it('does not seed history from non-on_tick snapshots when get_history failed', async () => {
+    historyInvokeError = new Error('IPC channel closed');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result, historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      emit('metrics-update', baseSnapshot(false));
+    });
+
+    // Live events clear the error (pipeline is alive) but the history must
+    // stay empty until an on_tick snapshot provides a commit point.
+    expect(historyLoadError()).toBeNull();
+    expect(() => result()).toThrow('metrics not loaded yet');
+
+    act(() => {
+      emit('metrics-update', baseSnapshot(true));
+    });
+    expect(result().cpu).toEqual([42]); // exactly one point: the non-on_tick event seeded nothing
+
+    warnSpy.mockRestore();
+    unmount();
+  });
+
   // --- 5.2: collectorError never auto-clears ---
 
   it('collectorError stays set for the lifetime of the hook once received, even after further metrics-update events', async () => {

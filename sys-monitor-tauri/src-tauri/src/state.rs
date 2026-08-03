@@ -35,6 +35,10 @@ pub struct RawPoll {
     pub disk_write_mb_s: HashMap<String, f64>,
     pub disk_avg_response_ms: HashMap<String, f64>,
     pub disk_display_order: Vec<String>,
+    /// True when the tick's `PdhCollectQueryData` succeeded. Commit functions
+    /// gate ghost-pruning on this: an empty disk display order on a PDH-failed
+    /// tick means "PDH unavailable", not "every disk vanished".
+    pub pdh_ok: bool,
     pub net_recv_kb_s: f64,
     pub net_sent_kb_s: f64,
 }
@@ -171,6 +175,14 @@ pub struct HistoryStore {
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
     pub disk_avg_response_ms: HashMap<String, f64>,
+    /// Consecutive full ticks a disk key has been absent from the live PDH
+    /// instance list. Drives grace-based ghost pruning (see
+    /// `collector::commit_disk_network`): a disk is dropped only after
+    /// `PRUNE_MISS_THRESHOLD` consecutive misses, so a transient PDH hiccup
+    /// cannot clear hardware (and reshuffle card order) on its own.
+    pub disk_miss_count: HashMap<String, u32>,
+    /// Same role as `disk_miss_count`, for GPU history keys.
+    pub gpu_miss_count: HashMap<String, u32>,
     pub net_recv_history: VecDeque<f64>,
     pub net_sent_history: VecDeque<f64>,
     pub timestamps: VecDeque<u64>,
@@ -211,6 +223,8 @@ impl HistoryStore {
             disk_read_mb_s: HashMap::new(),
             disk_write_mb_s: HashMap::new(),
             disk_avg_response_ms: HashMap::new(),
+            disk_miss_count: HashMap::new(),
+            gpu_miss_count: HashMap::new(),
             net_recv_history: VecDeque::with_capacity(HISTORY_CAPACITY),
             net_sent_history: VecDeque::with_capacity(HISTORY_CAPACITY),
             timestamps: VecDeque::with_capacity(HISTORY_CAPACITY),

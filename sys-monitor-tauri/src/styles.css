@@ -26,6 +26,16 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Same focus treatment for the window-time selector — the inline styles on
+   the <select> must not set outline: none, or this rule can't take over */
+select {
+  outline: none;
+}
+select:focus-visible {
+  outline: 2px solid #4699e8;
+  outline-offset: 2px;
+}
+
 /* Drag handle — hidden by default, shown on card hover */
 .drag-handle {
   opacity: 0;

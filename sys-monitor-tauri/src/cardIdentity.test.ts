@@ -90,6 +90,51 @@ describe('isCardPresent', () => {
     const m = metrics({ disks: [] });
     expect(isCardPresent('disk_C:', m)).toBe(false);
   });
+
+  // --- DISK-001 / GPU ghost-card fixes: per-key presence ---
+
+  it('a disk id is present only when a disk with that exact key is in the snapshot (per-key, not per-metric)', () => {
+    const m = metrics({
+      disks: [{ key: 'C:' }, { key: 'E:' }] as CardMetricsShape['disks'],
+    });
+    expect(isCardPresent('disk_C:', m)).toBe(true);
+    expect(isCardPresent('disk_E:', m)).toBe(true);
+    // D: was unplugged — only its own ghost card drops out, C: and E: stay.
+    expect(isCardPresent('disk_D:', m)).toBe(false);
+  });
+
+  it('a gpu id is present only when a GPU with the matching slug is in the snapshot', () => {
+    const m = metrics({
+      gpus: [{ name: 'GeForce RTX 4050' }] as CardMetricsShape['gpus'],
+    });
+    expect(isCardPresent('gpu_geforce_rtx_4050', m)).toBe(true);
+    // An unrelated slug (e.g. a second GPU that was hot-unplugged) is absent.
+    expect(isCardPresent('gpu_uhd_graphics', m)).toBe(false);
+  });
+
+  it('computeVisibleCardOrder hides only the unplugged disk/gpu ghost cards, keeping the rest', () => {
+    const cardOrder = [
+      'cpu',
+      'memory',
+      'disk_C:',
+      'disk_D:',
+      'network',
+      'gpu_geforce_rtx_4050',
+      'gpu_uhd_graphics',
+    ];
+    const m = metrics({
+      disks: [{ key: 'C:' }] as CardMetricsShape['disks'],
+      gpus: [{ name: 'GeForce RTX 4050' }] as CardMetricsShape['gpus'],
+    });
+    const visible = computeVisibleCardOrder(cardOrder, new Set(), m);
+    expect(visible).toEqual([
+      'cpu',
+      'memory',
+      'disk_C:',
+      'network',
+      'gpu_geforce_rtx_4050',
+    ]);
+  });
 });
 
 describe('computeVisibleCardOrder', () => {
