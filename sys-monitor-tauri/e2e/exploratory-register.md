@@ -4,6 +4,24 @@ This register documents scenarios from `add-realistic-usage-test-suite` that rem
 genuinely un-drivable by software and the one-line reason why. No scenario is silently
 dropped; each has an explicit entry here.
 
+## Update — add-user-simulation-platform (2026-08-04)
+
+The simulation platform (`e2e/sim/`) revisits this register:
+
+- **Made drivable (mock lane, via the simulation bridge):** injected collector
+  panic (`collector-error` fault), PDH freeze, disk/GPU ghost/restore (hotplug
+  cycle), schema-version mismatch, corrupt settings, slow/failing history load —
+  all scripted through `window.__SIM__` with no hardware involved.
+- **Made drivable (real lane, via the CDP real-app driver):** real Tauri IPC,
+  real `settings.json` persistence (with per-run temp-dir isolation), real
+  sensor data, and full app restart — the real backend is no longer
+  automation-blind.
+- **Still registered (real hardware / OS power events):** see the table below.
+- **Real-lane fault injection remains registered**: the real app does not run
+  the mock bridge, so scripted faults (collector-error, hotplug) are mock-lane
+  only. Real PDH/WMI behavior is whatever the hardware does; CADENCE truth stays
+  with `cadence_probe`.
+
 ## Scenarios that stay exploratory
 
 | Scenario | Reason it stays exploratory |

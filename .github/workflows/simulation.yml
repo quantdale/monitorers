@@ -1,0 +1,133 @@
+# CI for the user-simulation platform (e2e/sim).
+#
+# Lanes:
+#   simulation-mock — mock-harness journeys on push to main. NON-BLOCKING at
+#     introduction (continue-on-error); promotion to blocking is a separate
+#     change after a flake budget is observed (see e2e/sim/flake-quarantine.ts).
+#   simulation-real — packaged-app journeys on manual workflow_dispatch
+#     (builds the Tauri exe, launches it under the CDP real-app driver).
+#   simulation-config-lint — guards that the SHIPPED config never carries the
+#     WebView2 remote-debugging flag (it exists only behind env vars in the
+#     dev launch wrapper).
+name: Simulation
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  simulation-config-lint:
+    name: Simulation — config lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: No remote-debugging flag in shipped config/build scripts
+        shell: bash
+        run: |
+          if grep -rniE "remote-debugging|remote-debug-port|--remote-debug" \
+            sys-monitor-tauri/src-tauri/tauri.conf.json \
+            sys-monitor-tauri/src-tauri/capabilities/ \
+            sys-monitor-tauri/package.json \
+            sys-monitor-tauri/vite.config.ts 2>/dev/null; then
+            echo "ERROR: remote-debugging flag found in shipped configuration" >&2
+            exit 1
+          fi
+          echo "OK: no remote-debugging flag in shipped configuration"
+
+  simulation-mock:
+    name: Simulation — mock lane
+    runs-on: windows-latest
+    if: github.event_name == 'push'
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright chromium
+        run: npx playwright install chromium
+
+      - name: Type check sim code
+        run: npm run sim:typecheck
+
+      - name: Run mock-lane simulation
+        run: npm run sim
+
+      - name: Upload simulation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-mock-results
+          path: sys-monitor-tauri/e2e-results/sim/**/*
+          if-no-files-found: ignore
+
+  simulation-real:
+    name: Simulation — packaged lane
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sys-monitor-tauri/src-tauri/target
+          key: ${{ runner.os }}-sim-real-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build packaged app (no bundle)
+        run: npx tauri build --no-bundle
+
+      - name: Run packaged-lane simulation
+        env:
+          SIM_LANE: real
+          SIM_APP_EXE: src-tauri/target/release/sys-monitor-tauri.exe
+        run: npm run sim:real
+
+      - name: Upload simulation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-real-results
+          path: sys-monitor-tauri/e2e-results/sim/**/*
+          if-no-files-found: ignore

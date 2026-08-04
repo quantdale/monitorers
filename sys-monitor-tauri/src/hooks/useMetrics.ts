@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
 import { isTauri } from '../utils';
+import { getSimBackend } from '../sim/mockBackend';
 
 // Keep in sync with `HISTORY_CAPACITY` in src-tauri/src/state.rs (no shared-constant
 // mechanism crosses the IPC boundary between Rust and TypeScript).
@@ -25,66 +26,6 @@ export function assertSchemaVersion(actual: number, payloadName: string): void {
       `Rebuild both frontend and backend.`
     );
   }
-}
-
-/** Plausible fake history for browser dev (no Tauri backend). */
-function mockHistoryPayload(): HistoryPayload {
-  const n = 300;
-  const t = (i: number) => (i / n) * Math.PI * 4;
-  const now = Date.now();
-  return {
-    schema_version: 3,
-    timestamps: Array.from({ length: n }, (_, i) => now - (n - 1 - i) * 1000),
-    cpu: Array.from({ length: n }, (_, i) => 30 + 40 * Math.sin(t(i))),
-    cpu_name: 'CPU',
-    cpu_temp_c: 52,
-    mem: Array.from({ length: n }, (_, i) => 50 + 35 * Math.sin(t(i) + 0.5)),
-    disks: [
-      { key: 'C:', values: Array.from({ length: n }, (_, i) => Math.max(0, 10 + 30 * Math.sin(t(i) + 1))), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42, last_seen_ts: now },
-      { key: 'D:', values: Array.from({ length: n }, (_, i) => Math.max(0, 5 + 15 * Math.sin(t(i) + 2))), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38, last_seen_ts: now },
-    ],
-    net_recv: Array.from({ length: n }, (_, i) => 100 + 200 * Math.sin(t(i) + 2.5)),
-    net_sent: Array.from({ length: n }, (_, i) => 50 + 150 * Math.sin(t(i) + 3)),
-    gpus: [
-      { name: 'UHD Graphics', values: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)), temp_c: 48, last_seen_ts: now },
-      { name: 'RTX 4050', values: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)), temp_c: 55, last_seen_ts: now },
-    ],
-  };
-}
-
-/**
- * Plausible fake snapshot that varies over time for browser dev.
- * `tick` mirrors the backend's tick counter — mock mode runs its own interval
- * at the same 250ms period and 4:1 on_tick ratio as production, so the
- * frontend's history-gating logic is exercised identically in dev mode.
- */
-function mockMetricsSnapshot(tick: number): MetricsSnapshot {
-  const t = Date.now() / 1000;
-  return {
-    schema_version: 3,
-    on_tick: tick % 4 === 0,
-    cpu: 30 + 40 * Math.sin(t * 0.3),
-    cpu_name: 'CPU',
-    mem: 50 + 35 * Math.sin(t * 0.3 + 0.5),
-    mem_used_gb: 6 + 2 * Math.sin(t * 0.1),
-    mem_total_gb: 16,
-    disks: [
-      { key: 'C:', active: Math.max(0, 10 + 30 * Math.sin(t * 0.2 + 1)), read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
-      { key: 'D:', active: Math.max(0, 5 + 15 * Math.sin(t * 0.2 + 2)), read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
-    ],
-    net_recv_kb: Math.max(0, 100 + 200 * Math.sin(t * 0.4 + 2.5)),
-    net_sent_kb: Math.max(0, 50 + 150 * Math.sin(t * 0.4 + 3)),
-    gpus: [
-      { name: 'UHD Graphics', vendor: 'intel', util: 15 + 25 * Math.sin(t * 0.3 + 0.8), temp_c: 48 },
-      { name: 'RTX 4050', vendor: 'nvidia', util: 20 + 40 * Math.sin(t * 0.3 + 1.2), temp_c: 55 },
-    ],
-    cpu_temp_c: 52,
-    nvidia_power_w: 45,
-    nvidia_mem_used_mb: 2048,
-    nvidia_mem_total_mb: 6144,
-    nvidia_fan_speed_pct: 35,
-    nvidia_clock_mhz: 2100,
-  };
 }
 
 export function appendToHistory(arr: number[], value: number, maxLen: number): number[] {
@@ -393,7 +334,20 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         });
       return;
     }
-    setHistory(mockHistoryPayload());
+    // Browser mock mode: seed history from the scriptable sim backend. The
+    // promise may fault (simulated slow/failing load) — rejection surfaces the
+    // same historyLoadError inline-warning path as a real IPC failure, and the
+    // first live snapshot seeds the charts (METRICS-001).
+    getSimBackend()
+      .getHistory()
+      .then((payload) => {
+        setHistory(payload);
+        setHistoryLoadError(null);
+      })
+      .catch((err) => {
+        console.warn('[useMetrics] mock get_history failed:', err);
+        setHistoryLoadError(err instanceof Error ? err.message : String(err));
+      });
     setMemGb({ used: 8, total: 16 });
   }, [windowSeconds]);
 
@@ -423,13 +377,16 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         unlistenErrorPromise.then((f) => f());
       };
     }
-    // Mock mode runs at the same 250ms period and 4:1 on_tick ratio as the real
-    // backend's tick loop, so the history-gating logic below is exercised the
-    // same way in dev mode as it is against live Tauri events.
-    let mockTick = 0;
-    const id = setInterval(() => {
-      const snap = mockMetricsSnapshot(mockTick);
-      mockTick += 1;
+    // Browser mock mode runs the same 250 ms period and 4:1 on_tick ratio as
+    // the real backend's tick loop, so the history-gating logic below is
+    // exercised the same way in dev mode as it is against live Tauri events.
+    // The sim backend drives the loop (and any scripted faults) and forwards
+    // snapshots + collector errors to the same applySnapshot path.
+    const backend = getSimBackend();
+    const onSnapshot = (snap: MetricsSnapshot) => {
+      // Any live event proves the pipeline is running, so a historyLoadError
+      // from a simulated failed initial load is moot (mirrors the Tauri path).
+      setHistoryLoadError(null);
       applySnapshot(snap, {
         setMemGb,
         setNvidiaStats,
@@ -438,8 +395,16 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         setLatestGpu,
         setHistory,
       });
-    }, 250);
-    return () => clearInterval(id);
+    };
+    const onCollectorError = (message: string) => setCollectorError(message);
+    backend.onSnapshot(onSnapshot);
+    backend.onCollectorError(onCollectorError);
+    backend.start();
+    return () => {
+      backend.stop();
+      backend.offSnapshot(onSnapshot);
+      backend.offCollectorError(onCollectorError);
+    };
   }, []);
 
   if (!history) return { metrics: null, historyLoadError };

@@ -1,8 +1,31 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Store } from '@tauri-apps/plugin-store';
+import { invoke } from '@tauri-apps/api/core';
 import { isTauri, type ViewMode } from '../utils';
+import { isSimRunActive, getSimHandle } from '../sim/mockBackend';
 
 const STORE_PATH = 'settings.json';
+
+/**
+ * Simulation-only override for the packaged-app store dir (set by the
+ * real-app driver via SYSMON_SIM_APP_DATA). Returns null normally; when set,
+ * the store is loaded from an absolute path so a sim run never touches the
+ * developer's real settings.json.
+ */
+async function resolveStorePath(): Promise<string> {
+  try {
+    if (isTauri()) {
+      const overrideDir = await invoke<string | null>('sim_store_override');
+      if (overrideDir) {
+        const sep = overrideDir.includes('\\') ? '\\' : '/';
+        return `${overrideDir.replace(/[\\/]+$/, '')}${sep}${STORE_PATH}`;
+      }
+    }
+  } catch {
+    // degrade gracefully: fall through to the default relative path
+  }
+  return STORE_PATH;
+}
 
 // Bump when the persisted settings shape changes in a way future migrations
 // need to key off of. Written on every save() but never read back today — the
@@ -101,12 +124,34 @@ function useSettingsState(): SettingsContextValue {
 
   useEffect(() => {
     if (!isTauri()) {
+      if (isSimRunActive()) {
+        // Mock-mode persistence journeys run against the bridge's per-run
+        // localStorage shim so settings round-trip across reloads. Per-field
+        // validation applies identically to shim entries, so a corrupt
+        // settings scenario (simulated) falls back per-field, exactly like a
+        // real corrupt store file.
+        const sim = getSimHandle();
+        if (sim) {
+          void sim.settings.load().then((entries) => {
+            setSettings({
+              cardOrder: validateField('cardOrder', entries.cardOrder),
+              hiddenCardIds: validateField('hiddenCardIds', entries.hiddenCardIds),
+              sidebarCardOrder: validateField('sidebarCardOrder', entries.sidebarCardOrder),
+              viewMode: validateField('viewMode', entries.viewMode),
+              windowSecs: validateField('windowSecs', entries.windowSecs),
+            });
+            setLoaded(true);
+          });
+          return;
+        }
+      }
       setLoaded(true);
       return;
     }
     (async () => {
       try {
-        const s = await Store.load(STORE_PATH);
+        const storePath = await resolveStorePath();
+        const s = await Store.load(storePath);
         setStore(s);
         // Missing settingsVersion means an install that predates versioning —
         // treated as the earliest known version, not an error.
@@ -145,6 +190,17 @@ function useSettingsState(): SettingsContextValue {
           // only persistence is lost. Log instead of leaving an unhandled
           // rejection from the fire-and-forget call sites.
           console.warn('[useSettings] failed to persist settings:', err);
+        }
+        return;
+      }
+      if (isSimRunActive()) {
+        const sim = getSimHandle();
+        if (sim) {
+          try {
+            await sim.settings.save(patch as Record<string, unknown>);
+          } catch (err) {
+            console.warn('[useSettings] failed to persist mock settings:', err);
+          }
         }
       }
     },

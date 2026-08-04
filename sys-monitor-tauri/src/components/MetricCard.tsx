@@ -115,7 +115,10 @@ export function MetricCard({
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, fontFamily: 'monospace', color: '#fff', gap: 8 }}>
-            <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+            <span
+              data-testid={`metric-title-${id}`}
+              style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >{title}</span>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{displayValue}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -200,6 +203,7 @@ export function MetricCard({
           }}
         >
           <span
+            data-testid={`metric-title-${id}`}
             style={{
               color: '#fff',
               fontSize: 13,

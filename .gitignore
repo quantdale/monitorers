@@ -14,6 +14,9 @@ sys-monitor-tauri/playwright-report/
 sys-monitor-tauri/e2e/test-results/
 sys-monitor-tauri/e2e/playwright-report/
 
+# Simulation platform (e2e/sim) artifacts
+sys-monitor-tauri/e2e-results/
+
 # Debug artifacts
 debug-*.log
 

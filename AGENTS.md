@@ -19,7 +19,16 @@ npm run build            # tsc + vite build (frontend only)
 npx tsc --noEmit         # frontend typecheck
 npm test -- --run        # Vitest unit tests
 npm run e2e              # Playwright against the Vite mock harness (auto-starts dev server)
+npm run sim              # user-simulation mock lane (journeys × personas, engine + artifacts)
+npm run sim:real         # user-simulation packaged lane — drives the BUILT app via CDP (needs app built)
+npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.json)
 ```
+
+Simulation run knobs (`SIM_LANE`, `SIM_JOURNEYS`, `SIM_PERSONAS`, `SIM_SEED`, `SIM_SPEED`,
+`SIM_OUT`, `SIM_APP_EXE`): e.g. `SIM_SEED=42 SIM_JOURNEYS=first-launch-onboarding npm run sim`.
+Same seed reproduces the identical session — failures are reproducible from the run header
+(`run.jsonl` under `e2e-results/sim/`). The real lane requires a built exe
+(`src-tauri/target/release/sys-monitor-tauri.exe` or `SIM_APP_EXE`).
 
 ```bash
 # from src-tauri/ (cargo commands):
@@ -35,7 +44,8 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 
 - Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo audit`
 - Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
-- CI: `.github/workflows/rust.yml` — three jobs (rust-test + rust-lint on windows-latest, frontend on ubuntu-latest).
+- Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is CI-run non-blocking in `.github/workflows/simulation.yml`
+- CI: `.github/workflows/rust.yml` — three jobs (rust-test + rust-lint on windows-latest, frontend on ubuntu-latest); `.github/workflows/e2e.yml` (mock-harness E2E on windows-latest); `.github/workflows/simulation.yml` (simulation mock lane on push, packaged lane on workflow_dispatch, shipped-config lint).
 
 ## Backend invariants (do not violate)
 
@@ -58,7 +68,7 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 
 ## Frontend conventions
 
-- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`); in the browser it generates mock sine data. `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (no-ops in browser); `main.tsx` mounts a single `SettingsProvider` so every `useSettings()` consumer shares one store instance and one `save()` path (no lost updates between dashboard and sidebar).
+- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`); in the browser it serves the scriptable mock backend (`src/sim/mockBackend.ts` — default sine script identical to the old inline mock). `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (in browser mode, to the bridge's per-run localStorage shim when a sim run is active, no-op otherwise); `main.tsx` mounts a single `SettingsProvider` so every `useSettings()` consumer shares one store instance and one `save()` path (no lost updates between dashboard and sidebar).
 - Named exports only (exception: `App.tsx` default export). Inline React styles only — no CSS modules/Tailwind (CSP needs `style-src 'unsafe-inline'`; no external network/fonts). Recharts `<Area isAnimationActive={false}>` always — live 1 Hz data can't animate.
 - `types/metrics.ts` **manually mirrors** the Rust serde structs — no codegen; keep in sync by hand.
 - Vite dev port **5180** is strict (`vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.quantdale.systemmonitor`; no env vars — all config is compile-time.
@@ -76,4 +86,5 @@ Git history shows merged changes arrive as OpenSpec applications — propose bef
 ## Testing gotchas
 
 - E2E (Playwright, `e2e/tests/`) drives only the Vite mock-data harness — WebView2 can't be automated, so real-backend paths (IPC, settings persistence, real sensors) are covered by unit tests instead; anything physically undrivable is registered in `e2e/exploratory-register.md`.
+- The simulation platform (`e2e/sim/`) runs on top: the mock lane drives the Vite harness plus the scriptable bridge (`src/sim/mockBackend.ts`, faults via `window.__SIM__`, per-run localStorage settings shim); the real lane launches the BUILT app with WebView2 remote debugging (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<p> --remote-allow-origins=*`, env-only, loopback) and attaches via CDP — real IPC, real settings store, real sensors. **Isolation**: the driver redirects `WEBVIEW2_USER_DATA_FOLDER` and sets `SYSMON_SIM_APP_DATA` to a per-run temp dir; the frontend loads the plugin-store from that absolute path (`sim_store_override` command) so a sim run never touches the developer's real `settings.json` (a plain `APPDATA` env redirect does NOT work on Windows — Tauri resolves store paths via Win32 KnownFolders). The real lane needs a built exe (`npx tauri build --no-bundle` or `cargo build --release --features custom-protocol`) and is opt-in.
 - Rust tests are `#[cfg(test)]` modules co-located in source files; PDH/WMI functions needing real handles are not unit-tested — only their pure parsing helpers.

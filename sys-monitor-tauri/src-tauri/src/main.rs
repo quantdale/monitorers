@@ -39,6 +39,15 @@ fn get_hardware_profile(state: tauri::State<SafeAppState>) -> Option<HardwarePro
     s.profile.clone()
 }
 
+/// Simulation-only override: the app-data directory for the per-run settings
+/// store. Set by the user-simulation real-app driver (SYSMON_SIM_APP_DATA) so
+/// a packaged-app run never touches a developer's real settings.json. Returns
+/// None in normal operation (env unset) — production behavior is unchanged.
+#[tauri::command]
+fn sim_store_override() -> Option<String> {
+    std::env::var("SYSMON_SIM_APP_DATA").ok()
+}
+
 // ── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 fn main() {
@@ -244,7 +253,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_history, get_hardware_profile])
+        .invoke_handler(tauri::generate_handler![get_history, get_hardware_profile, sim_store_override])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
             eprintln!("error while running tauri application: {:?}", e);
