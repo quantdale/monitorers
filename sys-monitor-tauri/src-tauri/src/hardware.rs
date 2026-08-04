@@ -197,3 +197,79 @@ pub fn detect(
         disks,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- classify_gpu (name-based vendor + kind classification) ---
+
+    #[test]
+    fn test_classify_gpu_nvidia_discrete() {
+        assert_eq!(
+            classify_gpu("NVIDIA GeForce RTX 4070"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("GeForce GTX 1660"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("Quadro RTX 5000"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+    }
+
+    #[test]
+    fn test_classify_gpu_amd_discrete() {
+        assert_eq!(
+            classify_gpu("AMD Radeon RX 6700 XT"),
+            (GpuVendor::Amd, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("Radeon Vega 56"),
+            (GpuVendor::Amd, GpuKind::Discrete)
+        );
+    }
+
+    #[test]
+    fn test_classify_gpu_intel_integrated() {
+        assert_eq!(
+            classify_gpu("Intel(R) Iris Xe Graphics"),
+            (GpuVendor::Intel, GpuKind::Integrated)
+        );
+        assert_eq!(
+            classify_gpu("Intel UHD Graphics 630"),
+            (GpuVendor::Intel, GpuKind::Integrated)
+        );
+        assert_eq!(
+            classify_gpu("Iris Xe"),
+            (GpuVendor::Intel, GpuKind::Integrated)
+        );
+    }
+
+    #[test]
+    fn test_classify_gpu_unknown() {
+        assert_eq!(
+            classify_gpu("Some Generic GPU"),
+            (GpuVendor::Unknown, GpuKind::Unknown)
+        );
+        assert_eq!(classify_gpu(""), (GpuVendor::Unknown, GpuKind::Unknown));
+    }
+
+    #[test]
+    fn test_classify_gpu_is_case_insensitive() {
+        assert_eq!(
+            classify_gpu("nvidia geforce rtx 4070"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("AMD RADEON RX 6700"),
+            (GpuVendor::Amd, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("INTEL IRIS XE"),
+            (GpuVendor::Intel, GpuKind::Integrated)
+        );
+    }
+}

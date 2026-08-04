@@ -35,8 +35,8 @@ CPU and GPU current-value display (the numeric readout shown on their cards) SHA
 - **THEN** that GPU's card displays the event's `util` value immediately, independent of `on_tick`
 
 #### Scenario: GPU live readout freezes on PDH failure (does not show 0%)
-- **WHEN** a `metrics-update` event arrives with `snap.gpus[i].pdh_ok == false`
-- **THEN** the GPU card's displayed `util` retains its last successful value instead of showing 0.0%
+- **WHEN** a full poll tick's PDH query for the GPU fails and the backend retains the last-known GPU `util`/latest value instead of overwriting it with 0.0
+- **THEN** the next `metrics-update` event carries the last successful `util` for that GPU, so the GPU card's displayed readout retains its last successful value instead of showing 0.0%
 
 ### Requirement: Latest scalar values are never stale relative to history
 `HistoryStore.cpu_latest` and `HistoryStore.gpu_latest` SHALL reflect values at least as recent as the newest entry in `cpu_history`/the corresponding `gpu_entries` history at all times, including immediately after a full (history-committing) tick.

@@ -16,9 +16,10 @@ pub mod state;
 
 pub use cadence::{check_records, parse_jsonl, CadenceCheck, CadenceRecord};
 pub use collector::{
-    build_history_payload, build_snapshot, collect_pdh, is_full_poll_tick, physical_disk_list,
-    query_disk_models_wmi, run_collector_loop, slice_history, slice_timestamps, DiskHistory,
-    DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot, SCHEMA_VERSION,
+    build_history_payload, build_snapshot, clamp_window_secs, collect_pdh, is_full_poll_tick,
+    physical_disk_list, query_disk_models_wmi, run_collector_loop, slice_history, slice_timestamps,
+    DiskHistory, DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot,
+    SCHEMA_VERSION,
 };
 pub use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 pub use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};

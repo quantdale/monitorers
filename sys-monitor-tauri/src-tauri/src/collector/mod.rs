@@ -13,9 +13,9 @@ pub use gpu::query_gpu_utilization_pdh;
 pub use nvidia::query_nvidia_gpu_temp;
 pub use run_loop::run_collector_loop;
 pub use snapshot::{
-    build_history_payload, build_snapshot, is_full_poll_tick, slice_history, slice_timestamps,
-    DiskHistory, DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot,
-    SCHEMA_VERSION,
+    build_history_payload, build_snapshot, clamp_window_secs, is_full_poll_tick, slice_history,
+    slice_timestamps, DiskHistory, DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload,
+    MetricsSnapshot, SCHEMA_VERSION,
 };
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -298,11 +298,32 @@ pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 /// Also refreshes `gpu_latest` so it's never stale relative to the value just
 /// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
+    // NVML/NVAPI-sourced readings are independent of PDH (they come from the
+    // Nvidia driver, not the PDH query), so commit them unconditionally — even
+    // on PDH-failed ticks, fresh nvidia data must not be dropped.
+    store.nvidia_temp = poll.nvidia_temp;
+    #[cfg(feature = "nvml")]
+    {
+        store.nvidia_power_w = poll.nvidia_power_w;
+        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
+        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
+        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
+        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
+    }
+
     // On PDH failure, freeze GPU history and latest at last-known values.
     // Do not commit stale/zero readings from a failed PdhCollectQueryData.
     if !poll.pdh_ok {
         return;
     }
+
+    // Remember the previous entry order so grace-window ghosts below keep a
+    // stable gpus array order (draining into a HashMap would scramble it).
+    let prior_keys: Vec<String> = store
+        .gpu_entries
+        .iter()
+        .map(|(k, _, _)| k.clone())
+        .collect();
 
     let mut existing: HashMap<String, (String, VecDeque<f64>)> = store
         .gpu_entries
@@ -333,8 +354,12 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
     // map for good, e.g. after a hot-plug rebuild). The gate on an empty poll
     // is essential: empty gpu_updates means PDH or WMI was unavailable this
     // tick — that is not evidence every GPU vanished, so ghosts are kept.
+    // Iterated in `prior_keys` order so the resulting gpus array stays stable.
     if !poll.gpu_updates.is_empty() {
-        for (key, (name, hist)) in existing {
+        for key in prior_keys {
+            let Some((name, hist)) = existing.remove(&key) else {
+                continue; // already moved into next_entries as a fresh key
+            };
             let miss = store.gpu_miss_count.entry(key.clone()).or_insert(0);
             *miss += 1;
             if *miss >= PRUNE_MISS_THRESHOLD {
@@ -347,7 +372,10 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
             }
         }
     } else {
-        for (key, (name, hist)) in existing {
+        for key in prior_keys {
+            let Some((name, hist)) = existing.remove(&key) else {
+                continue;
+            };
             if let Some(v) = store.gpu_latest.get(&key) {
                 next_latest.insert(key.clone(), *v);
             }
@@ -357,15 +385,6 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 
     store.gpu_entries = next_entries;
     store.gpu_latest = next_latest;
-    store.nvidia_temp = poll.nvidia_temp;
-    #[cfg(feature = "nvml")]
-    {
-        store.nvidia_power_w = poll.nvidia_power_w;
-        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
-        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
-        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
-        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
-    }
 }
 
 /// Commit only CPU scalar fields (no history push) for high-frequency snapshots.
@@ -530,19 +549,6 @@ mod tests {
         push_history(&mut d, 7.0, 3);
         assert_eq!(d.len(), 3);
         assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![5.0, 6.0, 7.0]);
-    }
-
-    // --- cpu_name_fallback ---
-
-    #[test]
-    fn test_cpu_name_fallback() {
-        let brand = "";
-        let name = if brand.is_empty() {
-            "CPU".to_string()
-        } else {
-            brand.to_string()
-        };
-        assert_eq!(name, "CPU");
     }
 
     // --- query_cpu_temp_cached ---
@@ -852,6 +858,38 @@ mod tests {
     }
 
     #[test]
+    fn test_commit_gpu_preserves_ghost_order() {
+        // Two GPUs go absent from the poll; grace-window ghosts must keep their
+        // previous gpu_entries order (not HashMap iteration order), so the gpus
+        // array order is stable across ticks.
+        let mut store = crate::state::HistoryStore::new("test");
+        let poll = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![
+                ("gpu-b".to_string(), "GPU B".to_string(), 40.0),
+                ("gpu-a".to_string(), "GPU A".to_string(), 30.0),
+            ],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &poll);
+
+        let poll2 = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu-c".to_string(), "GPU C".to_string(), 55.0)],
+            ..Default::default()
+        };
+        commit_gpu(&mut store, &poll2);
+
+        // Fresh key first (poll order), then ghosts in their prior entry order.
+        let order: Vec<&str> = store
+            .gpu_entries
+            .iter()
+            .map(|(k, _, _)| k.as_str())
+            .collect();
+        assert_eq!(order, vec!["gpu-c", "gpu-b", "gpu-a"]);
+    }
+
+    #[test]
     fn test_history_length_invariant_after_simulated_ticks() {
         let mut store = crate::state::HistoryStore::new("test");
         let full_poll = crate::state::RawPoll {
@@ -958,6 +996,50 @@ mod tests {
             "GPU history must freeze on PDH failure"
         );
         assert_eq!(hist.len(), 1, "No new history entry on PDH failure");
+    }
+
+    #[test]
+    fn test_commit_gpu_updates_nvidia_scalars_on_pdh_failure() {
+        // NVML/NVAPI scalars are sourced from the Nvidia driver, not PDH, so a
+        // PDH-failed full tick must still commit them while freezing GPU
+        // history/latest (regression: commit_gpu used to early-return before
+        // writing the nvidia_* fields, unlike commit_gpu_scalar).
+        let mut store = crate::state::HistoryStore::new("test");
+        store.gpu_latest.insert("gpu0".to_string(), 45.0);
+        store.nvidia_temp = Some(50.0);
+        let mut bad_poll = crate::state::RawPoll {
+            pdh_ok: false,
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            nvidia_temp: Some(71.0),
+            ..Default::default()
+        };
+        #[cfg(feature = "nvml")]
+        {
+            bad_poll.nvidia_power_w = Some(188.0);
+            bad_poll.nvidia_mem_used_mb = Some(4096);
+            bad_poll.nvidia_mem_total_mb = Some(8192);
+            bad_poll.nvidia_fan_speed_pct = Some(50);
+            bad_poll.nvidia_clock_mhz = Some(1800);
+        }
+
+        commit_gpu(&mut store, &bad_poll);
+
+        // GPU history and latest freeze at last-good values...
+        assert_eq!(store.gpu_latest.get("gpu0"), Some(&45.0));
+        assert!(
+            store.gpu_entries.is_empty(),
+            "no new GPU history entry on PDH failure"
+        );
+        // ...while nvidia scalars are still committed unconditionally.
+        assert_eq!(store.nvidia_temp, Some(71.0));
+        #[cfg(feature = "nvml")]
+        {
+            assert_eq!(store.nvidia_power_w, Some(188.0));
+            assert_eq!(store.nvidia_mem_used_mb, Some(4096));
+            assert_eq!(store.nvidia_mem_total_mb, Some(8192));
+            assert_eq!(store.nvidia_fan_speed_pct, Some(50));
+            assert_eq!(store.nvidia_clock_mhz, Some(1800));
+        }
     }
 
     #[test]

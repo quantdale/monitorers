@@ -31,6 +31,14 @@ pub fn run_collector_loop(
     mut emit: impl FnMut(&MetricsSnapshot),
     mut on_error: impl FnMut(&str),
 ) {
+    // Re-baseline the sysinfo network counters before the first tick: the last
+    // refresh happened in CollectorState::new(), and the startup gap (WMI retry,
+    // profile detect) can be seconds long. Without this, the first poll() would
+    // aggregate that whole gap into a single network delta — a large spike in
+    // the first chart point. This refresh is a no-op for metrics but resets the
+    // delta baseline so the first real reading is ~250ms worth.
+    state.sysinfo_networks.refresh(false);
+
     let mut tick: u32 = 0;
     loop {
         let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -130,6 +138,69 @@ mod tests {
         assert_eq!(
             on_tick_count, 2,
             "ticks 0 and 4 are the full-poll ticks of 8 (4:1 gate preserved)"
+        );
+    }
+
+    // Drives the REAL run_collector_loop with a provider that panics on its 2nd
+    // poll. Assertions: exactly one on_error delivery, and no further emits
+    // after the panicking tick — the loop stops permanently (no auto-restart).
+    #[test]
+    fn test_run_collector_loop_panicking_provider_emits_one_error_and_stops() {
+        use crate::sensor::SensorProvider;
+        use crate::state::{HistoryStore, RawPoll};
+
+        struct PanicProvider {
+            polls: u32,
+        }
+
+        impl SensorProvider for PanicProvider {
+            fn poll(
+                &mut self,
+                _state: &mut CollectorState,
+                _wmi_con: Option<&wmi::WMIConnection>,
+            ) -> RawPoll {
+                self.polls += 1;
+                if self.polls == 2 {
+                    panic!("synthetic provider panic");
+                }
+                RawPoll::default()
+            }
+
+            fn commit(&mut self, _store: &mut HistoryStore, _raw: &RawPoll) {}
+
+            fn poll_interval(&self) -> std::time::Duration {
+                std::time::Duration::from_millis(250)
+            }
+        }
+
+        let mut state = CollectorState::new();
+        let mut registry = SensorRegistry::new();
+        registry.register(CpuSensorProvider);
+        registry.register(PanicProvider { polls: 0 });
+        let store = SafeHistoryStore::new(HistoryStore::new("test"));
+
+        let mut emit_count = 0u32;
+        let mut error_count = 0u32;
+
+        run_collector_loop(
+            &mut state,
+            None,
+            &mut registry,
+            &store,
+            Some(10), // the panic must stop the loop well before tick 10
+            |_snap| emit_count += 1,
+            |_msg| error_count += 1,
+        );
+
+        // Cadence: tick 0 is a full poll (emit, provider untouched), tick 1 is
+        // the provider's 1st poll (emit), tick 2 is its 2nd poll → panics.
+        assert_eq!(
+            emit_count, 2,
+            "no emits may happen after the panicking tick"
+        );
+        assert_eq!(
+            error_count, 1,
+            "exactly one on_error and the loop must stop"
         );
     }
 }

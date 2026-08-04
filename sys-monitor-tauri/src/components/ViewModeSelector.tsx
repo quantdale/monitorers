@@ -19,6 +19,8 @@ export function ViewModeSelector({ value, onChange }: Props) {
         return (
           <button
             key={key}
+            type="button"
+            aria-pressed={active}
             onClick={() => onChange(key)}
             style={{
               padding: '4px 12px',

@@ -16,7 +16,7 @@ import {
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { useMetrics } from './hooks/useMetrics';
-import { useSettings } from './hooks/useSettings';
+import { useSettings, WINDOW_SECS_OPTIONS } from './hooks/useSettings';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
 import { MetricCardSelector } from './components/MetricCardSelector';
@@ -30,20 +30,28 @@ import {
   computeDefaultCardIds,
   computeHasNvidiaData,
   computeVisibleCardOrder,
+  hasMetricsButNoVisibleCards,
   isCardPresent,
   mergeNewCardIds,
   shouldShowLoadingState,
 } from './cardIdentity';
 import { PanelLeft } from 'lucide-react';
 
-const TIME_OPTIONS = [
-  { label: '30s', value: 30 },
-  { label: '1m', value: 60 },
-  { label: '5m', value: 300 },
-  { label: '10m', value: 600 },
-  { label: '30m', value: 1800 },
-  { label: '1h', value: 3600 },
-];
+// Labels for the legal history-window sizes (values come from WINDOW_SECS_OPTIONS
+// in useSettings.ts, the single source of truth for what windowSecs is valid).
+const TIME_OPTION_LABELS: Record<(typeof WINDOW_SECS_OPTIONS)[number], string> = {
+  30: '30s',
+  60: '1m',
+  300: '5m',
+  600: '10m',
+  1800: '30m',
+  3600: '1h',
+};
+
+const TIME_OPTIONS = WINDOW_SECS_OPTIONS.map((value) => ({
+  value,
+  label: TIME_OPTION_LABELS[value],
+}));
 
 export default function App() {
   const { settings, save, loaded, error: settingsError } = useSettings();
@@ -225,6 +233,22 @@ export default function App() {
         <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
 
+      {historyLoadError && metrics && (
+        <div
+          style={{
+            color: '#ffd6d3',
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 14,
+            background: 'rgba(231, 76, 60, 0.15)',
+            border: '1px solid rgba(231, 76, 60, 0.7)',
+            borderRadius: 4,
+          }}
+        >
+          Couldn't refresh metrics history — {historyLoadError}. Showing previous data.
+        </div>
+      )}
+
       {historyLoadError && !metrics ? (
         <div
           style={{
@@ -235,6 +259,17 @@ export default function App() {
           }}
         >
           Couldn't load metrics history — {historyLoadError}. Try restarting the app.
+        </div>
+      ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
+        <div
+          style={{
+            color: '#888',
+            padding: '32px 0',
+            textAlign: 'center',
+            fontSize: 14,
+          }}
+        >
+          All metrics hidden — use the Metrics selector to show cards
         </div>
       ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div

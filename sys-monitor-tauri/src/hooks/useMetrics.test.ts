@@ -5,7 +5,6 @@ import {
   mergeDiskHistory,
   mergeGpuHistory,
   mergeLatestGpu,
-  shouldCommitHistory,
   assertSchemaVersion,
   EXPECTED_SCHEMA_VERSION,
 } from './useMetrics';
@@ -168,19 +167,11 @@ describe('mergeGpuHistory', () => {
   });
 });
 
-// --- shouldCommitHistory (COR-001 gating) ---
-
-describe('shouldCommitHistory', () => {
-  it('returns true when on_tick is true', () => {
-    expect(shouldCommitHistory(true)).toBe(true);
-  });
-
-  it('returns false when on_tick is false', () => {
-    expect(shouldCommitHistory(false)).toBe(false);
-  });
-});
-
 // --- mergeLatestGpu (latest-value derivation, independent of history) ---
+// NOTE: the on_tick history-commit gating that `shouldCommitHistory` provides
+// is exercised end-to-end in useMetrics.hook.test.ts ("history array length
+// matches the number of on_tick events"), so the identity behavior of the
+// one-line function itself is not re-tested here.
 
 describe('mergeLatestGpu', () => {
   it('sets latest util for a new GPU', () => {

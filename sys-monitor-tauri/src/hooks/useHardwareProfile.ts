@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { isTauri } from '../utils';
 
 export interface GpuProfileEntry {
   name: string;
@@ -34,7 +35,7 @@ export function useHardwareProfile(): HardwareProfile | null {
   const [profile, setProfile] = useState<HardwareProfile | null>(null);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+    if (!isTauri()) {
       return;
     }
     fetchProfile().then(setProfile).catch(() => setProfile(null));

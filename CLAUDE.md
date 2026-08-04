@@ -20,11 +20,11 @@ npm run tauri dev           # full app: Vite + Tauri hot-reload (real Windows me
 npm run dev                 # frontend only in browser at http://127.0.0.1:5180 — mock sine-wave data, no Rust
 npm run tauri build         # production .msi/.exe bundle
 npm run build               # tsc + vite build (frontend only)
-npm test -- --run           # frontend tests (Vitest, 107 tests)
+npm test -- --run           # frontend tests (Vitest, 116 tests)
 npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (9 tests)
 npx tsc --noEmit            # frontend type check
 
-cd src-tauri && cargo test                  # Rust tests (105 unit + 3 in main.rs = 108)
+cd src-tauri && cargo test                  # Rust tests (135 unit + 1 in main.rs = 136)
 cd src-tauri && cargo test test_name        # single Rust test
 cd src-tauri && cargo test collector::disk  # one module
 cd src-tauri && cargo fmt -- --check        # format check (CI-enforced)
@@ -36,22 +36,24 @@ cd src-tauri && cargo clippy -- -D warnings # lint, zero warnings allowed (CI-en
 Before considering any task done, run the checks for whatever you changed and confirm they pass. CI (`.github/workflows/rust.yml`) runs three parallel jobs:
 - **rust-test** (windows-latest): `cargo test --verbose`
 - **rust-lint** (windows-latest): `cargo fmt -- --check`, `cargo clippy --verbose -- -D warnings`, `cargo audit`
-- **frontend** (ubuntu-latest): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`
+- **frontend** (ubuntu-latest): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
 
-Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 105 (Rust) / 107 (frontend) — the counts as of the latest merged change — investigate before committing.
+Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. If a test count drops below 135 (Rust) / 116 (frontend) — the counts as of the latest merged change — investigate before committing.
 
 ## Backend architecture (`src-tauri/src/`)
 
-The whole backend is one background thread doing a polling loop. Understanding the concurrency model requires `main.rs` + `state.rs` + `sensor.rs` + `collector/mod.rs` together:
+The whole backend is one background thread doing a polling loop. Understanding the concurrency model requires `main.rs` + `snapshot.rs` + `state.rs` + `sensor.rs` + `collector/mod.rs` + `collector/run_loop.rs` together:
 
-- **`main.rs`** — Tauri `setup()` spawns the collector thread; defines all IPC payload structs (`MetricsSnapshot`, `GpuSnapshot`, `DiskSnapshot`, `HistoryPayload`, `GpuHistory`, `DiskHistory`) and `build_snapshot` / `build_history_payload`. `MetricsSnapshot` carries six `#[cfg(feature = "nvml")]`-gated `nvidia_*` fields (power/mem/fan/clock). Commands: `get_history(window_secs)` and `get_hardware_profile()`.
+- **`main.rs`** — thin Tauri shell: `setup()` spawns the collector thread (which runs `run_collector_loop`), and registers the commands `get_history(window_secs)` and `get_hardware_profile()`.
+- **`collector/snapshot.rs`** — the IPC payload structs (`MetricsSnapshot`, `GpuSnapshot`, `DiskSnapshot`, `HistoryPayload`, `GpuHistory`, `DiskHistory`), `SCHEMA_VERSION`, and `build_snapshot` / `build_history_payload`. `MetricsSnapshot` carries six `#[cfg(feature = "nvml")]`-gated `nvidia_*` fields (power/mem/fan/clock).
 - **`state.rs`** — `CollectorState` (owns all OS handles: sysinfo, `PdhHandles`, WMI, NVAPI/NVML state, the hardware profile) lives on the background thread and is **never behind a Mutex**. `HistoryStore` (ring buffers) is the **only** type behind `Mutex` (aliased `SafeHistoryStore` / `SafeAppState`). `RawPoll` carries one poll's values from I/O to commit.
 - **`collector/`** — `mod.rs` has `new_pdh_gpu_query()`, `poll()` (all slow Win32 I/O, no lock), the granular `commit_cpu` / `commit_gpu` / `commit_disk_network`, and `push_history()`. Submodules: `cpu.rs` (WMI thermal), `disk.rs` (PDH active%/throughput/response + physical-disk enumeration), `gpu.rs` (PDH 3D util + WMI vendor classification), `nvidia.rs` (NVAPI/NVML, feature-gated).
+- **`collector/run_loop.rs`** — `run_collector_loop()`, the tick loop extracted behind emit/error sinks (see below).
 - **`sensor.rs`** — `SensorProvider` trait + `SensorRegistry`. `CpuSensorProvider` and `GpuSensorProvider` poll at 250ms for snapshot freshness.
 - **`hardware.rs`** — one-time hardware detection (`detect`, `classify_gpu`) producing the `HardwareProfile` served to the sidebar/about panel.
 - **`pdh.rs`** — PDH helper layer.
 
-**The tick loop (in `main.rs`), and its non-obvious rules:**
+**The tick loop (`run_collector_loop` in `collector/run_loop.rs`, spawned from `main.rs`'s `setup()`), and its non-obvious rules:**
 - Loop sleeps **250ms**. A `tick` counter drives a 4-tick cadence: every 4th tick is a **full poll** (`collector::poll` — CPU+mem+net+disk+GPU, one `PdhCollectQueryData`); the other 3 ticks run only the **sensor registry** (CPU + GPU) for a fresh live snapshot.
 - **History (`push_history` / `push_timestamp`) is written on full ticks (1 Hz) only** — gated inside `if let Some(ref r) = raw`. Providers may *poll* at 250ms but must **never commit to history more than once per second**, or chart scroll rate desyncs at long windows. Any new sensor provider must follow this rule.
 - **Lock scope is microseconds**: I/O happens lock-free in `poll()`, then a short lock covers `commit_*` + `build_snapshot`, then unlock and `app_handle.emit("metrics-update", snapshot)`. **Never hold the `HistoryStore` lock during PDH/WMI/sysinfo I/O** — that causes UI jank. Locks use `.unwrap_or_else(|e| e.into_inner())` (poison-safe).
@@ -72,10 +74,10 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
 - Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), and `collector-error` (a `string` message) when the collector thread panics and halts.
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
-- **`SCHEMA_VERSION` (Rust `main.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `2`.** Bump both together when payload shape changes.
+- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `3`.** Bump both together when payload shape changes.
 
 ## Conventions worth internalizing (see `.cursorrules` for the full list)
-- **Add an IPC field**: struct in `main.rs` → `build_snapshot` + `build_history_payload` → mirror in `types/metrics.ts`.
+- **Add an IPC field**: struct in `collector/snapshot.rs` → `build_snapshot` + `build_history_payload` → mirror in `types/metrics.ts`.
 - **Add a Rust collector**: `collector/{metric}.rs`, re-export from `collector/mod.rs`, wire into `poll()` and a `commit_*`.
 - Frontend: **named exports only** (except `App.tsx`); **inline React styles only** (no CSS modules/Tailwind/styled-components); Recharts `<Area isAnimationActive={false}>` always (live 1 Hz data can't animate).
 - Rust: prefer `Option<T>` over panics for fallible OS queries (callers use `.unwrap_or(...)`); IPC payload structs derive `Serialize` only, never `Deserialize`; every `unsafe` block needs a `// SAFETY:` comment; guard all Nvidia code with `#[cfg(feature = "nvapi")]` / `#[cfg(feature = "nvml")]`.

@@ -34,7 +34,7 @@ function mockHistoryPayload(): HistoryPayload {
   const now = Date.now();
   return {
     schema_version: 3,
-    timestamps: Array.from({ length: n }, (_, i) => i * 1000),
+    timestamps: Array.from({ length: n }, (_, i) => now - (n - 1 - i) * 1000),
     cpu: Array.from({ length: n }, (_, i) => 30 + 40 * Math.sin(t(i))),
     cpu_name: 'CPU',
     cpu_temp_c: 52,
@@ -99,8 +99,9 @@ export function appendToHistory(arr: number[], value: number, maxLen: number): n
 /** Pad a values array with NaN up to `timestampsLength - 1` so the next
  *  appended point lands on the same index as the newest global timestamp.
  *  New/mid-session cards then render at their true x-position instead of the
- *  left edge of the window (NaN is clamped to 0 by render and draws nothing
- *  before the card's first real point). */
+ *  left edge of the window. NOTE: computeChartPoints (chartPoints.ts) clamps
+ *  NaN to 0, so this pre-discovery gap actually renders as a flat 0% line, not
+ *  empty space — keep the two in sync if either changes. */
 function padToTimestamps(
   values: number[],
   timestampsLength: number,
@@ -374,6 +375,9 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         .then((payload) => {
           assertSchemaVersion(payload.schema_version, 'HistoryPayload');
           const now = Date.now();
+          // A successful (re)load clears any prior refetch/initial error so a
+          // retry that eventually succeeds doesn't leave a stale banner up.
+          setHistoryLoadError(null);
           setHistory({
             ...payload,
             timestamps: payload.timestamps ?? [],

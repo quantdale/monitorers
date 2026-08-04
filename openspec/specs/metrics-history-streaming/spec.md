@@ -1,9 +1,7 @@
 ## Purpose
 
 Formalizes the contract between the collector's tick cadence, `HistoryStore` commits, and the `metrics-update` IPC event: history advances at exactly 1Hz end-to-end (backend and frontend), live CPU/GPU scalar readouts refresh independently at the full tick rate, latest scalars are never stale relative to what's just been committed to history, the tick-cadence gate itself is regression-tested, the tick loop is runnable headless behind injectable sinks, and the cadence is autonomously verifiable against real hardware.
-
 ## Requirements
-
 ### Requirement: History arrays advance at exactly 1Hz end-to-end
 Both the Rust `HistoryStore` and the frontend's mirrored history state SHALL append at most one new point per history channel (CPU, mem, disk, net, GPU) per real-world second, regardless of how frequently `metrics-update` events are emitted.
 
@@ -14,6 +12,18 @@ Both the Rust `HistoryStore` and the frontend's mirrored history state SHALL app
 #### Scenario: Off-tick events do not grow history
 - **WHEN** a `metrics-update` event is emitted on a non-full tick (`on_tick: false`)
 - **THEN** the frontend does not append to any of `history.cpu`, `history.mem`, `history.disks[].values`, `history.net_recv`, `history.net_sent`, or `history.gpus[].values`
+
+#### Scenario: GPU history freezes on PDH failure instead of committing 0%
+- **WHEN** a full poll tick runs but `PdhCollectQueryData` fails for the GPU PDH query
+- **THEN** `commit_gpu` does not push 0.0 into `gpu_entries`; instead the GPU history arrays retain their last-known values and `gpu_latest` is frozen at the last successful reading
+
+#### Scenario: Disk throughput history freezes on PDH failure instead of zeroing
+- **WHEN** a full poll tick runs but `PdhCollectQueryData` fails for disk PDH queries
+- **THEN** `commit_disk_network` does not overwrite `disk_read_mb_s`, `disk_write_mb_s`, and `disk_avg_response_ms` with empty maps; instead disk history arrays retain their last-known values and `disk_latest` is frozen at the last successful reading
+
+#### Scenario: Newly-appearing cards anchor their first history point to their true appearance timestamp
+- **WHEN** a disk or GPU first appears in `metrics-update` after the session has started (not present in initial `get_history`)
+- **THEN** the frontend seeds that card's history with a single point at the arrival timestamp, not at the oldest global timestamp; subsequent points append normally so the card's plot starts where it actually appeared
 
 ### Requirement: Live scalar readouts refresh independently of history commits
 CPU and GPU current-value display (the numeric readout shown on their cards) SHALL update on every `metrics-update` event (~250ms cadence), independent of whether that event is a history-committing tick.
@@ -26,12 +36,20 @@ CPU and GPU current-value display (the numeric readout shown on their cards) SHA
 - **WHEN** a `metrics-update` event arrives for a GPU present in `snap.gpus`
 - **THEN** that GPU's card displays the event's `util` value immediately, independent of `on_tick`
 
+#### Scenario: GPU live readout freezes on PDH failure (does not show 0%)
+- **WHEN** a full poll tick's PDH query for the GPU fails and the backend retains the last-known GPU `util`/latest value instead of overwriting it with 0.0
+- **THEN** the next `metrics-update` event carries the last successful `util` for that GPU, so the GPU card's displayed readout retains its last successful value instead of showing 0.0%
+
 ### Requirement: Latest scalar values are never stale relative to history
 `HistoryStore.cpu_latest` and `HistoryStore.gpu_latest` SHALL reflect values at least as recent as the newest entry in `cpu_history`/the corresponding `gpu_entries` history at all times, including immediately after a full (history-committing) tick.
 
 #### Scenario: Full tick keeps latest in sync with history
 - **WHEN** a full poll tick runs `commit_cpu`/`commit_gpu`, pushing a new value into `cpu_history`/`gpu_entries`
 - **THEN** `cpu_latest`/`gpu_latest` are updated to that same value in the same commit, so `build_snapshot` never serves an older scalar than what was just committed to history
+
+#### Scenario: On PDH failure, latest retains last-successful value
+- **WHEN** a full poll tick fails PDH for GPU or disk
+- **THEN** `gpu_latest`/`disk_latest` are NOT updated (remain at last successful values) so the invariant "latest is at least as recent as history" holds trivially
 
 ### Requirement: The tick-cadence gate is independently testable and regression-covered
 The decision of whether a given tick is a full (history-committing) poll or a registry-only (scalar-refresh) poll SHALL be implemented as a pure, unit-testable function, separate from the I/O and commit logic it gates.
@@ -70,9 +88,14 @@ The 1 Hz history-commit / 4 Hz liveness cadence SHALL be verifiable by an automa
 - **WHEN** a future change breaks the 1-full-poll-per-4-ticks gate or re-introduces ungated history growth, and the probe is re-run
 - **THEN** the checker reports FAIL with the offending measured cadence and exits nonzero, so the regression is caught before merge on a sensor-equipped runner
 
+#### Scenario: GPU/disk PDH failure does not corrupt cadence checker history counts
+- **WHEN** the checker processes a probe run where PDH fails intermittently for GPU/disk
+- **THEN** history length increases by exactly one per `on_tick:true` record regardless of PDH success/failure (because commits are gated on `on_tick`, not on PDH success)
+
 ### Requirement: The manual runtime verification has an automated fulfilling procedure
 The previously manual end-to-end verification (`fix-history-emission-rate` task 8.7, absorbed as `add-realistic-usage-test-suite` task 5.5) SHALL have a documented automated procedure — run the probe, run the checker, interpret PASS/FAIL — that an AI agent or a self-hosted Windows CI runner can execute unattended to satisfy the check. The manual stopwatch observation becomes optional corroboration, not the sole means of verification.
 
 #### Scenario: Agent closes the manual task from a passing checker run
 - **WHEN** an agent runs the documented procedure on a real Windows machine and the checker reports PASS
 - **THEN** the captured checker report is sufficient evidence to consider the absorbed manual verification satisfied, without a human watching the GUI
+

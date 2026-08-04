@@ -1,0 +1,4 @@
+# Debug log artifacts (npm test / tsc diagnostic output)
+npm-*.log
+tsc*.log
+*-err.log

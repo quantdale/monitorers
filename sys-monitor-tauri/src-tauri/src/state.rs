@@ -53,7 +53,9 @@ pub struct CollectorState {
     pub system: System,
     pub sysinfo_disks: Disks,
     pub sysinfo_networks: Networks,
-    #[cfg_attr(feature = "nvml", allow(dead_code))]
+    /// Only exists in builds that use NVAPI for Nvidia temperatures (nvml has
+    /// its own init path and never reads this flag).
+    #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
     pub nvapi_initialized: bool,
     pub gpu_error_lock: OnceLock<()>,
     pub cpu_temp_error_lock: OnceLock<()>,
@@ -108,8 +110,6 @@ impl CollectorState {
             let status = unsafe { nvapi_sys::nvapi::NvAPI_Initialize() };
             status == nvapi_sys::status::NVAPI_OK
         };
-        #[cfg(not(all(feature = "nvapi", not(feature = "nvml"))))]
-        let nvapi_initialized = false;
 
         #[cfg(feature = "nvml")]
         let nvml = crate::collector::nvidia::init_nvml();
@@ -120,6 +120,7 @@ impl CollectorState {
             system,
             sysinfo_disks: disks,
             sysinfo_networks: networks,
+            #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
             nvapi_initialized,
             gpu_error_lock: OnceLock::new(),
             cpu_temp_error_lock: OnceLock::new(),

@@ -40,6 +40,13 @@ unsafe impl Sync for PdhHandles {}
 /// pointer indirection through `PDH_FMT_COUNTERVALUE_ITEM_W` happens inside the
 /// unsafe block while `backing` is alive.
 pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
+    // SAFETY: `counter` is a valid PDH counter handle opened once in
+    // CollectorState::new() and kept alive by the caller's PdhHandles for the
+    // whole process. `backing` is a u64 Vec sized to hold at least buffer_size
+    // bytes, passed as the PDH_FMT_COUNTERVALUE_ITEM_W output array; the
+    // returned items are only read while `backing` is alive (the HashMap owns
+    // plain String/f64 values, and each item's CStatus is checked before its
+    // value is read).
     unsafe {
         let mut buffer_size: u32 = 0;
         let mut item_count: u32 = 0;

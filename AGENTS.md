@@ -23,7 +23,7 @@ npm run e2e              # Playwright against the Vite mock harness (auto-starts
 
 ```bash
 # from src-tauri/ (cargo commands):
-cargo test                # ~109 tests
+cargo test                # ~136 tests
 cargo test collector::disk   # one module
 cargo fmt -- --check      # CI-enforced; run `cargo fmt` first if it fails
 cargo clippy -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
@@ -58,7 +58,7 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 
 ## Frontend conventions
 
-- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`); in the browser it generates mock sine data. `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (no-ops in browser).
+- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`); in the browser it generates mock sine data. `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (no-ops in browser); `main.tsx` mounts a single `SettingsProvider` so every `useSettings()` consumer shares one store instance and one `save()` path (no lost updates between dashboard and sidebar).
 - Named exports only (exception: `App.tsx` default export). Inline React styles only — no CSS modules/Tailwind (CSP needs `style-src 'unsafe-inline'`; no external network/fonts). Recharts `<Area isAnimationActive={false}>` always — live 1 Hz data can't animate.
 - `types/metrics.ts` **manually mirrors** the Rust serde structs — no codegen; keep in sync by hand.
 - Vite dev port **5180** is strict (`vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.quantdale.systemmonitor`; no env vars — all config is compile-time.

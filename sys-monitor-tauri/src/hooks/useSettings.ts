@@ -1,13 +1,20 @@
+import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Store } from '@tauri-apps/plugin-store';
-import { useState, useEffect, useCallback } from 'react';
 import { isTauri, type ViewMode } from '../utils';
 
 const STORE_PATH = 'settings.json';
 
 // Bump when the persisted settings shape changes in a way future migrations
-// need to key off of. A missing/older value is treated as pre-existing, not
-// an error (see openspec/changes/fix-frontend-error-surfacing/design.md).
+// need to key off of. Written on every save() but never read back today — the
+// version is write-only bookkeeping until a migration that keys off it lands.
+// A missing/older value is treated as pre-existing, not an error (see
+// openspec/changes/fix-frontend-error-surfacing/design.md).
 const SETTINGS_VERSION = 1;
+
+/** Legal history-window sizes in seconds — the single source of truth for
+ *  which `windowSecs` values are accepted. App.tsx builds the TimeRangeSelector
+ *  options (labels) from this so validation and the UI can't drift apart. */
+export const WINDOW_SECS_OPTIONS = [30, 60, 300, 600, 1800, 3600] as const;
 
 export interface Settings {
   cardOrder: string[] | null;
@@ -52,7 +59,13 @@ function validateField<K extends keyof Settings>(key: K, value: unknown): Settin
       }
       break;
     case 'windowSecs':
-      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      // Only the legal TimeRangeSelector sizes are accepted; anything else
+      // (e.g. a stale/hand-edited value) falls back to the default instead of
+      // producing a chart window the UI can't represent.
+      if (
+        typeof value === 'number' &&
+        (WINDOW_SECS_OPTIONS as readonly number[]).includes(value)
+      ) {
         return value as Settings[K];
       }
       break;
@@ -61,7 +74,26 @@ function validateField<K extends keyof Settings>(key: K, value: unknown): Settin
   return DEFAULTS[key];
 }
 
-export function useSettings() {
+export interface SettingsContextValue {
+  settings: Settings;
+  /** True once the initial load settled (defaults or persisted values). */
+  loaded: boolean;
+  /** Set when the plugin-store load rejects; the app renders a fatal state. */
+  error: string | null;
+  /** Persist a partial settings patch (no-op in the browser). */
+  save: (patch: Partial<Settings>) => Promise<void>;
+}
+
+const SettingsContext = createContext<SettingsContextValue | null>(null);
+
+/**
+ * The single source of settings state. Holds the loaded settings, the one
+ * plugin-store instance, and the one save() path. Mounted once by
+ * `SettingsProvider` (see main.tsx) so every `useSettings()` consumer shares
+ * one store — a dashboard reorder and a sidebar reorder can't clobber each
+ * other's writes from separate stale caches.
+ */
+function useSettingsState(): SettingsContextValue {
   const [settings, setSettings] = useState<Settings>(DEFAULTS);
   const [store, setStore] = useState<Store | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -120,4 +152,20 @@ export function useSettings() {
   );
 
   return { settings, save, loaded, error };
+}
+
+/** Provides the app-wide settings instance to every `useSettings()` consumer. */
+export function SettingsProvider({ children }: { children: ReactNode }) {
+  const value = useSettingsState();
+  // createElement (not JSX) because this file is a .ts hook module, not .tsx.
+  return createElement(SettingsContext.Provider, { value }, children);
+}
+
+export function useSettings(): SettingsContextValue {
+  const context = useContext(SettingsContext);
+  if (context) return context;
+  // No provider in the tree (unit tests that pin the hook's standalone
+  // behavior). The app itself mounts SettingsProvider once, so all production
+  // consumers share a single store instance and a single save() path.
+  return useSettingsState();
 }

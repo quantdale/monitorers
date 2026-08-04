@@ -41,7 +41,6 @@ Builds the frontend and Rust backend, then runs the compiled app:
 
 ```bash
 npm run tauri build
-npm run tauri dev
 ```
 
 Or run the built binary directly:

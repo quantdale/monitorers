@@ -41,10 +41,16 @@ export function computeChartPoints({
   if (history.length <= maxPoints) return history.map((_, i) => addPoint(i));
   const stride = Math.ceil(history.length / maxPoints);
   const data: ChartPoint[] = [];
-  for (let i = 0; i < history.length; i += stride) data.push(addPoint(i));
-  const lastIndex = history.length - 1;
-  if ((data.length === 0 && history.length > 0) || data[data.length - 1].t !== (ts[lastIndex] ?? lastIndex)) {
-    data.push(addPoint(lastIndex));
+  // Track the last index actually sampled instead of comparing timestamps:
+  // duplicate timestamps (two points in the same ms) would make a t-based
+  // check incorrectly treat the last point as already included.
+  let lastSampledIndex = -1;
+  for (let i = 0; i < history.length; i += stride) {
+    data.push(addPoint(i));
+    lastSampledIndex = i;
+  }
+  if (lastSampledIndex !== history.length - 1) {
+    data.push(addPoint(history.length - 1));
   }
   return data;
 }

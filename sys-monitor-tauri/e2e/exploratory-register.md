@@ -23,6 +23,6 @@ dropped; each has an explicit entry here.
 |---|---|
 | Rendered CPU/GPU readout updates ≥2× within 2s | `rendered-updates.spec.ts` |
 | "1 hour" window chart point count grows ~1/s | `chart-fidelity.spec.ts` |
-| Drag-to-reorder and keyboard-reorder persist across relaunch | `drag-reorder.spec.ts` |
-| Hidden-card toggle round-trips across relaunch | `hidden-card.spec.ts` |
-| Forced collector panic surfaces the error banner | `collector-error.spec.ts` |
+| Drag-to-reorder and keyboard-reorder reorder cards (persistence across relaunch is unit-tested — the mock harness can't write `settings.json`) | `drag-reorder.spec.ts` |
+| Hidden-card toggle shows/hides cards and updates the count (persistence is unit-tested) | `hidden-card.spec.ts` |
+| Collector-error banner stays absent while the pipeline is healthy (the mock harness can't force a real panic; the panic path is Rust-tested) | `collector-error.spec.ts` |

@@ -199,3 +199,53 @@ impl Default for SensorRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A provider that just counts polls and commits nothing.
+    struct IntervalProvider {
+        poll_count: u32,
+    }
+
+    impl SensorProvider for IntervalProvider {
+        fn poll(
+            &mut self,
+            _state: &mut CollectorState,
+            _wmi_con: Option<&wmi::WMIConnection>,
+        ) -> RawPoll {
+            self.poll_count += 1;
+            RawPoll::default()
+        }
+
+        fn commit(&mut self, _store: &mut HistoryStore, _raw: &RawPoll) {}
+
+        fn poll_interval(&self) -> std::time::Duration {
+            std::time::Duration::from_millis(1000)
+        }
+    }
+
+    // Exercises the interval-gating branch of poll_all: a provider with a 1000ms
+    // interval is polled on the first call (due immediately) and again on the
+    // 5th call (~1000ms later), but not on calls 2-4 (still within the window).
+    // This maps to the 250ms tick cadence, where such a provider fires on ticks
+    // 0 and 4 of the registry schedule, not ticks 1-3.
+    #[test]
+    fn test_interval_gated_provider_polls_on_time_not_every_call() {
+        let mut registry = SensorRegistry::new();
+        registry.register(IntervalProvider { poll_count: 0 });
+        let mut state = CollectorState::new();
+
+        let mut due = Vec::new();
+        for i in 0..5 {
+            let raw = registry.poll_all(&mut state, None);
+            due.push(raw[0].is_some());
+            if i < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+
+        assert_eq!(due, vec![true, false, false, false, true]);
+    }
+}

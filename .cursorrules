@@ -48,6 +48,7 @@ If cargo clippy -- -D warnings fails:
 Run from sys-monitor-tauri:
   npx tsc --noEmit
   npm test -- --run
+  npm run build
 
 npm ci is run by CI but not required locally if node_modules exists.
 If node_modules is missing or package.json changed: run npm install.
@@ -64,8 +65,8 @@ Run all checks from both sections above.
   before writing the task summary
 
 ### Test counts (as of the latest merged change; these drift as tests are added):
-- Rust: 105 tests expected (108 via `cargo test`, incl. 3 in `main.rs`). If count drops, investigate before committing.
-- Frontend: 107 tests expected. If count drops, investigate before committing.
+- Rust: 136 tests expected (135 unit + 1 in `main.rs`). If count drops, investigate before committing.
+- Frontend: 116 tests expected. If count drops, investigate before committing.
 - E2E (Playwright, mock-data harness on Vite): 9 tests expected (`npm run e2e` from `sys-monitor-tauri/`).
 
 ---
@@ -286,7 +287,7 @@ cargo test collector::disk::tests # one module
 
 ### Frontend tests
 
-**Vitest** (107 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
+**Vitest** (116 tests, as of the latest merged change, across `utils.test.ts`, `useMetrics.test.ts`, `useSettings.test.ts`, and other adjacent test files). When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
 - Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, `computeChartPoints`, formatters in `src/cards/formatters.ts`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)
@@ -296,7 +297,7 @@ cargo test collector::disk::tests # one module
 GitHub Actions (`.github/workflows/rust.yml`) runs three parallel jobs:
 - **rust-test** (`windows-latest`): `cargo test --verbose`
 - **rust-lint** (`windows-latest`): `cargo fmt -- --check`, `cargo clippy --verbose -- -D warnings`, `cargo audit`
-- **frontend** (`ubuntu-latest`): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`
+- **frontend** (`ubuntu-latest`): `npm audit --audit-level=high`, `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
 
 ---
 

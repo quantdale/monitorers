@@ -75,6 +75,37 @@ pub fn query_nvml(nvml: &Nvml) -> NvmlReadings {
 
 // ── NVAPI GPU TEMPERATURE ────────────────────────────────────────────────────
 
+/// Scan the populated thermal sensors (`sensors[..count]`) for a plausible GPU
+/// core temperature and return it, or `None` if nothing valid is present.
+///
+/// Prefers the explicit GPU-core target sensor (`NVAPI_THERMAL_TARGET_GPU`);
+/// falls back to the first populated sensor. Never reads past `count`: the
+/// caller zero-initializes the settings struct, so unpopulated entries read
+/// 0°C, which is not a valid reading — trusting them (or a sensor[0] fallback
+/// on `count == 0`) would report a bogus 0°C.
+#[cfg(feature = "nvapi")]
+fn find_gpu_core_temp(
+    sensors: &[nvapi_sys::gpu::thermal::NV_GPU_THERMAL_SETTINGS_SENSOR],
+    count: usize,
+) -> Option<f32> {
+    use nvapi_sys::gpu::thermal::NVAPI_THERMAL_TARGET_GPU;
+
+    let valid = &sensors[..count.min(sensors.len())];
+    for s in valid {
+        if s.target == NVAPI_THERMAL_TARGET_GPU && (0..=150).contains(&s.currentTemp) {
+            return Some(s.currentTemp as f32);
+        }
+    }
+    // Fallback: first populated sensor with a plausible temperature.
+    valid.first().and_then(|s| {
+        if (0..=150).contains(&s.currentTemp) {
+            Some(s.currentTemp as f32)
+        } else {
+            None
+        }
+    })
+}
+
 /// Returns GPU core temperature in Celsius, or None if unavailable.
 /// Uses NVAPI — Nvidia's proprietary C SDK. Only works on systems with an
 /// Nvidia GPU and driver installed. Requires `nvapi` feature.
@@ -122,18 +153,10 @@ pub fn query_nvidia_gpu_temp(nvapi_initialized: bool) -> Option<f32> {
                 &mut thermal,
             );
             if status == NVAPI_OK {
-                // Find GPU core sensor (target == 1 = NVAPI_THERMAL_TARGET_GPU)
-                for s in &thermal.sensor {
-                    if s.target == nvapi_sys::gpu::thermal::NVAPI_THERMAL_TARGET_GPU
-                        && (0..=150).contains(&s.currentTemp)
-                    {
-                        return Some(s.currentTemp as f32);
-                    }
-                }
-                // Fallback: sensor[0] if no explicit GPU target
-                let temp = thermal.sensor[0].currentTemp;
-                if (0..=150).contains(&temp) {
-                    return Some(temp as f32);
+                // honor the driver-reported populated-sensor count; never trust
+                // zeroed (unpopulated) entries or a fallback when count is 0
+                if let Some(temp) = find_gpu_core_temp(&thermal.sensor, thermal.count as usize) {
+                    return Some(temp);
                 }
             }
         }
@@ -150,13 +173,91 @@ pub fn query_nvidia_gpu_temp(_nvapi_initialized: bool) -> Option<f32> {
 mod tests {
     use super::*;
 
-    // --- NVAPI helper tests ---
-
+    // The NVAPI path is only compiled when nvapi is on and nvml is absent (under
+    // nvml, the field `nvapi_initialized` is cfg-gated out — see state.rs).
+    #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
     #[test]
     fn test_nvidia_temp_returns_none_gracefully() {
         // On a system where NVAPI is unavailable or GPU is absent,
         // query_nvidia_gpu_temp() must return None, not panic.
         let collector_state = crate::state::CollectorState::new();
         let _ = query_nvidia_gpu_temp(collector_state.nvapi_initialized);
+    }
+
+    // --- find_gpu_core_temp (F-3) ---
+
+    #[cfg(feature = "nvapi")]
+    mod thermal {
+        use super::*;
+        use nvapi_sys::gpu::thermal::{
+            NVAPI_THERMAL_CONTROLLER_GPU_INTERNAL, NVAPI_THERMAL_TARGET_GPU,
+            NVAPI_THERMAL_TARGET_MEMORY, NV_GPU_THERMAL_SETTINGS_SENSOR,
+        };
+
+        fn sensor(target: i32, temp: i32) -> NV_GPU_THERMAL_SETTINGS_SENSOR {
+            NV_GPU_THERMAL_SETTINGS_SENSOR {
+                controller: NVAPI_THERMAL_CONTROLLER_GPU_INTERNAL,
+                defaultMinTemp: 0,
+                defaultMaxTemp: 0,
+                currentTemp: temp,
+                target,
+            }
+        }
+
+        fn zeroed() -> NV_GPU_THERMAL_SETTINGS_SENSOR {
+            sensor(0, 0)
+        }
+
+        #[test]
+        fn prefers_explicit_gpu_target() {
+            let sensors = [
+                sensor(NVAPI_THERMAL_TARGET_MEMORY, 45),
+                sensor(NVAPI_THERMAL_TARGET_GPU, 71),
+            ];
+            assert_eq!(find_gpu_core_temp(&sensors, 2), Some(71.0));
+        }
+
+        #[test]
+        fn falls_back_to_first_populated_sensor() {
+            let sensors = [
+                sensor(NVAPI_THERMAL_TARGET_MEMORY, 45),
+                sensor(NVAPI_THERMAL_TARGET_GPU, 200),
+            ];
+            assert_eq!(find_gpu_core_temp(&sensors, 2), Some(45.0));
+        }
+
+        #[test]
+        fn returns_none_when_nothing_valid() {
+            // count == 0: zeroed entries read 0°C, which is not a valid reading.
+            // The old code trusted sensor[0]'s 0°C and returned a bogus 0.
+            let sensors = [zeroed(), zeroed(), zeroed()];
+            assert_eq!(find_gpu_core_temp(&sensors, 0), None);
+        }
+
+        #[test]
+        fn rejects_implausible_temperature() {
+            let sensors = [
+                sensor(NVAPI_THERMAL_TARGET_GPU, 200),
+                sensor(NVAPI_THERMAL_TARGET_GPU, -5),
+            ];
+            assert_eq!(find_gpu_core_temp(&sensors, 2), None);
+        }
+
+        #[test]
+        fn ignores_entries_beyond_populated_count() {
+            // count == 1: the second entry (a "GPU" reading) must not be trusted.
+            let sensors = [
+                sensor(NVAPI_THERMAL_TARGET_MEMORY, 45),
+                sensor(NVAPI_THERMAL_TARGET_GPU, 80),
+                zeroed(),
+            ];
+            assert_eq!(find_gpu_core_temp(&sensors, 1), Some(45.0));
+        }
+
+        #[test]
+        fn count_larger_than_array_is_clamped() {
+            let sensors = [sensor(NVAPI_THERMAL_TARGET_GPU, 62)];
+            assert_eq!(find_gpu_core_temp(&sensors, 99), Some(62.0));
+        }
     }
 }

@@ -7,7 +7,7 @@ use sys_monitor_tauri::collector::{
 use sys_monitor_tauri::hardware::{detect, DiskInfo, DiskKind, HardwareProfile};
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
-use sys_monitor_tauri::{build_history_payload, HistoryPayload};
+use sys_monitor_tauri::{build_history_payload, clamp_window_secs, HistoryPayload};
 use tauri::{Emitter, Manager};
 
 // ── WMI CONNECTION RETRY ─────────────────────────────────────────────────────
@@ -22,6 +22,10 @@ const WMI_MAX_ATTEMPTS: u32 = 8;
 /// Returns only the last `window_secs` points per metric; incremental updates arrive via "metrics-update".
 #[tauri::command]
 fn get_history(state: tauri::State<SafeAppState>, window_secs: u64) -> HistoryPayload {
+    // window_secs is an unvalidated u64 across the IPC boundary; clamp it to
+    // [1, MAX_HISTORY] before slicing (see clamp_window_secs) so a malformed or
+    // abusive value can never mean "entire history" or worse.
+    let window_secs = clamp_window_secs(window_secs);
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
     build_history_payload(&s, window_secs)
 }
@@ -252,55 +256,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    // --- background thread panic recovery ---
-
-    #[test]
-    fn test_catch_unwind_catches_synthetic_panic() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            panic!("synthetic collector panic");
-        }));
-        assert!(result.is_err(), "catch_unwind must catch a synthetic panic");
-    }
-
-    // Models the tick loop's match arms in main() (Ok -> emit metrics-update,
-    // Err -> emit collector-error once and break) without a real Tauri app
-    // handle or background thread (5.1). Characterizes: a panic produces
-    // exactly one collector-error emission, no metrics-update emissions after
-    // the panicking tick, and the loop stops (freezes forever, by design).
-    #[test]
-    fn test_tick_loop_panic_emits_exactly_one_error_and_stops() {
-        let mut metrics_update_count = 0u32;
-        let mut collector_error_count = 0u32;
-
-        // Ticks 0..3 succeed; tick 3 panics (simulating a collector-thread panic).
-        for tick in 0u32..10 {
-            let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if tick == 3 {
-                    panic!("synthetic collector panic");
-                }
-                tick // stand-in for a built MetricsSnapshot
-            }));
-
-            match tick_result {
-                Ok(_snapshot) => {
-                    metrics_update_count += 1;
-                }
-                Err(_) => {
-                    collector_error_count += 1;
-                    break; // loop permanently stops — no auto-restart, by design
-                }
-            }
-        }
-
-        assert_eq!(
-            metrics_update_count, 3,
-            "ticks 0..3 must have emitted metrics-update"
-        );
-        assert_eq!(
-            collector_error_count, 1,
-            "exactly one collector-error must be emitted on the panicking tick"
-        );
-    }
+    // Kept (asserts the exact error payload string — distinct from the
+    // run_collector_loop panic test in collector/run_loop.rs, which asserts
+    // emit/error counts on the real loop). The previous
+    // test_catch_unwind_catches_synthetic_panic (tests stdlib) and
+    // test_tick_loop_panic_emits_exactly_one_error_and_stops (a hand-rolled
+    // reimplementation of the loop) were deleted as tautological/duplicative.
 
     #[test]
     fn test_catch_unwind_error_payload_emitted() {

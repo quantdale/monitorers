@@ -2,7 +2,7 @@
 name = "sys-monitor-tauri"
 version = "0.1.4"
 description = "System Monitor — Tauri + React/TypeScript"
-authors = ["you"]
+authors = ["quantdale"]
 edition = "2021"
 
 [build-dependencies]
