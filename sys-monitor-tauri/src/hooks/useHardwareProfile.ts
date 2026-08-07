@@ -45,7 +45,7 @@ export function useHardwareProfile(): HardwareProfile | null {
     });
 
     return () => {
-      unlisten.then(fn => fn());
+      unlisten.then(fn => fn()).catch(() => {});
     };
   }, []);
 

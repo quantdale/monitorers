@@ -44,7 +44,6 @@ jobs:
     name: Simulation — mock lane
     runs-on: windows-latest
     if: github.event_name == 'push'
-    continue-on-error: true
     defaults:
       run:
         working-directory: sys-monitor-tauri

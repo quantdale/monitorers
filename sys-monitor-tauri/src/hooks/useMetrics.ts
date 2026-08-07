@@ -373,8 +373,8 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         setCollectorError(event.payload);
       });
       return () => {
-        unlistenMetricsPromise.then((f) => f());
-        unlistenErrorPromise.then((f) => f());
+        unlistenMetricsPromise.then((f) => f()).catch(() => {});
+        unlistenErrorPromise.then((f) => f()).catch(() => {});
       };
     }
     // Browser mock mode runs the same 250 ms period and 4:1 on_tick ratio as

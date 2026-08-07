@@ -103,6 +103,8 @@ export interface SettingsContextValue {
   loaded: boolean;
   /** Set when the plugin-store load rejects; the app renders a fatal state. */
   error: string | null;
+  /** Set when a save() call fails to persist; the app shows a non-fatal banner. */
+  saveError: string | null;
   /** Persist a partial settings patch (no-op in the browser). */
   save: (patch: Partial<Settings>) => Promise<void>;
 }
@@ -121,6 +123,7 @@ function useSettingsState(): SettingsContextValue {
   const [store, setStore] = useState<Store | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -153,9 +156,6 @@ function useSettingsState(): SettingsContextValue {
         const storePath = await resolveStorePath();
         const s = await Store.load(storePath);
         setStore(s);
-        // Missing settingsVersion means an install that predates versioning —
-        // treated as the earliest known version, not an error.
-        await s.get<number>('settingsVersion');
         const cardOrder = await s.get<string[]>('cardOrder');
         const hiddenCardIds = await s.get<string[]>('hiddenCardIds');
         const sidebarCardOrder = await s.get<string[]>('sidebarCardOrder');
@@ -185,11 +185,13 @@ function useSettingsState(): SettingsContextValue {
           }
           await store.set('settingsVersion', SETTINGS_VERSION);
           await store.save();
+          setSaveError(null);
         } catch (err) {
           // In-memory state is already updated, so the session keeps working;
-          // only persistence is lost. Log instead of leaving an unhandled
-          // rejection from the fire-and-forget call sites.
-          console.warn('[useSettings] failed to persist settings:', err);
+          // only persistence is lost. Surface the error as a non-fatal banner.
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn('[useSettings] failed to persist settings:', msg);
+          setSaveError(msg);
         }
         return;
       }
@@ -198,8 +200,11 @@ function useSettingsState(): SettingsContextValue {
         if (sim) {
           try {
             await sim.settings.save(patch as Record<string, unknown>);
+            setSaveError(null);
           } catch (err) {
-            console.warn('[useSettings] failed to persist mock settings:', err);
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn('[useSettings] failed to persist mock settings:', msg);
+            setSaveError(msg);
           }
         }
       }
@@ -207,7 +212,7 @@ function useSettingsState(): SettingsContextValue {
     [store]
   );
 
-  return { settings, save, loaded, error };
+  return { settings, save, loaded, error, saveError };
 }
 
 /** Provides the app-wide settings instance to every `useSettings()` consumer. */

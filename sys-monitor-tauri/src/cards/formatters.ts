@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 
 export function formatThroughput(kb: number): string {
+  if (!Number.isFinite(kb)) return '—';
   if (kb >= 1000 * 1000) return `${(kb / 1e6).toFixed(1)} GB/s`;
   if (kb >= 1000) return `${(kb / 1000).toFixed(1)} MB/s`;
   return `${kb.toFixed(0)} KB/s`;
@@ -8,6 +9,7 @@ export function formatThroughput(kb: number): string {
 
 export function formatPercent(v: number | undefined): string {
   const x = Math.max(0, v ?? 0);
+  if (!Number.isFinite(x)) return '—%';
   return `${x.toFixed(1)}%`;
 }
 

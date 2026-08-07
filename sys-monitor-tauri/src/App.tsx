@@ -54,7 +54,7 @@ const TIME_OPTIONS = WINDOW_SECS_OPTIONS.map((value) => ({
 }));
 
 export default function App() {
-  const { settings, save, loaded, error: settingsError } = useSettings();
+  const { settings, save, loaded, error: settingsError, saveError } = useSettings();
   const cardOrder = settings.cardOrder ?? [];
   const hiddenCardIds = useMemo(() => new Set(settings.hiddenCardIds), [settings.hiddenCardIds]);
   const viewMode = settings.viewMode;
@@ -69,7 +69,7 @@ export default function App() {
 
   // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
   useEffect(() => {
-    if (!metrics) return;
+    if (!loaded || !metrics) return;
     const defaultIds = computeDefaultCardIds(metrics);
     if (settings.cardOrder === null) {
       save({ cardOrder: defaultIds });
@@ -189,6 +189,22 @@ export default function App() {
           }}
         >
           {metrics.collectorError}
+        </div>
+      )}
+      {saveError && (
+        <div
+          data-testid="save-error-banner"
+          style={{
+            background: 'rgba(243, 156, 18, 0.15)',
+            border: '1px solid rgba(243, 156, 18, 0.7)',
+            borderRadius: 4,
+            color: '#ffeaa7',
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 14,
+          }}
+        >
+          Settings couldn't be saved — {saveError}. Changes are kept in memory for this session.
         </div>
       )}
       <div style={{ marginBottom: 4 }}>

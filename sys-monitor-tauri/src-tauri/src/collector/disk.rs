@@ -279,6 +279,10 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
         }
     }
 
+    // Sort deterministically so card order is stable across ticks regardless
+    // of HashMap iteration order (which is non-deterministic).
+    disk_display_order.sort();
+
     (
         disk_active,
         disk_read_mb_s,

@@ -217,28 +217,25 @@ pub fn should_rebuild_vendor_map(
     pdh_luids.iter().any(|l| !map.contains_key(l))
 }
 
-/// Merge per-LUID utilization totals into per-caption entries.
+/// Merge per-LUID utilization totals into per-LUID entries.
 ///
-/// Known characterization gap: multiple LUIDs that classify to the same
-/// brand-stripped display name (e.g. two identical dGPUs) are folded into a
-/// single entry with summed utilization, capped at 100%. This means two
-/// physically distinct same-model GPUs are indistinguishable in the UI today
-/// — see design.md Known Gaps in
-/// openspec/changes/add-realistic-usage-test-suite for the recommended fix
-/// (disambiguate by LUID instead of display name alone). This function pins
-/// today's actual behavior; it is not a requirement.
+/// Each LUID gets its own entry with its own display name, so two physically
+/// distinct same-model GPUs (same brand-stripped display name, different LUIDs)
+/// are distinguishable in the UI. When two or more LUIDs share the same
+/// display name, a numeric suffix is appended (e.g. "GeForce RTX 3060 1",
+/// "GeForce RTX 3060 2") so card IDs remain unique.
+///
+/// Returns `(luid, display_name, GpuClass, util%)` per LUID.
 fn merge_gpu_utilization_by_caption(
     vendor_map: Option<&HashMap<String, String>>,
     luid_3d_totals: &HashMap<String, f64>,
     gpu_error_lock: &OnceLock<()>,
-) -> Vec<(String, GpuClass, f64)> {
+) -> Vec<(String, String, GpuClass, f64)> {
     // Build list from vendor_map so we include GPUs with 0% util.
-    // Merge util by caption — multiple LUIDs (e.g. 0x00017C9F and 0x00017D0F) can
-    // map to the same physical GPU; sum their utilization.
     let Some(vendor_map) = vendor_map else {
         return Vec::new();
     };
-    let mut caption_util: HashMap<String, (GpuClass, f64)> = HashMap::new();
+    let mut entries: Vec<(String, String, GpuClass, f64)> = Vec::new();
     for (luid, caption) in vendor_map {
         let class = classify_luid(luid, vendor_map);
         if matches!(class, GpuClass::Unknown) {
@@ -255,18 +252,24 @@ fn merge_gpu_utilization_by_caption(
         if display_name.is_empty() {
             continue;
         }
-        caption_util
-            .entry(display_name)
-            .and_modify(|(_, u)| {
-                *u = (*u + util).min(100.0);
-            })
-            .or_insert((class, util));
+        entries.push((luid.clone(), display_name, class, util));
     }
 
-    caption_util
-        .into_iter()
-        .map(|(display_name, (class, util))| (display_name, class, util))
-        .collect()
+    // Disambiguate same-display-name GPUs: count occurrences, append " 1", " 2" etc.
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for (_, name, _, _) in &entries {
+        *name_counts.entry(name.clone()).or_insert(0) += 1;
+    }
+    let mut name_indices: HashMap<String, usize> = HashMap::new();
+    for (_, name, _, _) in &mut entries {
+        if *name_counts.get(name).unwrap_or(&0) > 1 {
+            let idx = *name_indices.entry(name.clone()).or_insert(0);
+            name_indices.insert(name.clone(), idx + 1);
+            name.push_str(&format!(" {}", idx + 1));
+        }
+    }
+
+    entries
 }
 
 /// Read GPU 3D-engine utilization from PDH. Returns list of (history_key, display_name, util%) per GPU.
@@ -316,7 +319,16 @@ pub fn query_gpu_utilization_pdh(
         let pdh_luids: Vec<String> = luid_3d_totals.keys().cloned().collect();
         if should_rebuild_vendor_map(gpu_vendor_map, *vendor_map_last_build, &pdh_luids) {
             let rebuilt = build_gpu_vendor_map(con, pdh_luids.into_iter());
-            *gpu_vendor_map = Some(rebuilt);
+            // Preserve existing LUID→caption pairs; only add new entries.
+            // This prevents hot-plug rebuilds from shifting captions for
+            // already-known LUIDs (positional-match fragility — AUDIT-005).
+            if let Some(ref mut existing) = gpu_vendor_map {
+                for (luid, caption) in rebuilt {
+                    existing.entry(luid).or_insert(caption);
+                }
+            } else {
+                *gpu_vendor_map = Some(rebuilt);
+            }
             *vendor_map_last_build = std::time::Instant::now();
         }
     } else {
@@ -328,39 +340,24 @@ pub fn query_gpu_utilization_pdh(
     // the rebuild above has already finished, so this borrow is safe.
     let vendor_map = gpu_vendor_map.as_ref();
 
-    let mut entries: Vec<(String, GpuClass, f64)> =
+    let mut entries: Vec<(String, String, GpuClass, f64)> =
         merge_gpu_utilization_by_caption(vendor_map, &luid_3d_totals, gpu_error_lock);
 
     // Sort: iGPU first, then dGPU; within each class by display name.
     entries.sort_by(|a, b| {
-        let ord = match (a.1, b.1) {
+        let ord = match (a.2, b.2) {
             (GpuClass::IGpu, GpuClass::DGpu) => std::cmp::Ordering::Less,
             (GpuClass::DGpu, GpuClass::IGpu) => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
         };
-        ord.then_with(|| a.0.cmp(&b.0))
+        ord.then_with(|| a.1.cmp(&b.1))
     });
 
-    // For duplicate display names (same model), add " 1", " 2" suffix.
-    // Use display_name as stable key for history (merged LUIDs share one history).
-    let mut name_counts: HashMap<String, usize> = HashMap::new();
-    for (name, _, _) in &entries {
-        *name_counts.entry(name.clone()).or_insert(0) += 1;
-    }
-    let mut name_indices: HashMap<String, usize> = HashMap::new();
-    for (display_name, _class, util) in entries {
-        let suffix = if *name_counts.get(&display_name).unwrap_or(&0) > 1 {
-            let idx = *name_indices.entry(display_name.clone()).or_insert(0);
-            name_indices.insert(display_name.clone(), idx + 1);
-            format!(" {}", idx + 1)
-        } else {
-            String::new()
-        };
-        result.push((
-            display_name.clone(),
-            format!("{}{}", display_name, suffix),
-            util,
-        ));
+    // Use LUID as history key so two identical GPUs get separate history
+    // arrays and separate cards. The display_name (with disambiguation
+    // suffix) is used for the UI label.
+    for (luid, display_name, _class, util) in entries {
+        result.push((luid, display_name, util));
     }
 
     if cfg!(debug_assertions) {
@@ -582,14 +579,12 @@ mod tests {
         );
     }
 
-    // --- merge_gpu_utilization_by_caption (known defect characterization, 3.2/3.3) ---
-    // See the doc comment on merge_gpu_utilization_by_caption and design.md's
-    // Known Gaps register in openspec/changes/add-realistic-usage-test-suite:
-    // these tests pin the CURRENT (defective) behavior, not a requirement.
+    // --- merge_gpu_utilization_by_caption (per-LUID entries, AUDIT-004 fix) ---
 
     #[test]
-    fn test_merge_same_model_gpus_sums_utilization_into_one_entry() {
+    fn test_merge_same_model_gpus_emit_separate_entries() {
         // Two distinct physical GPUs, same model, different LUIDs.
+        // Each gets its own entry with a disambiguation suffix.
         let mut vendor_map = HashMap::new();
         vendor_map.insert(
             "0x00017A00".to_string(),
@@ -607,17 +602,31 @@ mod tests {
         let entries =
             merge_gpu_utilization_by_caption(Some(&vendor_map), &luid_totals, &gpu_error_lock);
 
-        // Defect: one merged entry, not two — the two physical GPUs are
-        // indistinguishable in the result.
-        assert_eq!(entries.len(), 1);
-        let (name, class, util) = &entries[0];
-        assert_eq!(name, "GeForce RTX 3060");
-        assert_eq!(*class, GpuClass::DGpu);
-        assert_eq!(*util, 75.0); // summed, not averaged or kept separate
+        // Two separate entries — the physical GPUs are distinguishable.
+        assert_eq!(entries.len(), 2);
+        // Both are dGPUs.
+        for (_, _, class, _) in &entries {
+            assert_eq!(*class, GpuClass::DGpu);
+        }
+        // Each LUID used as history key (order-independent check).
+        let luids: Vec<&str> = entries.iter().map(|(l, _, _, _)| l.as_str()).collect();
+        assert!(luids.contains(&"0x00017A00"));
+        assert!(luids.contains(&"0x00017B00"));
+        // Display names disambiguated with suffixes (order-independent).
+        let names: Vec<&str> = entries.iter().map(|(_, n, _, _)| n.as_str()).collect();
+        assert!(names.iter().all(|n| n.contains("3060")));
+        assert_ne!(
+            names[0], names[1],
+            "same-model GPUs must have distinct display names"
+        );
+        // Utilization kept separate (not summed).
+        let utils: Vec<f64> = entries.iter().map(|(_, _, _, u)| *u).collect();
+        assert!(utils.contains(&30.0));
+        assert!(utils.contains(&45.0));
     }
 
     #[test]
-    fn test_merge_same_model_gpus_summed_utilization_capped_at_100() {
+    fn test_merge_same_model_gpus_utilization_not_summed() {
         let mut vendor_map = HashMap::new();
         vendor_map.insert(
             "0x00017A00".to_string(),
@@ -635,9 +644,10 @@ mod tests {
         let entries =
             merge_gpu_utilization_by_caption(Some(&vendor_map), &luid_totals, &gpu_error_lock);
 
-        assert_eq!(entries.len(), 1);
-        let (_, _, util) = &entries[0];
-        assert_eq!(*util, 100.0); // 150.0 clamped to 100.0
+        assert_eq!(entries.len(), 2);
+        let utils: Vec<f64> = entries.iter().map(|(_, _, _, u)| *u).collect();
+        assert!(utils.contains(&80.0), "each GPU keeps its own util%");
+        assert!(utils.contains(&70.0), "each GPU keeps its own util%");
     }
 
     #[test]

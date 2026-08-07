@@ -28,22 +28,58 @@ pub struct NvmlReadings {
     pub clock_mhz: Option<u32>,
 }
 
+/// Check whether an NVML device name belongs to an Nvidia GPU.
+/// NVML returns full names like "NVIDIA GeForce RTX 3060"; this matches
+/// consumer, professional, and datacenter lines.
+#[cfg(feature = "nvml")]
+fn is_nvml_nvidia_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("geforce")
+        || lower.contains("rtx")
+        || lower.contains("gtx")
+        || lower.contains("nvidia")
+        || lower.contains("quadro")
+        || lower.contains("tesla")
+        || lower.contains("nvs")
+}
+
 #[cfg(feature = "nvml")]
 pub fn query_nvml(nvml: &Nvml) -> NvmlReadings {
     use nvml_wrapper::enum_wrappers::device::{Clock, ClockId, TemperatureSensor};
 
-    let device = match nvml.device_by_index(0) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("[NVML] device_by_index failed: {e}");
-            return NvmlReadings {
-                temp_c: None,
-                power_w: None,
-                mem_used_mb: None,
-                mem_total_mb: None,
-                fan_speed_pct: None,
-                clock_mhz: None,
-            };
+    // Enumerate all NVML devices and find the one that matches an Nvidia GPU.
+    // Device index 0 is not guaranteed to be the Nvidia GPU in multi-GPU
+    // systems (e.g. Intel iGPU may be at index 0). Fallback to device 0 if
+    // no match is found.
+    let device = {
+        let count = nvml.device_count().unwrap_or(1);
+        let mut matched = None;
+        for idx in 0..count {
+            if let Ok(dev) = nvml.device_by_index(idx) {
+                if let Ok(name) = dev.name() {
+                    if is_nvml_nvidia_device(&name) {
+                        matched = Some(dev);
+                        break;
+                    }
+                }
+            }
+        }
+        match matched {
+            Some(d) => d,
+            None => match nvml.device_by_index(0) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("[NVML] device_by_index failed: {e}");
+                    return NvmlReadings {
+                        temp_c: None,
+                        power_w: None,
+                        mem_used_mb: None,
+                        mem_total_mb: None,
+                        fan_speed_pct: None,
+                        clock_mhz: None,
+                    };
+                }
+            },
         }
     };
 
@@ -182,6 +218,49 @@ mod tests {
         // query_nvidia_gpu_temp() must return None, not panic.
         let collector_state = crate::state::CollectorState::new();
         let _ = query_nvidia_gpu_temp(collector_state.nvapi_initialized);
+    }
+
+    // --- is_nvml_nvidia_device (AUDIT-006) ---
+
+    #[cfg(feature = "nvml")]
+    mod nvml_device_match {
+        use super::*;
+
+        #[test]
+        fn recognizes_geforce() {
+            assert!(is_nvml_nvidia_device("NVIDIA GeForce RTX 4070"));
+        }
+
+        #[test]
+        fn recognizes_quadro() {
+            assert!(is_nvml_nvidia_device("NVIDIA Quadro RTX 5000"));
+        }
+
+        #[test]
+        fn recognizes_tesla() {
+            assert!(is_nvml_nvidia_device("NVIDIA Tesla V100"));
+        }
+
+        #[test]
+        fn recognizes_nvs() {
+            assert!(is_nvml_nvidia_device("NVIDIA NVS 810"));
+        }
+
+        #[test]
+        fn rejects_intel() {
+            assert!(!is_nvml_nvidia_device("Intel(R) UHD Graphics 630"));
+        }
+
+        #[test]
+        fn rejects_amd() {
+            assert!(!is_nvml_nvidia_device("AMD Radeon RX 6700 XT"));
+        }
+
+        #[test]
+        fn case_insensitive() {
+            assert!(is_nvml_nvidia_device("nvidia geforce gtx 1660"));
+            assert!(is_nvml_nvidia_device("NVIDIA GEFORCE RTX 3060"));
+        }
     }
 
     // --- find_gpu_core_temp (F-3) ---

@@ -23,6 +23,7 @@ export default defineConfig(async () => ({
   test: {
     environment: 'jsdom',
     globals: true,
+    setupFiles: ['src/test/setup.ts'],
     // Playwright specs under e2e/ are run by `npm run e2e`, not by vitest.
     exclude: [...configDefaults.exclude, 'e2e/**'],
   },

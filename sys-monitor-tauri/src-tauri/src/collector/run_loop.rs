@@ -5,6 +5,8 @@
 // same 4:1 full-poll ratio, same one-PdhCollectQueryData-per-full-tick
 // invariant, same catch_unwind/panic-break semantics.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use chrono::Utc;
 
 use crate::collector::snapshot::{build_snapshot, is_full_poll_tick, MetricsSnapshot};
@@ -22,12 +24,14 @@ use crate::state::{CollectorState, SafeHistoryStore};
 ///
 /// `ticks: Some(n)` returns after `n` iterations (or after a panic-break);
 /// `None` loops forever, as production does.
+#[allow(clippy::too_many_arguments)]
 pub fn run_collector_loop(
     state: &mut CollectorState,
     wmi_con: Option<&wmi::WMIConnection>,
     registry: &mut SensorRegistry,
     store: &SafeHistoryStore,
     ticks: Option<u32>,
+    stop: Option<&AtomicBool>,
     mut emit: impl FnMut(&MetricsSnapshot),
     mut on_error: impl FnMut(&str),
 ) {
@@ -90,6 +94,9 @@ pub fn run_collector_loop(
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
+        if stop.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            break;
+        }
     }
 }
 
@@ -122,6 +129,7 @@ mod tests {
             &mut registry,
             &store,
             Some(8),
+            None,
             |snap| {
                 emit_count += 1;
                 if snap.on_tick {
@@ -188,6 +196,7 @@ mod tests {
             &mut registry,
             &store,
             Some(10), // the panic must stop the loop well before tick 10
+            None,
             |_snap| emit_count += 1,
             |_msg| error_count += 1,
         );

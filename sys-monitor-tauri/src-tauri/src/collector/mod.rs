@@ -48,7 +48,9 @@ pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max
 /// Open a PDH query and register GPU + disk utilization counters once at startup.
 ///
 /// Returns `Some(PdhHandles)` with all counters that could be opened.
-/// Returns `None` if the query or 3D counter cannot be opened.
+/// Returns `None` only if the query itself cannot be opened.
+/// GPU counter failure is non-fatal: disk counters are registered independently
+/// so a GPU-only failure does not drop disk metrics.
 ///
 /// The query handle must live for the process lifetime — recreating it resets
 /// the baseline and always returns 0%.
@@ -58,16 +60,19 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
     unsafe {
         let mut query = PDH_HQUERY::default();
         if PdhOpenQueryW(None, 0, &mut query) != 0 {
-            eprintln!("[PDH] PdhOpenQueryW failed — GPU metrics unavailable.");
+            eprintln!("[PDH] PdhOpenQueryW failed — GPU and disk metrics unavailable.");
             return None;
         }
 
+        // GPU 3D counter — non-fatal if it fails (disk counters are independent).
         let path_3d = windows::core::w!(r"\GPU Engine(*engtype_3D*)\Utilization Percentage");
         let mut counter_3d = PDH_HCOUNTER::default();
-        if PdhAddEnglishCounterW(query, path_3d, 0, &mut counter_3d) != 0 {
+        let gpu_3d_counter = if PdhAddEnglishCounterW(query, path_3d, 0, &mut counter_3d) == 0 {
+            Some(counter_3d)
+        } else {
             eprintln!("[PDH] Failed to add GPU 3D counter — GPU metrics unavailable.");
-            return None;
-        }
+            None
+        };
 
         // Disk % Idle Time added to the same query as GPU so one
         // PdhCollectQueryData snapshots both domains atomically.
@@ -116,10 +121,14 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
         // First collect — establishes the baseline (value₁). Real readings
         // start on the second poll. The first result is always 0%, by design.
         let _ = PdhCollectQueryData(query);
-        eprintln!("[PDH] GPU/disk counters initialized successfully.");
+        if gpu_3d_counter.is_some() {
+            eprintln!("[PDH] GPU and disk counters initialized successfully.");
+        } else {
+            eprintln!("[PDH] Disk counters initialized (GPU 3D counter unavailable).");
+        }
         Some(crate::state::PdhHandles {
             query: Some(query),
-            gpu_3d_counter: Some(counter_3d),
+            gpu_3d_counter,
             disk_active_counter: counter_disk_opt,
             disk_read_counter: counter_disk_read_opt,
             disk_write_counter: counter_disk_write_opt,
@@ -132,7 +141,7 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
 
 /// How long a CPU-temperature WMI reading is considered fresh. WMI queries are
 /// expensive relative to the 250ms tick; temps change slowly, so 1Hz suffices.
-const CPU_TEMP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+const CPU_TEMP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Query the CPU temperature, serving from a 1-second cache when possible.
 /// A failed query is not cached, so the next poll retries immediately.

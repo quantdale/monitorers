@@ -131,6 +131,7 @@ fn main() {
             &mut registry,
             &store,
             ticks,
+            None,
             |snap| {
                 let elapsed_ms = start.elapsed().as_millis() as u64;
                 let rec = CadenceRecord::from_snapshot(&store, snap.on_tick, elapsed_ms);

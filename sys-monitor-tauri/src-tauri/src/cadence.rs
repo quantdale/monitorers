@@ -131,9 +131,17 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
     };
     if total_records == 0 {
         failures.push("no records — probe produced no output".to_string());
-    } else if !(150.0..=1000.0).contains(&mean_interval_ms) {
+    } else if mean_interval_ms < 150.0 {
         failures.push(format!(
-            "mean inter-emit interval {mean_interval_ms:.1}ms outside [150, 1000]ms (liveness sanity — expected ~250ms; calibrated to real-WMI overhead, see design.md)"
+            "mean inter-emit interval {mean_interval_ms:.1}ms < 150ms (spinning — no sleep between ticks)"
+        ));
+    } else if mean_interval_ms > 1000.0 {
+        failures.push(format!(
+            "mean inter-emit interval {mean_interval_ms:.1}ms > 1000ms (tick too slow — liveness broken, expected ~250ms; calibrated to real-WMI overhead, see design.md)"
+        ));
+    } else if mean_interval_ms > 800.0 {
+        failures.push(format!(
+            "WARN: mean inter-emit interval {mean_interval_ms:.1}ms > 800ms (tick slower than expected, may indicate PDH/WMI overhead regression)"
         ));
     }
 
