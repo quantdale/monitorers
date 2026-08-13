@@ -1,15 +1,13 @@
 ## Purpose
 
-Defines the test coverage required to verify sys-monitor-tauri behaves correctly under realistic, longitudinal, imperfect human usage. Scoped to a single-process, no-auth, no-server, no-multi-tenant Windows desktop app. Several requirements are **characterization** requirements: they pin today's actual (in some cases defective) behavior with a test, rather than asserting it as correct, so a future fix is a deliberate change to a known test rather than a silent behavior shift.
-
+Defines the test coverage required to verify sys-monitor-tauri behaves correctly under realistic, longitudinal, imperfect human usage. Scoped to a single-process, no-auth, no-server, no-multi-tenant Windows desktop app. Hardware identity and failure behavior are correctness contracts, not characterization of known defects.
 ## Requirements
-
 ### Requirement: Dashboard card identity survives unchanged-hardware restarts
-The dashboard card identity scheme (`gpuId(name)` for GPUs, drive-letter combo for disks) SHALL be verified to produce the same card id across repeated computation for the same input, and the persisted `cardOrder`/`hiddenCardIds` SHALL be verified to still apply correctly to a card when the underlying hardware list is unchanged between sessions.
+The dashboard card identity scheme SHALL use stable GPU and disk hardware keys, not display-name slugs or array positions. The persisted `cardOrder`/`hiddenCardIds` SHALL be verified to still apply correctly to a card when the underlying hardware list is unchanged between sessions.
 
-#### Scenario: Same GPU name always yields the same card id
-- **WHEN** `gpuId` is called multiple times with the same display name
-- **THEN** it returns an identical id string each time
+#### Scenario: Same GPU key always yields the same card id
+- **WHEN** the same stable GPU key is observed across snapshots or restarts
+- **THEN** it returns an identical card id even if its display name changes
 
 #### Scenario: Reordered and hidden cards survive a settings reload with unchanged hardware
 - **WHEN** a saved `cardOrder` and `hiddenCardIds` are loaded against a metrics snapshot whose disk/GPU keys match the ids already present in `cardOrder`
@@ -27,7 +25,7 @@ When a metrics snapshot contains disk or GPU ids not present in the currently sa
 - **THEN** the settings save function is not called (no redundant persisted write)
 
 ### Requirement: Removed hardware hides its card without deleting persisted state (ghost-entry behavior)
-When previously known hardware (e.g. a disk) is no longer present in a metrics snapshot, its card SHALL disappear from the visible card list via `isCardPresent` filtering, and its id SHALL remain in the persisted `cardOrder`/`hiddenCardIds` indefinitely. Persisted-state retention was originally a characterization of a confirmed gap (no pruning existed); the backend now prunes vanished disk/GPU history entries after a 4-tick grace window (`PRUNE_MISS_THRESHOLD` in `collector/mod.rs`), and the frontend's per-key `isCardPresent` hides exactly the affected card.
+When previously known hardware (e.g. a disk) is no longer present in a metrics snapshot, its card SHALL disappear from the visible card list via `isCardPresent` filtering while its stable id remains in persisted `cardOrder`/`hiddenCardIds`. The backend prunes vanished disk/GPU history entries after a 4-tick grace window (`PRUNE_MISS_THRESHOLD` in `collector/mod.rs`); the frontend hides exactly the affected card and can restore its saved position when the same key reappears.
 
 #### Scenario: A removed disk's card disappears but its id is retained in settings
 - **WHEN** a disk id present in `cardOrder` is absent from the current metrics snapshot's disk list
@@ -41,23 +39,23 @@ When previously known hardware (e.g. a disk) is no longer present in a metrics s
 - **WHEN** two disks (`C:`, `D:`) are present and `D:` is unplugged while `C:` remains
 - **THEN** `isCardPresent('disk_D:')` is false while `isCardPresent('disk_C:')` remains true, so the visible order loses exactly the `D:` card
 
-### Requirement: Hardware sidebar positional identity is characterized against enumeration-order changes
-The hardware sidebar's card ids (`sb_gpu_${i}`, `sb_disk_${i}`) are derived from array position in the hardware profile, not from content. The test suite SHALL characterize today's behavior: if the profile's GPU or disk enumeration order differs between two calls, the same positional id MUST be shown to refer to different hardware, with no detection or warning, so this gap is documented rather than silently rediscovered later.
+### Requirement: Hardware sidebar identity survives enumeration-order changes
+The hardware sidebar SHALL use the same stable GPU and disk keys as the dashboard. Enumeration order changes SHALL NOT change which physical device a saved position refers to.
 
-#### Scenario: Sidebar order silently points at different hardware after an enumeration-order change
+#### Scenario: Sidebar order remains attached after an enumeration-order change
 - **WHEN** a saved `sidebarCardOrder` is computed against a hardware profile whose GPU array order is `[gpuA, gpuB]`, and the app later loads a profile whose GPU array order is `[gpuB, gpuA]`
-- **THEN** `sb_gpu_0` renders `gpuB`'s data instead of `gpuA`'s, with no error surfaced to the user — pinning this as a known, tested gap rather than an undiscovered one
+- **THEN** the saved stable keys still render `gpuA` and `gpuB` in their saved positions
 
-### Requirement: GPU utilization for two same-model GPUs is characterized as merged (known defect)
-The PDH GPU-utilization query merges entries by brand-stripped display name. The test suite SHALL pin today's actual behavior as a tested fact, not as correct behavior: two physically distinct GPUs sharing the same display name MUST be shown to produce one merged entry with summed utilization (capped at 100%). The recommended fix is to key by `(display_name, luid)` or enumeration index instead of display name alone.
+### Requirement: GPU utilization for two same-model GPUs remains separate
+The PDH GPU-utilization query SHALL retain one entry per stable hardware key. Two physically distinct GPUs sharing the same display name MUST remain separate cards and histories.
 
-#### Scenario: Two identically-named GPU utilization readings are summed into one entry
+#### Scenario: Two identically-named GPU utilization readings remain separate
 - **WHEN** `query_gpu_utilization_pdh`-equivalent merge logic processes two LUIDs that both classify to the same brand-stripped display name with utilization values that sum to under 100
-- **THEN** the resulting entry list contains exactly one entry for that display name, with utilization equal to the sum of the two inputs
+- **THEN** the resulting entry list contains two entries with distinct keys and their individual utilization values
 
-#### Scenario: Summed utilization for same-model GPUs is capped at 100%
+#### Scenario: Same-model GPU utilization is independently bounded
 - **WHEN** two same-named GPU utilization values sum to more than 100
-- **THEN** the merged entry's utilization is capped at 100, not left unbounded
+- **THEN** each individual entry is capped at 100 and no value is created by summing the devices
 
 ### Requirement: Rapid sequential setting changes converge to a consistent final state
 When multiple settings patches are applied in quick succession (e.g. several drag-reorder operations before any async save completes), the in-memory settings state SHALL reflect the last-applied patch for each key, and the sequence of underlying store writes SHALL be verified not to reorder or drop any individual key's final value.
@@ -81,8 +79,8 @@ Layout preferences (`cardOrder`, `hiddenCardIds`, `sidebarCardOrder`, `viewMode`
 - **WHEN** a new `HistoryStore` is constructed (simulating process restart)
 - **THEN** all of its history ring buffers are empty, regardless of any prior process's accumulated history
 
-### Requirement: Dual-instance concurrent settings writes are characterized (known gap)
-No single-instance enforcement exists. The test suite SHALL characterize current last-write-wins behavior at the settings-merge-logic level as a documented gap; it MUST NOT be interpreted as asserting that concurrent real-OS-process file writes are safe, since that is outside what unit-level testing can exercise.
+### Requirement: Settings writes are serialized within an instance
+The settings layer SHALL serialize rapid writes from one app instance so last-write semantics are preserved. Concurrent writes from independent OS processes remain outside this single-process application's supported contract and SHALL NOT be inferred safe from unit tests.
 
 #### Scenario: Two independent settings-save sequences applied in interleaved order produce a deterministic last-write-wins result
 - **WHEN** two independent patch sequences representing two app instances are interleaved and applied to the same in-memory settings reducer in a defined order
@@ -114,12 +112,12 @@ The 1Hz history-commit cadence (`is_full_poll_tick`/`on_tick` on the backend, `s
 - **WHEN** `npm run tauri dev` runs continuously for at least the length of one selected time window
 - **THEN** a human tester confirms (via stopwatch or timestamp spot-check) that the "1 hour" window's displayed span matches real elapsed time 1:1, and that CPU/GPU card readouts visibly update multiple times per second throughout — tracked as a manual/exploratory task, not automatable with current tooling
 
-### Requirement: Schema version mismatch is detectable in test, even though production only logs it
-A mismatch between the frontend's `EXPECTED_SCHEMA_VERSION` and a payload's `schema_version` SHALL be verified to trigger `assertSchemaVersion`'s error path. This characterizes the current silent-degrade behavior (console error only, no user-facing block) as a documented, tested fact.
+### Requirement: Schema version mismatch fails closed
+A mismatch between the frontend's `EXPECTED_SCHEMA_VERSION` and a payload's `schema_version` SHALL trigger an actionable visible error, and the incompatible payload SHALL NOT mutate history or live state.
 
-#### Scenario: Mismatched schema version logs an error
+#### Scenario: Mismatched schema version is rejected
 - **WHEN** `assertSchemaVersion` is called with an `actual` value different from `EXPECTED_SCHEMA_VERSION`
-- **THEN** an error is logged identifying both the expected and actual versions
+- **THEN** an error is logged identifying both versions, the UI exposes a rebuild-required error, and the payload is not consumed
 
 #### Scenario: Matching schema version produces no error
 - **WHEN** `assertSchemaVersion` is called with `actual` equal to `EXPECTED_SCHEMA_VERSION`
@@ -160,3 +158,17 @@ A card hidden via `hiddenCardIds` SHALL remain hidden across the hardware it rep
 #### Scenario: A hidden disk stays hidden after being removed and reinserted
 - **WHEN** a disk id is added to `hiddenCardIds`, then the disk is absent from a later snapshot, then present again in a subsequent snapshot with the same key
 - **THEN** the disk's card remains excluded from `visibleCardOrder` throughout, without any change to `hiddenCardIds`
+
+### Requirement: Stable identity is enforced across hardware paths
+Realistic-usage tests SHALL treat dashboard and sidebar identity as a correctness property. Tests SHALL cover same-name devices, slug collisions, enumeration reorder, remove/reappear, restart persistence, and safe legacy migration; they SHALL not preserve known positional or display-name defects as expected behavior.
+
+#### Scenario: Sidebar reorder follows physical device
+- **WHEN** two same-model devices reverse enumeration order
+- **THEN** the saved sidebar order remains attached to their stable keys
+
+### Requirement: Settings schema version is read and migrated
+The settings loader SHALL read `settingsVersion`, treat absence as legacy v0, migrate recognized older versions stepwise, validate current fields, preserve future-version files without destructive downgrade, and surface corruption/fallback warnings as designed.
+
+#### Scenario: Future settings are preserved
+- **WHEN** a store contains a future settings version
+- **THEN** the app does not overwrite it with a downgraded schema and exposes a visible safe error/fallback state

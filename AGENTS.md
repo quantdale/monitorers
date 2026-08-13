@@ -5,7 +5,7 @@ Windows-only real-time system monitor: Rust/Tauri v2 backend (Win32 PDH/WMI/NVML
 ## Instruction sources
 
 - `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both have drifted from source; where they disagree, trust the source. Verified stale claims:
-  - Schema version is **3**, not 2 (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`).
+  - Schema version is **4**, not 2 or 3 (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
   - The backend is no longer a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `src/bin/cadence_probe.rs`.
   - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store` — the "no persistence by design" claim is stale.
   - Cargo default features are `["nvapi", "nvml"]`.
@@ -26,17 +26,19 @@ npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.j
 
 Simulation run knobs (`SIM_LANE`, `SIM_JOURNEYS`, `SIM_PERSONAS`, `SIM_SEED`, `SIM_SPEED`,
 `SIM_OUT`, `SIM_APP_EXE`): e.g. `SIM_SEED=42 SIM_JOURNEYS=first-launch-onboarding npm run sim`.
-Same seed reproduces the identical session — failures are reproducible from the run header
+Same seed reproduces the same seeded decisions and simulated metric sequence; wall-clock
+timestamps and browser/video artifacts are intentionally not byte-identical. Failures are
+reproducible from the run header
 (`run.jsonl` under `e2e-results/sim/`). The real lane requires a built exe
 (`src-tauri/target/release/sys-monitor-tauri.exe` or `SIM_APP_EXE`).
 
 ```bash
 # from src-tauri/ (cargo commands):
-cargo test                # ~136 tests
+cargo test                # test count is reported by Cargo; do not hard-code it in docs
 cargo test collector::disk   # one module
 cargo fmt -- --check      # CI-enforced; run `cargo fmt` first if it fails
 cargo clippy -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
-cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (~90s)
+cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (>=60s)
 cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 ```
 
@@ -44,14 +46,14 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 
 - Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo audit`
 - Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
-- Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is CI-run non-blocking in `.github/workflows/simulation.yml`
-- CI: `.github/workflows/rust.yml` — three jobs (rust-test + rust-lint on windows-latest, frontend on ubuntu-latest); `.github/workflows/e2e.yml` (mock-harness E2E on windows-latest); `.github/workflows/simulation.yml` (simulation mock lane on push, packaged lane on workflow_dispatch, shipped-config lint).
+- Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is a required PR/push gate in `.github/workflows/simulation.yml`
+- CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane on workflow_dispatch, shipped-config lint).
 
 ## Backend invariants (do not violate)
 
 - `CollectorState` is **never** behind a Mutex (owns all OS handles, lives on the background thread). Only `HistoryStore` is `Mutex`-wrapped (`SafeHistoryStore`/`SafeAppState` aliases). Lock scope is microseconds: I/O in `poll()` lock-free, commit under short lock. Never hold the lock during PDH/WMI/sysinfo I/O.
 - Locks use `.unwrap_or_else(|e| e.into_inner())` (poison-safe).
-- Tick loop: 250 ms sleeps, 4-tick cadence — full poll every 4th tick, sensor registry on the others. **History (`push_history`) writes only on full ticks (1 Hz)**; providers may poll at 250 ms but must never commit history faster, or chart scroll rate desyncs at long windows.
+- Tick loop: monotonic 250 ms deadlines, 4-tick cadence — full poll every 4th tick, sensor registry on the others. Missed deadlines are rebased instead of replayed in a catch-up burst. **History (`push_history`) writes only on full ticks (1 Hz)**; providers may poll at 250 ms but must never commit history faster, or chart scroll rate desyncs at long windows.
 - PDH handles are opened once in `CollectorState::new()` and never recreated (recreating resets rate-counter baselines — first reading is always 0%). One `PdhCollectQueryData` per tick.
 - `WMIConnection` is `!Send`: created on the background MTA thread (exponential backoff, base 1s, max 30s, 8 attempts), never leaves it.
 - Never push directly to a history `VecDeque` — always `push_history()` (`MAX_HISTORY = 3600`).
@@ -64,7 +66,7 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 - Rust params are `snake_case` (`window_secs`); JS **must pass camelCase** (`{ windowSecs }`). Mismatch fails silently — history stays `null`, UI hangs on "Collecting metrics…".
 - `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-error` (string).
 - Detect Tauri v2 runtime with `window.__TAURI_INTERNALS__`, **not** `window.__TAURI__`.
-- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **3**. Bump both together when the payload shape changes.
+- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **4**. Bump both together when the payload shape changes.
 
 ## Frontend conventions
 

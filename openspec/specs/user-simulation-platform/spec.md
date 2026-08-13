@@ -1,7 +1,7 @@
 # user-simulation-platform Specification
 
 ## Purpose
-TBD - created by archiving change add-user-simulation-platform. Update Purpose after archive.
+Defines the reusable user-simulation personas, journeys, drivers, fault injection, persistence boundaries, and evidence contract for the monitor application.
 ## Requirements
 ### Requirement: Reusable declarative user personas
 The platform SHALL provide personas as declarative data (not code) that parameterize a simulated user: session-length distribution, think-time and dwell-time ranges, action preferences over the app's interaction surface, mistake probability, and fault-reaction behavior. Personas SHALL be composable with any journey and any supported driver without modification, and adding a new persona SHALL NOT require changes to the engine or driver code.
@@ -63,7 +63,7 @@ The platform SHALL replace the hardcoded mock in `useMetrics.ts` with a scriptab
 - **THEN** no bridge code executes and metrics arrive only via real IPC
 
 ### Requirement: Default mock behavior parity
-The bridge's default script SHALL reproduce the pre-existing mock behavior (sine-wave metrics, 250 ms ticks, 4:1 history cadence, two disks, two GPUs, schema version 3) such that the existing E2E suite passes unmodified against the bridge.
+The bridge's default script SHALL reproduce the pre-existing mock behavior (sine-wave metrics, 250 ms ticks, 4:1 history cadence, two disks, two GPUs, schema version 4) such that the existing E2E suite passes against the bridge.
 
 #### Scenario: Existing E2E specs pass against the bridge with no edits
 - **WHEN** the simulation bridge replaces the inline mock and the five existing Playwright specs run unchanged
@@ -114,7 +114,7 @@ Every run SHALL produce: a JSONL action/event log (run header with seed, ordered
 - **THEN** the JUnit report identifies the failing journey, step, and seed without opening the HTML report
 
 ### Requirement: Execution across local, CI, and packaged environments
-The platform SHALL run in three lanes: local mock-harness runs (fast, time-compressed), CI mock-harness runs on windows-latest alongside the existing E2E job (initially non-blocking), and packaged-app runs locally and on manual workflow dispatch. Long-window and fault journeys SHALL support time compression via the bridge clock; real-time cadence spot checks SHALL remain in the packaged/on-demand lane.
+The platform SHALL run in three lanes: local mock-harness runs (fast, time-compressed), blocking CI mock-harness runs on windows-latest alongside the existing E2E job, and packaged-app runs locally and on manual workflow dispatch. Long-window and fault journeys SHALL support time compression via the bridge clock; real-time cadence spot checks SHALL remain in the packaged/on-demand lane.
 
 #### Scenario: A developer runs the full mock suite locally with one command
 - **WHEN** a developer runs the mock-lane simulation command
@@ -143,7 +143,7 @@ Any journey step that cannot be software-driven (physical hardware change, OS po
 - **THEN** the step is added to the exploratory register with its reason, and the journey covers the software-reachable portion via bridge-scripted hotplug instead
 
 ### Requirement: Simulation failures are governed against flakiness
-The platform SHALL define a flake budget: a journey that fails under a fixed seed is a defect to fix; a journey that fails only under varying seeds is quarantined after a defined number of distinct-seed failures, removed from the blocking set, and tracked until fixed. The CI simulation job SHALL be non-blocking at introduction, with promotion to blocking treated as a separate change.
+The platform SHALL define a flake budget: a journey that fails under a fixed seed is a defect to fix; a journey that fails only under varying seeds is quarantined after a defined number of distinct-seed failures, removed from the runnable blocking set, and tracked until fixed. The CI simulation job SHALL remain a required blocking check for all non-quarantined selections; quarantine counts and zero-runnable configurations SHALL be reported and SHALL NOT silently pass.
 
 #### Scenario: Seed-stable failure blocks as a defect
 - **WHEN** a journey fails and re-running the logged seed locally reproduces the same failure
@@ -153,3 +153,24 @@ The platform SHALL define a flake budget: a journey that fails under a fixed see
 - **WHEN** a journey fails intermittently across distinct seeds beyond the budgeted count
 - **THEN** it is moved to the quarantine list with a tracking entry, and the remaining suite continues to gate
 
+### Requirement: Simulation failures are fail-closed and classified
+The simulation platform SHALL fail for zero meaningful assertions, unexpected page/console errors, invalid selectors/configuration, isolation violations, driver lifecycle errors, and cleanup errors after a passing journey. Failure records SHALL distinguish app assertion defects from driver/CDP/spawn/isolation defects and explicitly registered undrivable scenarios.
+
+#### Scenario: Unknown journey is not an empty pass
+- **WHEN** `SIM_JOURNEYS` contains an unknown ID
+- **THEN** the run exits nonzero and reports valid IDs
+
+#### Scenario: Cleanup does not mask assertion failure
+- **WHEN** an assertion fails and `driver.close()` also throws
+- **THEN** the assertion remains the primary failure and cleanup error is appended as diagnostics
+
+### Requirement: Mock and real runs verify handoff and artifact ownership
+The mock driver SHALL verify the injected `window.__SIM__` run/scenario handoff after load. Real runs SHALL use fresh harness-owned directories per run, compare the full `{exists, bytes}` production-settings state before/after, and preserve canonical artifacts when making triage copies.
+
+#### Scenario: Mock handoff mismatch fails
+- **WHEN** the page loads without the requested simulation run ID or scenario version
+- **THEN** the driver fails as a harness defect instead of running the default scenario
+
+#### Scenario: Settings creation is detected
+- **WHEN** production settings are absent before a real simulation and present afterward
+- **THEN** isolation self-test fails

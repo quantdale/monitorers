@@ -1,120 +1,175 @@
-# CI for sys-monitor-tauri (Tauri app with Windows-only backend)
-# Three independent jobs run in parallel:
-#   rust-test    — cargo test (windows-latest)
-#   rust-lint    — fmt + clippy + audit (windows-latest)
-#   frontend     — tsc + vitest (ubuntu-latest)
-
-name: Rust
+# Rust, frontend, and Windows release gates for sys-monitor-tauri.
+name: Rust and release
 
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ------------------------------------------------------------
-  # Job 1: Rust tests
-  # cargo test compiles implicitly — no separate build step needed
-  # ------------------------------------------------------------
-  rust-test:
-    name: Rust — test
+  rust:
+    name: Rust — verify
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: sys-monitor-tauri/src-tauri
-
+        working-directory: sys-monitor-tauri
     steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      # v6.1.0 — 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             sys-monitor-tauri/src-tauri/target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked --quiet
 
-  # ------------------------------------------------------------
-  # Job 2: Rust lint (fmt + clippy + audit)
-  # Fast checks — no need to wait for tests to finish
-  # ------------------------------------------------------------
-  rust-lint:
-    name: Rust — fmt, clippy, audit
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: sys-monitor-tauri/src-tauri
+      - name: Run canonical Rust gate
+        run: npm run verify:rust
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            sys-monitor-tauri/src-tauri/target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-lint-
-            ${{ runner.os }}-cargo-
-
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy --verbose -- -D warnings
-
-      - name: Audit
-        run: cargo install cargo-audit --quiet && cargo audit
-
-  # ------------------------------------------------------------
-  # Job 3: Frontend (typecheck + tests)
-  # Runs on ubuntu — no Windows needed for pure JS/TS
-  # ------------------------------------------------------------
   frontend:
-    name: Frontend — typecheck, test
+    name: Frontend — verify
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: sys-monitor-tauri
-
     steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: '24'
+          cache: npm
           cache-dependency-path: sys-monitor-tauri/package-lock.json
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
-      - name: Audit frontend dependencies
-        run: npm audit --audit-level=high
+      - name: Run canonical frontend gate
+        run: npm run verify:frontend
 
-      - name: Type check
-        run: npx tsc --noEmit
+  tauri-build:
+    name: Windows — production executable
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Test
-        run: npm test -- --run
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
 
-      - name: Build
-        run: npm run build
+      # v6.1.0 — 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sys-monitor-tauri/src-tauri/target
+          key: ${{ runner.os }}-tauri-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the production executable
+        run: npm run verify:tauri
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Upload executable
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sys-monitor-tauri-windows-executable
+          path: sys-monitor-tauri/src-tauri/target/release/sys-monitor-tauri.exe
+          if-no-files-found: warn
+
+  tauri-installer:
+    name: Windows — MSI and NSIS bundle
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      # v6.1.0 — 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sys-monitor-tauri/src-tauri/target
+          key: ${{ runner.os }}-bundle-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bundle-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build MSI and NSIS installers
+        run: npx tauri build
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Upload installers
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sys-monitor-tauri-windows-installers
+          path: sys-monitor-tauri/src-tauri/target/release/bundle/
+          if-no-files-found: warn
