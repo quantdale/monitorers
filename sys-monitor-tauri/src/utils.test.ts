@@ -39,6 +39,14 @@ describe('historyMinMax', () => {
   it('handles all negative [-5, -1, -3]', () => {
     expect(historyMinMax([-5, -1, -3])).toEqual({ min: -5, max: -1 });
   });
+
+  it('ignores NaN and infinities while preserving zero', () => {
+    expect(historyMinMax([NaN, Infinity, -Infinity, 0, 4])).toEqual({ min: 0, max: 4 });
+  });
+
+  it('returns a finite empty fallback for all gaps', () => {
+    expect(historyMinMax([NaN, Infinity, -Infinity])).toEqual({ min: 0, max: 0 });
+  });
 });
 
 // --- gpuId ---

@@ -14,6 +14,7 @@ export function TimeRangeSelector({ options, value, onChange }: Props) {
     <select
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
+      aria-label="History time range"
       style={{
         padding: '4px 12px',
         borderRadius: 4,

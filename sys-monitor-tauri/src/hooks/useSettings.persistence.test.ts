@@ -66,7 +66,7 @@ function renderUseSettings(): RenderResult {
 
 describe('useSettings persistence across restart (4.3)', () => {
   beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<null> } }).__TAURI_INTERNALS__ = { invoke: async () => null };
   });
 
   afterEach(() => {
@@ -101,7 +101,7 @@ describe('useSettings persistence across restart (4.3)', () => {
 
 describe('SettingsProvider — one shared instance for all consumers', () => {
   beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<null> } }).__TAURI_INTERNALS__ = { invoke: async () => null };
   });
 
   afterEach(() => {

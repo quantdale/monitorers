@@ -13,7 +13,7 @@ const MODES: { key: ViewMode; label: string }[] = [
 
 export function ViewModeSelector({ value, onChange }: Props) {
   return (
-    <div style={{ display: 'flex', gap: 6 }}>
+    <div role="group" aria-label="Dashboard view mode" style={{ display: 'flex', gap: 6 }}>
       {MODES.map(({ key, label }) => {
         const active = key === value;
         return (

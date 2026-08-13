@@ -1,7 +1,5 @@
-// Pure card-identity logic extracted from App.tsx so the dashboard's
-// content-keyed id scheme (as opposed to the hardware sidebar's positional
-// scheme — see HardwareSidebar.tsx) is unit-testable without a full render.
-import { gpuId } from './utils';
+// Pure card-identity logic extracted from App.tsx so the dashboard and sidebar
+// stable-key schemes are unit-testable without a full render.
 import type { SlicedHistory } from './hooks/useMetrics';
 
 /** Minimal shape these helpers need — a subset of SlicedHistory. */
@@ -14,7 +12,7 @@ export function computeDefaultCardIds(metrics: CardMetricsShape): string[] {
     'memory',
     ...metrics.disks.map((d) => `disk_${d.key}`),
     'network',
-    ...metrics.gpus.map((g) => gpuId(g.name)),
+    ...metrics.gpus.map((g) => `gpu_${g.key}`),
   ];
 }
 
@@ -41,7 +39,7 @@ export function mergeNewCardIds(current: string[], defaultIds: string[]): string
  * Whether a card id corresponds to hardware present in the current snapshot.
  * Per-key, not per-metric: a `disk_C:` id is only present when a disk with
  * key `C:` is in the snapshot, and a `gpu_<id>` id only when a GPU with the
- * matching slug is — so an unplugged disk or hot-unplugged GPU hides exactly
+ * matching stable key is — so an unplugged disk or hot-unplugged GPU hides exactly
  * its own ghost card while the others stay visible.
  */
 export function isCardPresent(id: string, metrics: CardMetricsShape | null): boolean {
@@ -54,8 +52,8 @@ export function isCardPresent(id: string, metrics: CardMetricsShape | null): boo
     return metrics.disks.some((d) => d.key === key);
   }
   if (id.startsWith('gpu_')) {
-    // gpuId() already returns the full `gpu_<slug>` id — card ids ARE gpuIds.
-    return metrics.gpus.some((g) => gpuId(g.name) === id);
+    const key = id.slice('gpu_'.length);
+    return metrics.gpus.some((g) => g.key === key);
   }
   return false;
 }
@@ -74,22 +72,45 @@ export function computeVisibleCardOrder(
   return cardOrder.filter((id) => !hiddenCardIds.has(id) && isCardPresent(id, metrics));
 }
 
-export type NvidiaStatsShape = Pick<
-  SlicedHistory,
-  'nvidia_power_w' | 'nvidia_mem_used_mb' | 'nvidia_mem_total_mb' | 'nvidia_fan_speed_pct' | 'nvidia_clock_mhz'
-> & { gpus: { vendor: string }[] };
+export type NvidiaStatsShape = Pick<SlicedHistory, 'gpus'>;
 
 /** Whether any NVML-sourced stat is available for an Nvidia GPU in the snapshot. */
 export function computeHasNvidiaData(metrics: NvidiaStatsShape | null): boolean {
   return (
     !!metrics &&
     metrics.gpus.some((g) => g.vendor === 'nvidia') &&
-    (metrics.nvidia_power_w != null ||
-      metrics.nvidia_mem_used_mb != null ||
-      metrics.nvidia_mem_total_mb != null ||
-      metrics.nvidia_fan_speed_pct != null ||
-      metrics.nvidia_clock_mhz != null)
+    metrics.gpus.some((gpu) => gpu.vendor === 'nvidia' && gpu.nvidia != null && Object.values(gpu.nvidia).some((value) => value != null && Number.isFinite(value)))
   );
+}
+
+/**
+ * Migrate legacy `gpu_<display-name-slug>` ids when the slug maps to exactly
+ * one current GPU. Ambiguous slugs remain as inert legacy entries and the
+ * stable ids are appended by the normal merge path; this avoids guessing which
+ * identical physical card a saved display name represented.
+ */
+export function migrateLegacyGpuCardOrder(
+  order: string[],
+  gpus: { key: string; name: string }[]
+): string[] {
+  const byLegacyId = new Map<string, string[]>();
+  for (const gpu of gpus) {
+    const legacy = 'gpu_' + gpu.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const keys = byLegacyId.get(legacy) ?? [];
+    keys.push(`gpu_${gpu.key}`);
+    byLegacyId.set(legacy, keys);
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const id of order) {
+    const candidates = byLegacyId.get(id);
+    const migrated = candidates?.length === 1 ? candidates[0] : id;
+    if (!seen.has(migrated)) {
+      result.push(migrated);
+      seen.add(migrated);
+    }
+  }
+  return result;
 }
 
 /**

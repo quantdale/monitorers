@@ -1,4 +1,4 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Store } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri, type ViewMode } from '../utils';
@@ -12,27 +12,27 @@ const STORE_PATH = 'settings.json';
  * the store is loaded from an absolute path so a sim run never touches the
  * developer's real settings.json.
  */
-async function resolveStorePath(): Promise<string> {
-  try {
-    if (isTauri()) {
-      const overrideDir = await invoke<string | null>('sim_store_override');
-      if (overrideDir) {
-        const sep = overrideDir.includes('\\') ? '\\' : '/';
-        return `${overrideDir.replace(/[\\/]+$/, '')}${sep}${STORE_PATH}`;
+export async function resolveStorePath(): Promise<string> {
+  if (isTauri()) {
+    // A command failure is significant: in the packaged simulation lane it
+    // means isolation could not be established. Never fall back to the real
+    // developer store after an override lookup error.
+    const overrideDir = await invoke<string | null>('sim_store_override');
+    if (overrideDir) {
+      const isAbsoluteWindows = /^[A-Za-z]:[\\/]/.test(overrideDir) || overrideDir.startsWith('\\\\');
+      const isAbsolutePosix = overrideDir.startsWith('/');
+      if (!isAbsoluteWindows && !isAbsolutePosix) {
+        throw new Error('simulation settings override must be an absolute directory');
       }
+      const sep = overrideDir.includes('\\') ? '\\' : '/';
+      return `${overrideDir.replace(/[\\/]+$/, '')}${sep}${STORE_PATH}`;
     }
-  } catch {
-    // degrade gracefully: fall through to the default relative path
   }
   return STORE_PATH;
 }
 
-// Bump when the persisted settings shape changes in a way future migrations
-// need to key off of. Written on every save() but never read back today — the
-// version is write-only bookkeeping until a migration that keys off it lands.
-// A missing/older value is treated as pre-existing, not an error (see
-// openspec/changes/fix-frontend-error-surfacing/design.md).
-const SETTINGS_VERSION = 1;
+/** Persisted schema version. Migrations must be stepwise and fail closed for future data. */
+export const SETTINGS_VERSION = 2;
 
 /** Legal history-window sizes in seconds — the single source of truth for
  *  which `windowSecs` values are accepted. App.tsx builds the TimeRangeSelector
@@ -56,6 +56,36 @@ const DEFAULTS: Settings = {
 };
 
 const VIEW_MODES: ViewMode[] = ['default', 'tile', 'list'];
+
+export class FutureSettingsVersionError extends Error {
+  constructor(public readonly version: number) {
+    super(`Settings file version ${version} is newer than this app supports (${SETTINGS_VERSION}).`);
+    this.name = 'FutureSettingsVersionError';
+  }
+}
+
+/**
+ * Read/migrate the complete persisted object. Version 0 means the legacy
+ * write-only format; version 1 is accepted as the previous known shape; the
+ * current version is validated field-by-field. A future version is never
+ * downgraded or overwritten.
+ */
+export function migratePersistedSettings(raw: Record<string, unknown>): Settings {
+  const rawVersion = raw.settingsVersion;
+  const version = rawVersion === undefined ? 0 : Number(rawVersion);
+  if (!Number.isInteger(version) || version < 0) {
+    console.warn('[useSettings] invalid settingsVersion; treating file as legacy v0');
+  } else if (version > SETTINGS_VERSION) {
+    throw new FutureSettingsVersionError(version);
+  }
+  return {
+    cardOrder: validateField('cardOrder', raw.cardOrder),
+    hiddenCardIds: validateField('hiddenCardIds', raw.hiddenCardIds),
+    sidebarCardOrder: validateField('sidebarCardOrder', raw.sidebarCardOrder),
+    viewMode: validateField('viewMode', raw.viewMode),
+    windowSecs: validateField('windowSecs', raw.windowSecs),
+  };
+}
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
@@ -124,6 +154,7 @@ function useSettingsState(): SettingsContextValue {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     if (!isTauri()) {
@@ -136,14 +167,10 @@ function useSettingsState(): SettingsContextValue {
         const sim = getSimHandle();
         if (sim) {
           void sim.settings.load().then((entries) => {
-            setSettings({
-              cardOrder: validateField('cardOrder', entries.cardOrder),
-              hiddenCardIds: validateField('hiddenCardIds', entries.hiddenCardIds),
-              sidebarCardOrder: validateField('sidebarCardOrder', entries.sidebarCardOrder),
-              viewMode: validateField('viewMode', entries.viewMode),
-              windowSecs: validateField('windowSecs', entries.windowSecs),
-            });
+            setSettings(migratePersistedSettings(entries));
             setLoaded(true);
+          }).catch((err) => {
+            setError(err instanceof Error ? err.message : String(err));
           });
           return;
         }
@@ -155,19 +182,27 @@ function useSettingsState(): SettingsContextValue {
       try {
         const storePath = await resolveStorePath();
         const s = await Store.load(storePath);
-        setStore(s);
-        const cardOrder = await s.get<string[]>('cardOrder');
-        const hiddenCardIds = await s.get<string[]>('hiddenCardIds');
-        const sidebarCardOrder = await s.get<string[]>('sidebarCardOrder');
-        const viewMode = await s.get<ViewMode>('viewMode');
-        const windowSecs = await s.get<number>('windowSecs');
-        setSettings({
-          cardOrder: validateField('cardOrder', cardOrder),
-          hiddenCardIds: validateField('hiddenCardIds', hiddenCardIds),
-          sidebarCardOrder: validateField('sidebarCardOrder', sidebarCardOrder),
-          viewMode: validateField('viewMode', viewMode),
-          windowSecs: validateField('windowSecs', windowSecs),
+        // Read the schema marker first. Do not set the store reference until
+        // migration succeeds, so a future-version file cannot be overwritten
+        // by a later save from this process.
+        const settingsVersion = await s.get<unknown>('settingsVersion');
+        const [cardOrder, hiddenCardIds, sidebarCardOrder, viewMode, windowSecs] = await Promise.all([
+          s.get<string[]>('cardOrder'),
+          s.get<string[]>('hiddenCardIds'),
+          s.get<string[]>('sidebarCardOrder'),
+          s.get<ViewMode>('viewMode'),
+          s.get<number>('windowSecs'),
+        ]);
+        const migrated = migratePersistedSettings({
+          settingsVersion,
+          cardOrder,
+          hiddenCardIds,
+          sidebarCardOrder,
+          viewMode,
+          windowSecs,
         });
+        setStore(s);
+        setSettings(migrated);
         setLoaded(true);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -175,42 +210,34 @@ function useSettingsState(): SettingsContextValue {
     })();
   }, []);
 
-  const save = useCallback(
-    async (patch: Partial<Settings>) => {
-      setSettings((prev) => ({ ...prev, ...patch }));
-      if (store) {
-        try {
-          for (const [k, v] of Object.entries(patch)) {
-            await store.set(k, v);
-          }
+  const save = useCallback(async (patch: Partial<Settings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+    const sim = !store && isSimRunActive() ? getSimHandle() : null;
+    if (!store && !sim) return;
+
+    const persist = async () => {
+      try {
+        if (store) {
+          for (const [key, value] of Object.entries(patch)) await store.set(key, value);
           await store.set('settingsVersion', SETTINGS_VERSION);
           await store.save();
-          setSaveError(null);
-        } catch (err) {
-          // In-memory state is already updated, so the session keeps working;
-          // only persistence is lost. Surface the error as a non-fatal banner.
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn('[useSettings] failed to persist settings:', msg);
-          setSaveError(msg);
+        } else if (sim) {
+          await sim.settings.save({ ...patch, settingsVersion: SETTINGS_VERSION });
         }
-        return;
+        setSaveError(null);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[useSettings] failed to persist settings:', msg);
+        setSaveError(msg);
       }
-      if (isSimRunActive()) {
-        const sim = getSimHandle();
-        if (sim) {
-          try {
-            await sim.settings.save(patch as Record<string, unknown>);
-            setSaveError(null);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn('[useSettings] failed to persist mock settings:', msg);
-            setSaveError(msg);
-          }
-        }
-      }
-    },
-    [store]
-  );
+    };
+
+    // Serialize saves so rapid drag/toggle operations cannot interleave store
+    // writes. React state still updates immediately for responsive UI.
+    const queued = saveQueue.current.catch(() => undefined).then(persist);
+    saveQueue.current = queued.then(() => undefined, () => undefined);
+    await queued;
+  }, [store]);
 
   return { settings, save, loaded, error, saveError };
 }

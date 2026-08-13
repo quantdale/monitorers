@@ -4,6 +4,7 @@ import {
   computeHasNvidiaData,
   computeVisibleCardOrder,
   isCardPresent,
+  migrateLegacyGpuCardOrder,
   mergeNewCardIds,
   shouldShowLoadingState,
   type CardMetricsShape,
@@ -12,7 +13,7 @@ import {
 function metrics(overrides: Partial<CardMetricsShape> = {}): CardMetricsShape {
   return {
     disks: [{ key: 'C:' } as CardMetricsShape['disks'][number]],
-    gpus: [{ name: 'GeForce RTX 4050' } as CardMetricsShape['gpus'][number]],
+    gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', nvidia: null } as CardMetricsShape['gpus'][number]],
     net_recv: [10],
     net_sent: [5],
     ...overrides,
@@ -25,7 +26,7 @@ describe('computeDefaultCardIds', () => {
   it('produces cpu, memory, disks, network, gpus in order', () => {
     const m = metrics({
       disks: [{ key: 'C:' }, { key: 'D:' }] as CardMetricsShape['disks'],
-      gpus: [{ name: 'GeForce RTX 4050' }] as CardMetricsShape['gpus'],
+      gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', nvidia: null }] as CardMetricsShape['gpus'],
     });
     expect(computeDefaultCardIds(m)).toEqual([
       'cpu',
@@ -33,8 +34,40 @@ describe('computeDefaultCardIds', () => {
       'disk_C:',
       'disk_D:',
       'network',
-      'gpu_geforce_rtx_4050',
+      'gpu_gpu-a',
     ]);
+  });
+
+  it('keeps identical display names separate when stable keys differ', () => {
+    const m = metrics({
+      gpus: [
+        { key: 'luid-a', name: 'GeForce RTX 3060', vendor: 'nvidia', nvidia: null },
+        { key: 'luid-b', name: 'GeForce RTX 3060', vendor: 'nvidia', nvidia: null },
+      ] as CardMetricsShape['gpus'],
+    });
+    expect(computeDefaultCardIds(m).filter((id) => id.startsWith('gpu_'))).toEqual([
+      'gpu_luid-a',
+      'gpu_luid-b',
+    ]);
+  });
+});
+
+describe('migrateLegacyGpuCardOrder', () => {
+  it('maps a unique display-name slug without changing placement', () => {
+    expect(
+      migrateLegacyGpuCardOrder(['cpu', 'gpu_geforce_rtx_4050', 'memory'], [
+        { key: 'luid-a', name: 'GeForce RTX 4050' },
+      ])
+    ).toEqual(['cpu', 'gpu_luid-a', 'memory']);
+  });
+
+  it('leaves an ambiguous legacy slug in place so stable cards append deterministically', () => {
+    expect(
+      migrateLegacyGpuCardOrder(['cpu', 'gpu_geforce_rtx_3060'], [
+        { key: 'luid-a', name: 'GeForce RTX 3060' },
+        { key: 'luid-b', name: 'GeForce RTX 3060' },
+      ])
+    ).toEqual(['cpu', 'gpu_geforce_rtx_3060']);
   });
 });
 
@@ -83,7 +116,7 @@ describe('isCardPresent', () => {
     expect(isCardPresent('cpu', null)).toBe(false);
     expect(isCardPresent('memory', null)).toBe(false);
     expect(isCardPresent('disk_C:', null)).toBe(false);
-    expect(isCardPresent('gpu_geforce_rtx_4050', null)).toBe(false);
+    expect(isCardPresent('gpu_gpu-a', null)).toBe(false);
   });
 
   it('disk id absent from current snapshot (no disks) is not present', () => {
@@ -103,13 +136,13 @@ describe('isCardPresent', () => {
     expect(isCardPresent('disk_D:', m)).toBe(false);
   });
 
-  it('a gpu id is present only when a GPU with the matching slug is in the snapshot', () => {
+  it('a gpu id is present only when a GPU with the matching stable key is in the snapshot', () => {
     const m = metrics({
-      gpus: [{ name: 'GeForce RTX 4050' }] as CardMetricsShape['gpus'],
+      gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', nvidia: null }] as CardMetricsShape['gpus'],
     });
-    expect(isCardPresent('gpu_geforce_rtx_4050', m)).toBe(true);
+    expect(isCardPresent('gpu_gpu-a', m)).toBe(true);
     // An unrelated slug (e.g. a second GPU that was hot-unplugged) is absent.
-    expect(isCardPresent('gpu_uhd_graphics', m)).toBe(false);
+    expect(isCardPresent('gpu-gpu-b', m)).toBe(false);
   });
 
   it('computeVisibleCardOrder hides only the unplugged disk/gpu ghost cards, keeping the rest', () => {
@@ -119,12 +152,12 @@ describe('isCardPresent', () => {
       'disk_C:',
       'disk_D:',
       'network',
-      'gpu_geforce_rtx_4050',
-      'gpu_uhd_graphics',
+      'gpu_gpu-a',
+      'gpu_gpu-b',
     ];
     const m = metrics({
       disks: [{ key: 'C:' }] as CardMetricsShape['disks'],
-      gpus: [{ name: 'GeForce RTX 4050' }] as CardMetricsShape['gpus'],
+      gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', nvidia: null }] as CardMetricsShape['gpus'],
     });
     const visible = computeVisibleCardOrder(cardOrder, new Set(), m);
     expect(visible).toEqual([
@@ -132,14 +165,14 @@ describe('isCardPresent', () => {
       'memory',
       'disk_C:',
       'network',
-      'gpu_geforce_rtx_4050',
+      'gpu_gpu-a',
     ]);
   });
 });
 
 describe('computeVisibleCardOrder', () => {
   it('reproduces the same visible arrangement when hardware is unchanged between loads', () => {
-    const cardOrder = ['cpu', 'memory', 'disk_C:', 'network', 'gpu_geforce_rtx_4050'];
+    const cardOrder = ['cpu', 'memory', 'disk_C:', 'network', 'gpu_gpu-a'];
     const m = metrics();
     const first = computeVisibleCardOrder(cardOrder, new Set(), m);
     const second = computeVisibleCardOrder(cardOrder, new Set(), metrics());
@@ -174,15 +207,10 @@ describe('computeHasNvidiaData', () => {
     expect(computeHasNvidiaData(null)).toBe(false);
   });
 
-  it('false with an empty gpus array and all-null nvidia_* fields (no null-reference error)', () => {
+  it('false with an empty gpus array', () => {
     expect(
       computeHasNvidiaData({
         gpus: [],
-        nvidia_power_w: null,
-        nvidia_mem_used_mb: null,
-        nvidia_mem_total_mb: null,
-        nvidia_fan_speed_pct: null,
-        nvidia_clock_mhz: null,
       })
     ).toBe(false);
   });
@@ -190,12 +218,7 @@ describe('computeHasNvidiaData', () => {
   it('true when an nvidia GPU is present and at least one NVML stat is available', () => {
     expect(
       computeHasNvidiaData({
-        gpus: [{ vendor: 'nvidia' }],
-        nvidia_power_w: 45,
-        nvidia_mem_used_mb: null,
-        nvidia_mem_total_mb: null,
-        nvidia_fan_speed_pct: null,
-        nvidia_clock_mhz: null,
+        gpus: [{ key: 'gpu-a', name: 'RTX', vendor: 'nvidia', values: [], latest: 0, nvidia: { power_w: 45 } }],
       })
     ).toBe(true);
   });
@@ -203,12 +226,7 @@ describe('computeHasNvidiaData', () => {
   it('false when an nvidia GPU is present but no NVML stats are available', () => {
     expect(
       computeHasNvidiaData({
-        gpus: [{ vendor: 'nvidia' }],
-        nvidia_power_w: null,
-        nvidia_mem_used_mb: null,
-        nvidia_mem_total_mb: null,
-        nvidia_fan_speed_pct: null,
-        nvidia_clock_mhz: null,
+        gpus: [{ key: 'gpu-a', name: 'RTX', vendor: 'nvidia', values: [], latest: 0, nvidia: null }],
       })
     ).toBe(false);
   });

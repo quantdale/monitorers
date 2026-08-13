@@ -24,9 +24,12 @@ export function SortableSidebarCard({ id, children }: Props) {
   };
 
   const dragHandle = (
-    <div
+    <button
+      type="button"
+      className="sidebar-drag-handle"
       {...attributes}
       {...listeners}
+      aria-label="Drag to reorder"
       style={{
         padding: '0 2px',
         cursor: 'grab',
@@ -34,11 +37,13 @@ export function SortableSidebarCard({ id, children }: Props) {
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,
+        background: 'transparent',
+        border: 0,
       }}
       title="Drag to reorder"
     >
-      <GripVertical size={14} />
-    </div>
+      <GripVertical size={14} aria-hidden="true" />
+    </button>
   );
 
   return (

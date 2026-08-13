@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
-import { useSettings } from './useSettings';
+import { useSettings, migratePersistedSettings, FutureSettingsVersionError, SETTINGS_VERSION } from './useSettings';
 
 interface RenderResult {
   result: () => ReturnType<typeof useSettings>;
@@ -142,6 +142,45 @@ describe('useSettings (non-Tauri)', () => {
     expect(result().settings.hiddenCardIds).toEqual(['gpu_rtx_4050']);
 
     unmount();
+  });
+});
+
+describe('persisted settings migration', () => {
+  it('treats an absent version as legacy v0 and migrates known fields', () => {
+    expect(migratePersistedSettings({ windowSecs: 300, viewMode: 'tile' })).toMatchObject({
+      windowSecs: 300,
+      viewMode: 'tile',
+    });
+  });
+
+  it('validates current-version fields independently', () => {
+    const migrated = migratePersistedSettings({
+      settingsVersion: SETTINGS_VERSION,
+      windowSecs: 999,
+      hiddenCardIds: ['gpu-a'],
+    });
+    expect(migrated.windowSecs).toBe(60);
+    expect(migrated.hiddenCardIds).toEqual(['gpu-a']);
+  });
+
+  it('rejects a future version without producing a downgrade payload', () => {
+    expect(() => migratePersistedSettings({ settingsVersion: SETTINGS_VERSION + 1 })).toThrow(FutureSettingsVersionError);
+  });
+
+  it('falls back per field for corrupt data', () => {
+    expect(migratePersistedSettings({
+      settingsVersion: SETTINGS_VERSION,
+      cardOrder: 'bad',
+      hiddenCardIds: ['ok'],
+      viewMode: 'bad',
+      windowSecs: NaN,
+    })).toEqual({
+      cardOrder: null,
+      hiddenCardIds: ['ok'],
+      sidebarCardOrder: null,
+      viewMode: 'default',
+      windowSecs: 60,
+    });
   });
 });
 

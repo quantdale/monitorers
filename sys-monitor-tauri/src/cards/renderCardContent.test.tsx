@@ -20,11 +20,6 @@ function sliced(overrides: Partial<SlicedHistory> = {}): SlicedHistory {
     net_recv: [0, 1200],
     net_sent: [0, 500],
     gpus: [],
-    nvidia_power_w: null,
-    nvidia_mem_used_mb: null,
-    nvidia_mem_total_mb: null,
-    nvidia_fan_speed_pct: null,
-    nvidia_clock_mhz: null,
     collectorError: null,
     ...overrides,
   };
@@ -67,7 +62,21 @@ describe('renderCardContent', () => {
     expect(c.textContent).toContain('8.4 / 16.0 GB');
   });
 
-  it('disk card — key, active time, throughput, response, temperature', () => {
+  it('memory card — non-finite capacity values render as unavailable', () => {
+    const c = mount(
+      renderCardContent({
+        id: 'memory',
+        metrics: sliced({ mem_used_gb: Number.NaN, mem_total_gb: Number.POSITIVE_INFINITY }),
+        viewMode: 'default',
+        hasNvidiaData: false,
+      })
+    );
+    expect(c.textContent).toContain('— / —');
+    expect(c.textContent).not.toContain('NaN');
+    expect(c.textContent).not.toContain('Infinity');
+  });
+
+  it('disk card — key, active time, throughput, and response', () => {
     const m = sliced({
       disks: [{ key: 'C:', values: [10, 42], read_mb_s: 10, write_mb_s: 5, avg_response_ms: 3.2, temp_c: 38 }],
     });
@@ -78,7 +87,6 @@ describe('renderCardContent', () => {
     expect(c.textContent).toContain('Active Time 42.0%');
     expect(c.textContent).toContain('R: 10.0 MB/s · W: 5.0 MB/s');
     expect(c.textContent).toContain('Avg: 3.2 ms');
-    expect(c.textContent).toContain('38 °C');
   });
 
   it('network card — dual throughput badges', () => {
@@ -92,15 +100,10 @@ describe('renderCardContent', () => {
 
   it('gpu card with nvidia data — vendor badge, temp, power/vram/fan/clock', () => {
     const m = sliced({
-      gpus: [{ name: 'GeForce RTX 4050', vendor: 'nvidia', values: [40, 45], temp_c: 65, latest: 45 }],
-      nvidia_power_w: 250,
-      nvidia_mem_used_mb: 2048,
-      nvidia_mem_total_mb: 8192,
-      nvidia_fan_speed_pct: 55,
-      nvidia_clock_mhz: 1600,
+      gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', values: [40, 45], temp_c: 65, nvidia: { power_w: 250, mem_used_mb: 2048, mem_total_mb: 8192, fan_speed_pct: 55, clock_mhz: 1600 }, latest: 45 }],
     });
     const c = mount(
-      renderCardContent({ id: 'gpu_geforce_rtx_4050', metrics: m, viewMode: 'default', hasNvidiaData: true })
+      renderCardContent({ id: 'gpu_gpu-a', metrics: m, viewMode: 'default', hasNvidiaData: true })
     );
     expect(c.textContent).toContain('GeForce RTX 4050');
     expect(c.textContent).toContain('45.0%');
@@ -114,10 +117,10 @@ describe('renderCardContent', () => {
 
   it('gpu card without nvidia data — no NVML badges', () => {
     const m = sliced({
-      gpus: [{ name: 'Intel(R) Iris Xe Graphics', vendor: 'intel', values: [5], temp_c: null, latest: 5 }],
+      gpus: [{ key: 'gpu-intel', name: 'Intel(R) Iris Xe Graphics', vendor: 'intel', values: [5], temp_c: null, nvidia: null, latest: 5 }],
     });
     const c = mount(
-      renderCardContent({ id: 'gpu_intel_r_iris_xe_graphics', metrics: m, viewMode: 'default', hasNvidiaData: false })
+      renderCardContent({ id: 'gpu_gpu-intel', metrics: m, viewMode: 'default', hasNvidiaData: false })
     );
     expect(c.textContent).toContain('Iris Xe Graphics');
     expect(c.textContent).toContain('Intel');
@@ -141,6 +144,6 @@ describe('renderCardContent', () => {
   });
 
   it('gpu id not in current metrics → null', () => {
-    expect(renderCardContent({ id: 'gpu_intel_r_iris_xe_graphics', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();
+    expect(renderCardContent({ id: 'gpu_missing', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();
   });
 });

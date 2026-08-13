@@ -1,3 +1,14 @@
+export type MetricValue = number | null;
+
+export interface NvidiaTelemetry {
+  temp_c?: number | null;
+  power_w?: number | null;
+  mem_used_mb?: number | null;
+  mem_total_mb?: number | null;
+  fan_speed_pct?: number | null;
+  clock_mhz?: number | null;
+}
+
 export interface DiskSnapshot {
   key: string;
   active: number;
@@ -8,10 +19,13 @@ export interface DiskSnapshot {
 }
 
 export interface GpuSnapshot {
+  /** Stable collector identity; display name is presentation-only. */
+  key: string;
   name: string;
   vendor: string;   // "nvidia" | "intel" | "amd" | "unknown"
   util: number;
   temp_c?: number | null;
+  nvidia?: NvidiaTelemetry | null;
 }
 
 export interface MetricsSnapshot {
@@ -21,12 +35,6 @@ export interface MetricsSnapshot {
   cpu: number;
   cpu_name: string;
   cpu_temp_c?: number | null;
-  nvidia_temp?: number | null;
-  nvidia_power_w?: number;
-  nvidia_mem_used_mb?: number;
-  nvidia_mem_total_mb?: number;
-  nvidia_fan_speed_pct?: number;
-  nvidia_clock_mhz?: number;
   mem: number;
   mem_used_gb: number;
   mem_total_gb: number;
@@ -38,7 +46,7 @@ export interface MetricsSnapshot {
 
 export interface DiskHistory {
   key: string;
-  values: number[];
+  values: MetricValue[];
   read_mb_s: number;
   write_mb_s: number;
   avg_response_ms: number;
@@ -53,9 +61,12 @@ export interface DiskHistory {
 }
 
 export interface GpuHistory {
+  key: string;
   name: string;
-  values: number[];
+  vendor: string;
+  values: MetricValue[];
   temp_c?: number | null;
+  nvidia?: NvidiaTelemetry | null;
   /**
    * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
    * this GPU was last seen in a live snapshot. Not part of the Rust IPC

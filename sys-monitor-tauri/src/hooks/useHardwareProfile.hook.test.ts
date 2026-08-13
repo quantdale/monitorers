@@ -19,21 +19,22 @@ vi.mock('@tauri-apps/api/event', () => ({
 /** What get_hardware_profile resolves to (swap between tests to simulate a
  *  profile appearing/changing — mirrors historyInvokeError in useMetrics.hook.test.ts). */
 let profileResult: HardwareProfileFixture | null = null;
+let profileFailure: Error | null = null;
 
 interface HardwareProfileFixture {
   cpu_vendor: string;
   cpu_name: string;
-  gpus?: { name: string; vendor: string; kind: string }[];
-  disks?: { name: string; kind: string }[];
+  gpus?: { key?: string; name: string; vendor: string; kind: string }[];
+  disks?: { key?: string; name: string; kind: string }[];
 }
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() =>
-    profileResult ? Promise.resolve(profileResult) : Promise.resolve(null)
-  ),
+  invoke: vi.fn(() => profileFailure
+    ? Promise.reject(profileFailure)
+    : profileResult ? Promise.resolve(profileResult) : Promise.resolve(null)),
 }));
 
-import { useHardwareProfile, type HardwareProfile } from './useHardwareProfile';
+import { useHardwareProfile } from './useHardwareProfile';
 
 function fullProfile(): HardwareProfileFixture {
   return {
@@ -51,12 +52,12 @@ function emit(eventName: string, payload: unknown) {
 }
 
 interface RenderResult {
-  result: () => HardwareProfile | null;
+  result: () => ReturnType<typeof useHardwareProfile>;
   unmount: () => void;
 }
 
 function renderUseHardwareProfile(): RenderResult {
-  let hookValue: HardwareProfile | null | undefined;
+  let hookValue: ReturnType<typeof useHardwareProfile> | undefined;
   const container = document.createElement('div');
   let root: Root;
 
@@ -91,6 +92,7 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     listeners.clear();
     profileResult = null;
+    profileFailure = null;
   });
 
   afterEach(() => {
@@ -103,12 +105,13 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     const { result, unmount } = renderUseHardwareProfile();
     await flush();
 
-    expect(result()).toEqual({
+    expect(result().profile).toEqual({
       cpu_vendor: 'intel',
       cpu_name: 'Intel Core i7-13700K',
-      gpus: [{ name: 'GeForce RTX 4050', vendor: 'Nvidia', kind: 'Discrete' }],
-      disks: [{ name: 'C:', kind: 'Ssd' }],
+      gpus: [{ key: 'gpu:geforce_rtx_4050', name: 'GeForce RTX 4050', vendor: 'Nvidia', kind: 'Discrete' }],
+      disks: [{ key: 'disk:c', name: 'C:', kind: 'Ssd' }],
     });
+    expect(result().error).toBeNull();
 
     unmount();
   });
@@ -120,7 +123,7 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     const { result, unmount } = renderUseHardwareProfile();
     await flush();
 
-    expect(result()).toEqual({ cpu_vendor: 'amd', cpu_name: 'Ryzen 9', gpus: [], disks: [] });
+    expect(result().profile).toEqual({ cpu_vendor: 'amd', cpu_name: 'Ryzen 9', gpus: [], disks: [] });
 
     unmount();
   });
@@ -131,8 +134,19 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     const { result, unmount } = renderUseHardwareProfile();
     await flush();
 
-    expect(result()).toBeNull();
+    expect(result().profile).toBeNull();
 
+    unmount();
+  });
+
+  it('surfaces an initial profile failure instead of reporting endless detection', async () => {
+    profileFailure = new Error('WMI profile unavailable');
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+
+    expect(result().profile).toBeNull();
+    expect(result().loading).toBe(false);
+    expect(result().error).toBe('WMI profile unavailable');
     unmount();
   });
 
@@ -140,7 +154,7 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     profileResult = fullProfile();
     const { result, unmount } = renderUseHardwareProfile();
     await flush();
-    expect(result()).toEqual(expect.objectContaining({ cpu_name: 'Intel Core i7-13700K' }));
+    expect(result().profile).toEqual(expect.objectContaining({ cpu_name: 'Intel Core i7-13700K' }));
 
     // Hardware enumeration finished: the backend now reports a different CPU.
     profileResult = { cpu_vendor: 'amd', cpu_name: 'Ryzen 9', gpus: [], disks: [] };
@@ -149,8 +163,29 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     });
     await flush();
 
-    expect(result()).toEqual(expect.objectContaining({ cpu_name: 'Ryzen 9' }));
+    expect(result().profile).toEqual(expect.objectContaining({ cpu_name: 'Ryzen 9' }));
 
+    unmount();
+  });
+
+  it('preserves the last good profile through a failed refetch and recovers on retry', async () => {
+    profileResult = fullProfile();
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    const original = result().profile;
+
+    profileFailure = new Error('transient profile read failure');
+    act(() => emit('hardware-profile-ready', {}));
+    await flush();
+    expect(result().profile).toEqual(original);
+    expect(result().error).toBe('transient profile read failure');
+
+    profileFailure = null;
+    profileResult = { cpu_vendor: 'amd', cpu_name: 'Ryzen 9', gpus: [], disks: [] };
+    act(() => emit('hardware-profile-ready', {}));
+    await flush();
+    expect(result().profile?.cpu_name).toBe('Ryzen 9');
+    expect(result().error).toBeNull();
     unmount();
   });
 });

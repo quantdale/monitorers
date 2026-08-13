@@ -9,6 +9,7 @@ import {
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
 import { computeChartPoints } from '../chartPoints';
+import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
 
@@ -21,7 +22,7 @@ interface Props {
   id: string;
   title: string;
   value: string;
-  history?: number[];
+  history?: MetricValue[];
   timestamps?: number[];
   color: string;
   yDomain?: [number, number | 'auto'];
@@ -30,7 +31,7 @@ interface Props {
   isDragging?: boolean;
   dragHandleProps?: DragHandleProps;
   /** Second series for dual-line charts (e.g. network upload/download). No fill, line only. */
-  secondaryHistory?: number[];
+  secondaryHistory?: MetricValue[];
   secondaryColor?: string;
   /** Custom list view value and min/max when default formatting doesn't apply (e.g. network KB/s). */
   listViewValue?: string | React.ReactNode;
@@ -64,19 +65,29 @@ export function MetricCard({
         maxPoints: MAX_CHART_POINTS,
       })
     : [];
+  const chartMetadata = {
+    'data-chart-point-count': data.length,
+    'data-chart-gap-count': data.filter((point) => point.v == null).length,
+    'data-chart-start-ts': data[0]?.t ?? '',
+    'data-chart-latest-ts': data[data.length - 1]?.t ?? '',
+    'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
+  };
 
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
   const dragHandle = (
-    <div
+    <button
+      type="button"
       className="drag-handle"
+      data-testid={`drag-handle-${id}`}
       {...(dragHandleProps?.attributes ?? {})}
       {...(dragHandleProps?.listeners ?? {})}
-      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#666', userSelect: 'none' }}
+      aria-label="Drag to reorder"
+      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#666', userSelect: 'none', background: 'transparent', border: 0 }}
       title="Drag to reorder"
     >
       <span aria-hidden="true">⠿</span>
-    </div>
+    </button>
   );
 
   if (viewMode === 'list') {
@@ -141,6 +152,7 @@ export function MetricCard({
           }}
         >
           {hasChart && (
+            <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 2, left: 0 }}>
                 <YAxis domain={yDomain} hide />
@@ -154,6 +166,7 @@ export function MetricCard({
                   strokeWidth={1.5}
                   isAnimationActive={false}
                   dot={false}
+                  connectNulls={false}
                 />
                 {hasSecondary && (
                   <Area
@@ -165,10 +178,12 @@ export function MetricCard({
                     strokeWidth={1.5}
                     isAnimationActive={false}
                     dot={false}
+                    connectNulls={false}
                   />
                 )}
               </AreaChart>
             </ResponsiveContainer>
+            </div>
           )}
         </div>
       </div>
@@ -244,7 +259,8 @@ export function MetricCard({
         </div>
       </div>
       {hasChart && (
-        <ResponsiveContainer width="100%" height={140}>
+        <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: 140 }}>
+        <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
             <YAxis domain={yDomain} hide />
             <XAxis
@@ -270,6 +286,7 @@ export function MetricCard({
               strokeWidth={1.5}
               isAnimationActive={false}
               dot={false}
+              connectNulls={false}
             />
             {hasSecondary && (
               <Area
@@ -281,10 +298,12 @@ export function MetricCard({
                 strokeWidth={1.5}
                 isAnimationActive={false}
                 dot={false}
+                connectNulls={false}
               />
             )}
           </AreaChart>
         </ResponsiveContainer>
+        </div>
       )}
     </div>
   );

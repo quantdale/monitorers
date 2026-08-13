@@ -14,6 +14,7 @@ interface Props {
 export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -24,6 +25,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         setOpen(false);
+        triggerRef.current?.focus();
       }
     }
     if (open) {
@@ -45,9 +47,11 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         type="button"
+        ref={triggerRef}
         onClick={() => setOpen(!open)}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls="metric-card-selector-panel"
         style={{
           padding: '4px 12px',
           borderRadius: 4,
@@ -65,6 +69,9 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
 
       {open && (
         <div
+          id="metric-card-selector-panel"
+          role="dialog"
+          aria-label="Metric card visibility"
           style={{
             position: 'absolute',
             top: '100%',
