@@ -11,11 +11,11 @@ pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 pub use nvidia::query_nvidia_gpu_temp;
-pub use run_loop::run_collector_loop;
+pub use run_loop::{run_collector_loop, LoopLimit, TickTiming, WmiBootstrap, TICK_INTERVAL};
 pub use snapshot::{
-    build_history_payload, build_snapshot, clamp_window_secs, is_full_poll_tick, slice_history,
-    slice_timestamps, DiskHistory, DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload,
-    MetricsSnapshot, SCHEMA_VERSION,
+    build_history_payload, build_snapshot, clamp_window_secs, is_full_poll_tick,
+    slice_aligned_history, slice_history, slice_timestamps, timestamp_window_range, DiskHistory,
+    DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, MetricsSnapshot, SCHEMA_VERSION,
 };
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -143,7 +143,18 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
 /// expensive relative to the 250ms tick; temps change slowly, so 1Hz suffices.
 const CPU_TEMP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Query the CPU temperature, serving from a 1-second cache when possible.
+/// Convert a byte delta into kibibytes per second using the actual refresh
+/// interval. `sysinfo::NetworkData::received` and `transmitted` are deltas
+/// since the previous refresh, not cumulative counters.
+pub fn normalize_network_rate(bytes: u64, elapsed: std::time::Duration) -> f64 {
+    let seconds = elapsed.as_secs_f64();
+    if !seconds.is_finite() || seconds <= 0.001 {
+        return 0.0;
+    }
+    (bytes as f64 / 1024.0 / seconds).max(0.0)
+}
+
+/// Query the CPU temperature, serving from a 5-second cache when possible.
 /// A failed query is not cached, so the next poll retries immediately.
 pub fn query_cpu_temp_cached(
     cache: &mut Option<(std::time::Instant, f64)>,
@@ -200,7 +211,10 @@ pub fn poll(
     let mem_total_gb = total_mem as f64 / (1024.0 * 1024.0 * 1024.0);
 
     // Network
+    let refresh_started = std::time::Instant::now();
+    let refresh_elapsed = refresh_started.saturating_duration_since(collector.network_last_refresh);
     collector.sysinfo_networks.refresh(false);
+    collector.network_last_refresh = std::time::Instant::now();
     let mut total_recv_bytes = 0u64;
     let mut total_sent_bytes = 0u64;
     for (iface_name, data) in &collector.sysinfo_networks {
@@ -208,11 +222,15 @@ pub fn poll(
         if name_upper.contains("LOOPBACK") || name_upper == "LO" {
             continue;
         }
-        total_recv_bytes += data.received();
-        total_sent_bytes += data.transmitted();
+        // sysinfo exposes per-refresh deltas and uses saturating subtraction
+        // internally for counter reset/wrap. Saturating aggregation keeps a
+        // pathological adapter set from overflowing the process in debug
+        // builds; the normalized rate then remains a conservative value.
+        total_recv_bytes = total_recv_bytes.saturating_add(data.received());
+        total_sent_bytes = total_sent_bytes.saturating_add(data.transmitted());
     }
-    let net_recv_kb_s = (total_recv_bytes as f64 / 1024.0).max(0.0);
-    let net_sent_kb_s = (total_sent_bytes as f64 / 1024.0).max(0.0);
+    let net_recv_kb_s = normalize_network_rate(total_recv_bytes, refresh_elapsed);
+    let net_sent_kb_s = normalize_network_rate(total_sent_bytes, refresh_elapsed);
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
     let pdh_collected_ok = collect_pdh(collector);
@@ -238,32 +256,43 @@ pub fn poll(
     );
 
     #[cfg(feature = "nvml")]
-    let (
-        nvidia_temp,
-        nvidia_power_w,
-        nvidia_mem_used_mb,
-        nvidia_mem_total_mb,
-        nvidia_fan_speed_pct,
-        nvidia_clock_mhz,
-    ) = if let Some(ref nvml) = collector.nvml {
-        let r = nvidia::query_nvml(nvml);
-        (
-            r.temp_c,
-            r.power_w,
-            r.mem_used_mb,
-            r.mem_total_mb,
-            r.fan_speed_pct,
-            r.clock_mhz,
-        )
+    collector.retry_nvml_if_due();
+    #[cfg(feature = "nvml")]
+    let nvidia_telemetry = if let Some(ref nvml) = collector.nvml {
+        let readings = nvidia::query_nvml(nvml);
+        collector.mark_nvidia_enrichment();
+        Some(nvidia::reconcile_nvml_readings(&gpu_updates, &readings))
     } else {
-        (None, None, None, None, None, None)
+        Some(HashMap::new())
     };
 
     #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
-    let nvidia_temp = nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized).map(|t| t as f64);
+    let nvidia_telemetry = {
+        let candidates: Vec<_> = gpu_updates
+            .iter()
+            .filter(|(_, name, _)| gpu::is_nvidia_gpu(name))
+            .collect();
+        match (
+            candidates.as_slice(),
+            nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized),
+        ) {
+            ([(key, _, _)], Some(temp)) => Some(
+                std::iter::once((
+                    key.clone(),
+                    crate::state::NvidiaTelemetry {
+                        temp_c: Some(temp as f64),
+                        ..Default::default()
+                    },
+                ))
+                .collect(),
+            ),
+            (_, Some(_)) => Some(HashMap::new()),
+            _ => Some(HashMap::new()),
+        }
+    };
 
     #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
-    let nvidia_temp: Option<f64> = None;
+    let nvidia_telemetry = None;
 
     crate::state::RawPoll {
         cpu_usage,
@@ -272,17 +301,7 @@ pub fn poll(
         mem_total_gb,
         mem_pct,
         gpu_updates,
-        nvidia_temp,
-        #[cfg(feature = "nvml")]
-        nvidia_power_w,
-        #[cfg(feature = "nvml")]
-        nvidia_mem_used_mb,
-        #[cfg(feature = "nvml")]
-        nvidia_mem_total_mb,
-        #[cfg(feature = "nvml")]
-        nvidia_fan_speed_pct,
-        #[cfg(feature = "nvml")]
-        nvidia_clock_mhz,
+        nvidia_telemetry,
         disk_active,
         disk_read_mb_s,
         disk_write_mb_s,
@@ -307,23 +326,17 @@ pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 /// Also refreshes `gpu_latest` so it's never stale relative to the value just
 /// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    // NVML/NVAPI-sourced readings are independent of PDH (they come from the
-    // Nvidia driver, not the PDH query), so commit them unconditionally — even
-    // on PDH-failed ticks, fresh nvidia data must not be dropped.
-    store.nvidia_temp = poll.nvidia_temp;
-    #[cfg(feature = "nvml")]
-    {
-        store.nvidia_power_w = poll.nvidia_power_w;
-        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
-        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
-        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
-        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
-    }
-
     // On PDH failure, freeze GPU history and latest at last-known values.
     // Do not commit stale/zero readings from a failed PdhCollectQueryData.
+    // Nvidia enrichment is held at the same last-known snapshot so an
+    // intermittent PDH failure cannot make one channel appear to jump or
+    // disappear while the card's identity is being reconciled.
     if !poll.pdh_ok {
         return;
+    }
+
+    if let Some(telemetry) = &poll.nvidia_telemetry {
+        store.nvidia_telemetry = telemetry.clone();
     }
 
     // Remember the previous entry order so grace-window ghosts below keep a
@@ -407,15 +420,6 @@ pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
     // On PDH failure, freeze gpu_latest at last-known values.
     // Do not commit stale/zero readings from a failed PdhCollectQueryData.
     if !poll.pdh_ok {
-        store.nvidia_temp = poll.nvidia_temp;
-        #[cfg(feature = "nvml")]
-        {
-            store.nvidia_power_w = poll.nvidia_power_w;
-            store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
-            store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
-            store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
-            store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
-        }
         return;
     }
 
@@ -428,14 +432,8 @@ pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
         next.insert(key.clone(), util.clamp(0.0, 100.0));
     }
     store.gpu_latest = next;
-    store.nvidia_temp = poll.nvidia_temp;
-    #[cfg(feature = "nvml")]
-    {
-        store.nvidia_power_w = poll.nvidia_power_w;
-        store.nvidia_mem_used_mb = poll.nvidia_mem_used_mb;
-        store.nvidia_mem_total_mb = poll.nvidia_mem_total_mb;
-        store.nvidia_fan_speed_pct = poll.nvidia_fan_speed_pct;
-        store.nvidia_clock_mhz = poll.nvidia_clock_mhz;
+    if let Some(telemetry) = &poll.nvidia_telemetry {
+        store.nvidia_telemetry = telemetry.clone();
     }
 }
 
@@ -616,12 +614,18 @@ mod tests {
         let poll = crate::state::RawPoll {
             pdh_ok: true,
             gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 150.0)],
-            nvidia_temp: Some(70.0),
+            nvidia_telemetry: Some(std::collections::HashMap::from([(
+                "gpu0".to_string(),
+                crate::state::NvidiaTelemetry {
+                    temp_c: Some(70.0),
+                    ..Default::default()
+                },
+            )])),
             ..Default::default()
         };
         commit_gpu_scalar(&mut store, &poll);
         assert_eq!(store.gpu_latest.get("gpu0"), Some(&100.0));
-        assert_eq!(store.nvidia_temp, Some(70.0));
+        assert_eq!(store.nvidia_telemetry["gpu0"].temp_c, Some(70.0));
         assert!(store.gpu_entries.is_empty());
     }
 
@@ -1009,27 +1013,34 @@ mod tests {
 
     #[test]
     fn test_commit_gpu_updates_nvidia_scalars_on_pdh_failure() {
-        // NVML/NVAPI scalars are sourced from the Nvidia driver, not PDH, so a
-        // PDH-failed full tick must still commit them while freezing GPU
-        // history/latest (regression: commit_gpu used to early-return before
-        // writing the nvidia_* fields, unlike commit_gpu_scalar).
+        // Nvidia enrichment is held with the GPU scalar when PDH fails. This
+        // keeps a failed collection from clearing or replacing last-known
+        // telemetry while the identity path recovers.
         let mut store = crate::state::HistoryStore::new("test");
         store.gpu_latest.insert("gpu0".to_string(), 45.0);
-        store.nvidia_temp = Some(50.0);
-        let mut bad_poll = crate::state::RawPoll {
+        store.nvidia_telemetry.insert(
+            "gpu0".to_string(),
+            crate::state::NvidiaTelemetry {
+                temp_c: Some(50.0),
+                ..Default::default()
+            },
+        );
+        let bad_poll = crate::state::RawPoll {
             pdh_ok: false,
             gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
-            nvidia_temp: Some(71.0),
+            nvidia_telemetry: Some(std::collections::HashMap::from([(
+                "gpu0".to_string(),
+                crate::state::NvidiaTelemetry {
+                    temp_c: Some(71.0),
+                    power_w: Some(188.0),
+                    mem_used_mb: Some(4096),
+                    mem_total_mb: Some(8192),
+                    fan_speed_pct: Some(50),
+                    clock_mhz: Some(1800),
+                },
+            )])),
             ..Default::default()
         };
-        #[cfg(feature = "nvml")]
-        {
-            bad_poll.nvidia_power_w = Some(188.0);
-            bad_poll.nvidia_mem_used_mb = Some(4096);
-            bad_poll.nvidia_mem_total_mb = Some(8192);
-            bad_poll.nvidia_fan_speed_pct = Some(50);
-            bad_poll.nvidia_clock_mhz = Some(1800);
-        }
 
         commit_gpu(&mut store, &bad_poll);
 
@@ -1039,16 +1050,11 @@ mod tests {
             store.gpu_entries.is_empty(),
             "no new GPU history entry on PDH failure"
         );
-        // ...while nvidia scalars are still committed unconditionally.
-        assert_eq!(store.nvidia_temp, Some(71.0));
-        #[cfg(feature = "nvml")]
-        {
-            assert_eq!(store.nvidia_power_w, Some(188.0));
-            assert_eq!(store.nvidia_mem_used_mb, Some(4096));
-            assert_eq!(store.nvidia_mem_total_mb, Some(8192));
-            assert_eq!(store.nvidia_fan_speed_pct, Some(50));
-            assert_eq!(store.nvidia_clock_mhz, Some(1800));
-        }
+        // ...and last-known per-device Nvidia telemetry is preserved.
+        let telemetry = &store.nvidia_telemetry["gpu0"];
+        assert_eq!(telemetry.temp_c, Some(50.0));
+        assert_eq!(telemetry.power_w, None);
+        assert_eq!(telemetry.mem_used_mb, None);
     }
 
     #[test]
@@ -1127,5 +1133,27 @@ mod tests {
         commit_gpu_scalar(&mut store, &good_poll);
         // gpu_latest must update to new value
         assert_eq!(store.gpu_latest.get("gpu0"), Some(&60.0));
+    }
+
+    #[test]
+    fn test_normalize_network_rate_is_time_based() {
+        let expected = 400.0;
+        for (bytes, elapsed_ms) in [(102_400, 250), (409_600, 1_000), (819_200, 2_000)] {
+            let rate = normalize_network_rate(bytes, std::time::Duration::from_millis(elapsed_ms));
+            assert!((rate - expected).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_normalize_network_rate_handles_empty_or_tiny_intervals() {
+        assert_eq!(normalize_network_rate(1024, std::time::Duration::ZERO), 0.0);
+        assert_eq!(
+            normalize_network_rate(1024, std::time::Duration::from_micros(500)),
+            0.0
+        );
+        assert_eq!(
+            normalize_network_rate(0, std::time::Duration::from_secs(2)),
+            0.0
+        );
     }
 }

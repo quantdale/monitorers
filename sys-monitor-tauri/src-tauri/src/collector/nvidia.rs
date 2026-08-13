@@ -19,13 +19,12 @@ pub fn init_nvml() -> Option<Nvml> {
 }
 
 #[cfg(feature = "nvml")]
-pub struct NvmlReadings {
-    pub temp_c: Option<f64>,
-    pub power_w: Option<f64>,
-    pub mem_used_mb: Option<u64>,
-    pub mem_total_mb: Option<u64>,
-    pub fan_speed_pct: Option<u32>,
-    pub clock_mhz: Option<u32>,
+#[derive(Clone, Debug)]
+pub struct NvmlDeviceReading {
+    pub name: String,
+    pub uuid: Option<String>,
+    pub pci_bus_id: Option<String>,
+    pub telemetry: crate::state::NvidiaTelemetry,
 }
 
 /// Check whether an NVML device name belongs to an Nvidia GPU.
@@ -44,69 +43,136 @@ fn is_nvml_nvidia_device(name: &str) -> bool {
 }
 
 #[cfg(feature = "nvml")]
-pub fn query_nvml(nvml: &Nvml) -> NvmlReadings {
+pub fn query_nvml(nvml: &Nvml) -> Vec<NvmlDeviceReading> {
     use nvml_wrapper::enum_wrappers::device::{Clock, ClockId, TemperatureSensor};
 
-    // Enumerate all NVML devices and find the one that matches an Nvidia GPU.
-    // Device index 0 is not guaranteed to be the Nvidia GPU in multi-GPU
-    // systems (e.g. Intel iGPU may be at index 0). Fallback to device 0 if
-    // no match is found.
-    let device = {
-        let count = nvml.device_count().unwrap_or(1);
-        let mut matched = None;
-        for idx in 0..count {
-            if let Ok(dev) = nvml.device_by_index(idx) {
-                if let Ok(name) = dev.name() {
-                    if is_nvml_nvidia_device(&name) {
-                        matched = Some(dev);
-                        break;
-                    }
-                }
-            }
+    let count = nvml.device_count().unwrap_or(0);
+    let mut readings = Vec::new();
+    for idx in 0..count {
+        let Ok(device) = nvml.device_by_index(idx) else {
+            continue;
+        };
+        let Ok(name) = device.name() else {
+            continue;
+        };
+        if !is_nvml_nvidia_device(&name) {
+            continue;
         }
-        match matched {
-            Some(d) => d,
-            None => match nvml.device_by_index(0) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("[NVML] device_by_index failed: {e}");
-                    return NvmlReadings {
-                        temp_c: None,
-                        power_w: None,
-                        mem_used_mb: None,
-                        mem_total_mb: None,
-                        fan_speed_pct: None,
-                        clock_mhz: None,
-                    };
-                }
+        let (mem_used_mb, mem_total_mb) = match device.memory_info() {
+            Ok(m) => (Some(m.used / 1024 / 1024), Some(m.total / 1024 / 1024)),
+            Err(_) => (None, None),
+        };
+        let pci_bus_id = device.pci_info().ok().map(|info| info.bus_id);
+        readings.push(NvmlDeviceReading {
+            name,
+            uuid: device.uuid().ok(),
+            pci_bus_id,
+            telemetry: crate::state::NvidiaTelemetry {
+                temp_c: device
+                    .temperature(TemperatureSensor::Gpu)
+                    .ok()
+                    .map(|t| t as f64),
+                power_w: device.power_usage().ok().map(|mw| mw as f64 / 1000.0),
+                mem_used_mb,
+                mem_total_mb,
+                fan_speed_pct: device.fan_speed(0).ok(),
+                clock_mhz: device.clock(Clock::Graphics, ClockId::Current).ok(),
             },
-        }
-    };
-
-    let temp_c = device
-        .temperature(TemperatureSensor::Gpu)
-        .ok()
-        .map(|t| t as f64);
-
-    let power_w = device.power_usage().ok().map(|mw| mw as f64 / 1000.0);
-
-    let (mem_used_mb, mem_total_mb) = match device.memory_info() {
-        Ok(m) => (Some(m.used / 1024 / 1024), Some(m.total / 1024 / 1024)),
-        Err(_) => (None, None),
-    };
-
-    let fan_speed_pct = device.fan_speed(0).ok();
-
-    let clock_mhz = device.clock(Clock::Graphics, ClockId::Current).ok();
-
-    NvmlReadings {
-        temp_c,
-        power_w,
-        mem_used_mb,
-        mem_total_mb,
-        fan_speed_pct,
-        clock_mhz,
+        });
     }
+    readings
+}
+
+#[cfg(feature = "nvml")]
+fn normalized_gpu_name(name: &str) -> String {
+    let lower = name.trim().to_ascii_lowercase();
+    let without_brand = lower.strip_prefix("nvidia ").unwrap_or(&lower);
+    without_brand
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "nvml")]
+fn reading_identity_matches(key: &str, reading: &NvmlDeviceReading) -> bool {
+    [reading.uuid.as_deref(), reading.pci_bus_id.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|identity| {
+            !identity.is_empty()
+                && (key.eq_ignore_ascii_case(identity)
+                    || key
+                        .to_ascii_lowercase()
+                        .contains(&identity.to_ascii_lowercase()))
+        })
+}
+
+/// Reconcile NVML devices to collector GPU keys without guessing. A name-only
+/// match is accepted only when it is unique on both sides; duplicate display
+/// names remain unavailable unless an underlying key contains the NVML UUID or
+/// PCI identity. This makes it impossible for GPU A's telemetry to be shown on
+/// GPU B merely because it was enumerated first.
+#[cfg(feature = "nvml")]
+pub fn reconcile_nvml_readings(
+    gpu_updates: &[(String, String, f64)],
+    readings: &[NvmlDeviceReading],
+) -> std::collections::HashMap<String, crate::state::NvidiaTelemetry> {
+    let nvidia_gpus: Vec<_> = gpu_updates
+        .iter()
+        .filter(|(_, name, _)| crate::collector::is_nvidia_gpu(name))
+        .collect();
+    let mut result = std::collections::HashMap::new();
+    let mut used_keys = std::collections::HashSet::new();
+    let mut matched_readings = std::collections::HashSet::new();
+
+    // First consume exact UUID/PCI matches. Enforce one-to-one assignment so a
+    // malformed or duplicated NVML identity can never overwrite another card's
+    // telemetry.
+    for (reading_index, reading) in readings.iter().enumerate() {
+        let candidates: Vec<&(String, String, f64)> = nvidia_gpus
+            .iter()
+            .copied()
+            .filter(|(key, _, _)| reading_identity_matches(key, reading))
+            .filter(|(key, _, _)| !used_keys.contains(key))
+            .collect();
+        if candidates.len() == 1 {
+            let key = candidates[0].0.clone();
+            result.insert(key.clone(), reading.telemetry.clone());
+            used_keys.insert(key);
+            matched_readings.insert(reading_index);
+        }
+    }
+
+    // A normalized display-name match is safe only when both the collector and
+    // NVML expose exactly one device with that name. This handles NVML's
+    // leading "NVIDIA" brand prefix without guessing among identical cards.
+    for (reading_index, reading) in readings.iter().enumerate() {
+        if matched_readings.contains(&reading_index) {
+            continue;
+        }
+        let normalized = normalized_gpu_name(&reading.name);
+        let same_name_readings = readings
+            .iter()
+            .enumerate()
+            .filter(|(index, other)| {
+                !matched_readings.contains(index) && normalized_gpu_name(&other.name) == normalized
+            })
+            .count();
+        let candidates: Vec<&(String, String, f64)> = nvidia_gpus
+            .iter()
+            .copied()
+            .filter(|(key, name, _)| {
+                !used_keys.contains(key) && normalized_gpu_name(name) == normalized
+            })
+            .collect();
+        if same_name_readings == 1 && candidates.len() == 1 {
+            let key = candidates[0].0.clone();
+            result.insert(key.clone(), reading.telemetry.clone());
+            used_keys.insert(key);
+            matched_readings.insert(reading_index);
+        }
+    }
+    result
 }
 
 // ── NVAPI GPU TEMPERATURE ────────────────────────────────────────────────────
@@ -207,6 +273,7 @@ pub fn query_nvidia_gpu_temp(_nvapi_initialized: bool) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "nvml", feature = "nvapi"))]
     use super::*;
 
     // The NVAPI path is only compiled when nvapi is on and nvml is absent (under
@@ -260,6 +327,118 @@ mod tests {
         fn case_insensitive() {
             assert!(is_nvml_nvidia_device("nvidia geforce gtx 1660"));
             assert!(is_nvml_nvidia_device("NVIDIA GEFORCE RTX 3060"));
+        }
+    }
+
+    #[cfg(feature = "nvml")]
+    mod nvml_reconcile {
+        use super::*;
+
+        fn telemetry(temp_c: f64) -> crate::state::NvidiaTelemetry {
+            crate::state::NvidiaTelemetry {
+                temp_c: Some(temp_c),
+                power_w: Some(temp_c * 2.0),
+                ..Default::default()
+            }
+        }
+
+        fn reading(
+            name: &str,
+            uuid: Option<&str>,
+            pci_bus_id: Option<&str>,
+            temp_c: f64,
+        ) -> NvmlDeviceReading {
+            NvmlDeviceReading {
+                name: name.to_string(),
+                uuid: uuid.map(str::to_string),
+                pci_bus_id: pci_bus_id.map(str::to_string),
+                telemetry: telemetry(temp_c),
+            }
+        }
+
+        #[test]
+        fn distinct_names_are_associated_with_their_own_cards() {
+            let updates = vec![
+                ("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0),
+                ("luid-b".to_string(), "GeForce RTX 4090".to_string(), 20.0),
+            ];
+            let readings = vec![
+                reading("GeForce RTX 3060", None, None, 51.0),
+                reading("GeForce RTX 4090", None, None, 72.0),
+            ];
+            let mapped = reconcile_nvml_readings(&updates, &readings);
+            assert_eq!(mapped["luid-a"].temp_c, Some(51.0));
+            assert_eq!(mapped["luid-b"].temp_c, Some(72.0));
+        }
+
+        #[test]
+        fn unique_name_match_ignores_nvml_brand_prefix() {
+            let updates = vec![("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0)];
+            let readings = vec![reading("NVIDIA GeForce RTX 3060", None, None, 51.0)];
+            let mapped = reconcile_nvml_readings(&updates, &readings);
+            assert_eq!(mapped["luid-a"].temp_c, Some(51.0));
+        }
+
+        #[test]
+        fn duplicate_names_without_a_stable_identity_are_left_unmapped() {
+            let updates = vec![
+                ("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0),
+                ("luid-b".to_string(), "GeForce RTX 3060".to_string(), 20.0),
+            ];
+            let readings = vec![
+                reading("GeForce RTX 3060", None, None, 51.0),
+                reading("GeForce RTX 3060", None, None, 72.0),
+            ];
+            assert!(reconcile_nvml_readings(&updates, &readings).is_empty());
+        }
+
+        #[test]
+        fn uuid_or_pci_identity_wins_for_same_name_cards() {
+            let updates = vec![
+                (
+                    "GPU-uuid-a".to_string(),
+                    "GeForce RTX 3060".to_string(),
+                    10.0,
+                ),
+                (
+                    "GPU-pci-b".to_string(),
+                    "GeForce RTX 3060".to_string(),
+                    20.0,
+                ),
+            ];
+            let readings = vec![
+                reading("GeForce RTX 3060", Some("GPU-uuid-a"), None, 51.0),
+                reading("GeForce RTX 3060", None, Some("GPU-pci-b"), 72.0),
+            ];
+            let mapped = reconcile_nvml_readings(&updates, &readings);
+            assert_eq!(mapped["GPU-uuid-a"].temp_c, Some(51.0));
+            assert_eq!(mapped["GPU-pci-b"].temp_c, Some(72.0));
+        }
+
+        #[test]
+        fn unmapped_reading_is_not_assigned_by_enumeration_order() {
+            let updates = vec![
+                ("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0),
+                ("luid-b".to_string(), "GeForce RTX 3060".to_string(), 20.0),
+            ];
+            let readings = vec![reading("GeForce RTX 3060", Some("GPU-unknown"), None, 51.0)];
+            assert!(reconcile_nvml_readings(&updates, &readings).is_empty());
+        }
+
+        #[test]
+        fn duplicate_direct_identity_is_not_allowed_to_overwrite_a_card() {
+            let updates = vec![(
+                "GPU-uuid-a".to_string(),
+                "GeForce RTX 3060".to_string(),
+                10.0,
+            )];
+            let readings = vec![
+                reading("NVIDIA GeForce RTX 3060", Some("GPU-uuid-a"), None, 51.0),
+                reading("NVIDIA GeForce RTX 3060", Some("GPU-uuid-a"), None, 72.0),
+            ];
+            let mapped = reconcile_nvml_readings(&updates, &readings);
+            assert_eq!(mapped.len(), 1);
+            assert_eq!(mapped["GPU-uuid-a"].temp_c, Some(51.0));
         }
     }
 

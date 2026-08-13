@@ -5,6 +5,7 @@
 use crate::collector::query_nvidia_gpu_temp;
 use crate::collector::{self, query_cpu_temp_cached, query_gpu_utilization_pdh};
 use crate::state::{CollectorState, HistoryStore, RawPoll};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 // ── SensorProvider trait ─────────────────────────────────────────────────────
@@ -19,6 +20,10 @@ pub trait SensorProvider: Send {
     /// Default: 1000ms (matches current behavior for untagged providers).
     fn poll_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(1000)
+    }
+
+    fn name(&self) -> &'static str {
+        "sensor"
     }
 }
 
@@ -54,6 +59,10 @@ impl SensorProvider for CpuSensorProvider {
     fn poll_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(250)
     }
+
+    fn name(&self) -> &'static str {
+        "cpu"
+    }
 }
 
 // ── GpuSensorProvider ─────────────────────────────────────────────────────────
@@ -76,47 +85,55 @@ impl SensorProvider for GpuSensorProvider {
         );
 
         #[cfg(feature = "nvml")]
-        let (
-            nvidia_temp,
-            nvidia_power_w,
-            nvidia_mem_used_mb,
-            nvidia_mem_total_mb,
-            nvidia_fan_speed_pct,
-            nvidia_clock_mhz,
-        ) = if let Some(ref nvml) = state.nvml {
-            let r = collector::nvidia::query_nvml(nvml);
-            (
-                r.temp_c,
-                r.power_w,
-                r.mem_used_mb,
-                r.mem_total_mb,
-                r.fan_speed_pct,
-                r.clock_mhz,
-            )
+        let nvidia_telemetry = if state.nvidia_enrichment_due() {
+            let readings = state
+                .nvml
+                .as_ref()
+                .map(collector::nvidia::query_nvml)
+                .unwrap_or_default();
+            state.mark_nvidia_enrichment();
+            Some(collector::nvidia::reconcile_nvml_readings(
+                &gpu_updates,
+                &readings,
+            ))
         } else {
-            (None, None, None, None, None, None)
+            None
         };
 
         #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
-        let nvidia_temp = query_nvidia_gpu_temp(state.nvapi_initialized).map(|t| t as f64);
+        let nvidia_telemetry = {
+            let candidates: Vec<_> = gpu_updates
+                .iter()
+                .filter(|(_, name, _)| collector::is_nvidia_gpu(name))
+                .collect();
+            match (
+                candidates.as_slice(),
+                query_nvidia_gpu_temp(state.nvapi_initialized),
+            ) {
+                ([(key, _, _)], Some(temp)) => Some(
+                    std::iter::once((
+                        key.clone(),
+                        crate::state::NvidiaTelemetry {
+                            temp_c: Some(temp as f64),
+                            ..Default::default()
+                        },
+                    ))
+                    .collect(),
+                ),
+                // NVAPI's fallback query cannot safely associate a reading
+                // with one of several identical GPUs.
+                (_, Some(_)) => Some(std::collections::HashMap::new()),
+                _ => Some(std::collections::HashMap::new()),
+            }
+        };
 
         #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
-        let nvidia_temp: Option<f64> = None;
+        let nvidia_telemetry = None;
 
         RawPoll {
             gpu_updates,
-            nvidia_temp,
+            nvidia_telemetry,
             pdh_ok,
-            #[cfg(feature = "nvml")]
-            nvidia_power_w,
-            #[cfg(feature = "nvml")]
-            nvidia_mem_used_mb,
-            #[cfg(feature = "nvml")]
-            nvidia_mem_total_mb,
-            #[cfg(feature = "nvml")]
-            nvidia_fan_speed_pct,
-            #[cfg(feature = "nvml")]
-            nvidia_clock_mhz,
             ..Default::default()
         }
     }
@@ -127,6 +144,10 @@ impl SensorProvider for GpuSensorProvider {
 
     fn poll_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(250)
+    }
+
+    fn name(&self) -> &'static str {
+        "gpu"
     }
 }
 
@@ -139,6 +160,11 @@ struct ProviderEntry {
 
 pub struct SensorRegistry {
     entries: Vec<ProviderEntry>,
+}
+
+fn perf_logging_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SYSMON_PERF_LOG").is_some())
 }
 
 impl SensorRegistry {
@@ -177,7 +203,16 @@ impl SensorRegistry {
             .map(|entry| {
                 if now.duration_since(entry.last_polled) >= entry.provider.poll_interval() {
                     entry.last_polled = now;
-                    Some(entry.provider.poll(state, wmi_con))
+                    let started = Instant::now();
+                    let raw = entry.provider.poll(state, wmi_con);
+                    if perf_logging_enabled() {
+                        eprintln!(
+                            "[Perf] provider={} duration_us={}",
+                            entry.provider.name(),
+                            started.elapsed().as_micros()
+                        );
+                    }
+                    Some(raw)
                 } else {
                     None
                 }

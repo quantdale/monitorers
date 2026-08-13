@@ -1,5 +1,6 @@
 // ── HARDWARE PROFILE (DETECTION ONLY) ─────────────────────────────────────────
-// Built once at startup. Providers read from it; no new sensors in this task.
+// Built from best-effort metadata and reconciled with committed hardware keys;
+// the collector owns the live profile and the frontend receives change events.
 
 use std::sync::OnceLock;
 
@@ -29,8 +30,9 @@ pub enum GpuKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct GpuInfo {
+    pub key: String,
     pub name: String,
     pub vendor: GpuVendor,
     pub kind: GpuKind,
@@ -45,13 +47,14 @@ pub enum DiskKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct DiskInfo {
+    pub key: String,
     pub name: String,
     pub kind: DiskKind,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct HardwareProfile {
     pub cpu_vendor: CpuVendor,
     pub cpu_name: String,
@@ -89,7 +92,7 @@ fn detect_cpu_name() -> String {
         .unwrap_or_else(|| "Unknown CPU".to_string())
 }
 
-// ── GPU classification (name-based) ───────────────────────────────────────────
+// ── GPU classification (conservative fallback when adapter properties are unavailable) ──
 
 pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
     let lower = name.to_lowercase();
@@ -117,9 +120,48 @@ pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
     };
 
     let kind = match vendor {
-        GpuVendor::Intel => GpuKind::Integrated,
-        GpuVendor::Nvidia | GpuVendor::Amd => GpuKind::Discrete,
-        GpuVendor::Unknown => GpuKind::Unknown,
+        GpuVendor::Nvidia
+            if lower.contains("geforce")
+                || lower.contains("quadro")
+                || lower.contains("rtx")
+                || lower.contains("gtx")
+                || lower.contains("tesla")
+                || lower.contains("nvs")
+                || lower.contains("discrete")
+                || lower.contains("dedicated") =>
+        {
+            GpuKind::Discrete
+        }
+        GpuVendor::Intel if lower.contains("arc") => GpuKind::Discrete,
+        GpuVendor::Intel
+            if lower.contains("uhd") || lower.contains("iris") || lower.contains("integrated") =>
+        {
+            GpuKind::Integrated
+        }
+        GpuVendor::Amd
+            if lower.contains("rx ")
+                || lower.contains("radeon pro")
+                || (lower.contains("vega")
+                    && (lower.contains("vega 56")
+                        || lower.contains("vega 64")
+                        || lower.contains("frontier"))) =>
+        {
+            GpuKind::Discrete
+        }
+        GpuVendor::Amd
+            if lower.contains("apu")
+                || lower.contains("radeon graphics")
+                || lower.contains("integrated") =>
+        {
+            GpuKind::Integrated
+        }
+        GpuVendor::Amd if lower.contains("vega") && lower.contains("graphics") => {
+            GpuKind::Integrated
+        }
+        // A vendor name alone does not prove form factor. Avoid confidently
+        // labeling an unknown AMD/Intel adapter when DXGI memory properties
+        // are unavailable in this lightweight profile path.
+        _ => GpuKind::Unknown,
     };
 
     (vendor, kind)
@@ -127,10 +169,7 @@ pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
 
 /// Reuses existing GPU enumeration from collector::gpu (PDH + WMI). No new PDH queries.
 fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -> Vec<GpuInfo> {
-    let (pdh_ref, wmi_ref) = match (pdh, wmi_con) {
-        (Some(p), Some(w)) => (p, w),
-        _ => return vec![],
-    };
+    let Some(pdh_ref) = pdh else { return vec![] };
     let lock = OnceLock::new();
     // One-time startup call — a throwaway cache avoids rebuilding the WMI
     // vendor map here while leaving the steady-state cache untouched.
@@ -138,16 +177,17 @@ fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -
     let mut last_build = std::time::Instant::now();
     let entries = crate::collector::query_gpu_utilization_pdh(
         pdh_ref,
-        Some(wmi_ref),
+        wmi_con,
         &lock,
         &mut vendor_map,
         &mut last_build,
     );
     entries
         .into_iter()
-        .map(|(_key, display_name, _util)| {
+        .map(|(key, display_name, _util)| {
             let (vendor, kind) = classify_gpu(&display_name);
             GpuInfo {
+                key,
                 name: display_name,
                 vendor,
                 kind,
@@ -171,6 +211,7 @@ fn detect_disks() -> Vec<DiskInfo> {
                 _ => DiskKind::Unknown,
             };
             DiskInfo {
+                key: d.name().to_string_lossy().to_string(),
                 name: d.name().to_string_lossy().to_string(),
                 kind,
             }
@@ -270,6 +311,50 @@ mod tests {
         assert_eq!(
             classify_gpu("INTEL IRIS XE"),
             (GpuVendor::Intel, GpuKind::Integrated)
+        );
+    }
+
+    #[test]
+    fn test_classify_gpu_distinguishes_modern_discrete_and_integrated_names() {
+        assert_eq!(
+            classify_gpu("Intel Arc A770"),
+            (GpuVendor::Intel, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("AMD Radeon Graphics"),
+            (GpuVendor::Amd, GpuKind::Integrated)
+        );
+        assert_eq!(
+            classify_gpu("AMD Ryzen APU"),
+            (GpuVendor::Amd, GpuKind::Integrated)
+        );
+        assert_eq!(
+            classify_gpu("AMD Radeon Pro W7800"),
+            (GpuVendor::Amd, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("AMD Radeon Vega 8 Graphics"),
+            (GpuVendor::Amd, GpuKind::Integrated)
+        );
+        assert_eq!(
+            classify_gpu("AMD Radeon Vega Graphics"),
+            (GpuVendor::Amd, GpuKind::Integrated)
+        );
+    }
+
+    #[test]
+    fn test_classify_gpu_vendor_only_is_conservative() {
+        assert_eq!(
+            classify_gpu("Intel Graphics"),
+            (GpuVendor::Intel, GpuKind::Unknown)
+        );
+        assert_eq!(
+            classify_gpu("AMD Adapter"),
+            (GpuVendor::Amd, GpuKind::Unknown)
+        );
+        assert_eq!(
+            classify_gpu("NVIDIA Adapter"),
+            (GpuVendor::Nvidia, GpuKind::Unknown)
         );
     }
 }
