@@ -34,7 +34,7 @@
     "@tauri-apps/plugin-store": "^2.4.2",
     "lucide-react": "^0.460.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react-dom": "^19.2.8",
     "recharts": "^3.8.0"
   },
   "devDependencies": {
@@ -42,7 +42,7 @@
     "@tauri-apps/cli": "^2",
     "@types/node": "^24.13.3",
     "@types/react": "^18.2.15",
-    "@types/react-dom": "^18.2.7",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.3.4",
     "cross-env": "^10.1.0",
     "jsdom": "^25.0.0",
