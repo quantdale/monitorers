@@ -50,6 +50,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install frontend dependencies
+        run: npm ci
+
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --version 0.22.1 --locked --quiet
 
