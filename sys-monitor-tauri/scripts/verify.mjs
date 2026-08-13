@@ -41,6 +41,10 @@ function rust() {
   if (process.platform !== 'win32') {
     throw new Error('Rust/Tauri verification requires Windows; use the Windows CI gate.');
   }
+  // `tauri::generate_context!()` validates frontendDist at compile time, so a
+  // clean Rust job must produce the frontend bundle before any cargo target
+  // (including unit-test binaries) is compiled.
+  runNpm('frontend bundle for Rust/Tauri context', ['run', 'build'], appRoot);
   run('Rust format', 'cargo', ['fmt', '--', '--check'], rustRoot);
   run('Rust tests', 'cargo', ['test', '--all-features'], rustRoot);
   run('Rust tests (default features)', 'cargo', ['test'], rustRoot);
