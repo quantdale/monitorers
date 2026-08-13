@@ -1,27 +1,63 @@
 import type { CSSProperties } from 'react';
 
-export function formatThroughput(kb: number): string {
-  if (!Number.isFinite(kb)) return '—';
+export function formatThroughput(kb: number | null | undefined): string {
+  if (kb == null || !Number.isFinite(kb) || kb < 0) return '—';
   if (kb >= 1000 * 1000) return `${(kb / 1e6).toFixed(1)} GB/s`;
   if (kb >= 1000) return `${(kb / 1000).toFixed(1)} MB/s`;
   return `${kb.toFixed(0)} KB/s`;
 }
 
-export function formatPercent(v: number | undefined): string {
-  const x = Math.max(0, v ?? 0);
-  if (!Number.isFinite(x)) return '—%';
+export function formatPercent(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—%';
+  const x = Math.min(100, Math.max(0, v));
   return `${x.toFixed(1)}%`;
 }
 
 export function formatTempC(temp: number | null | undefined): string {
-  if (temp == null || Number.isNaN(temp)) return '— °C';
+  if (temp == null || !Number.isFinite(temp)) return '— °C';
   return `${Math.round(temp)} °C`;
 }
 
+/** Fixed-point temperature for compact GPU badges; finite negative values are
+ * retained because below-zero temperatures are physically meaningful. */
+export function formatCompactTempC(temp: number | null | undefined): string {
+  if (temp == null || !Number.isFinite(temp)) return '—';
+  return `${temp.toFixed(1)}°C`;
+}
+
+export function formatMegabytesPerSecond(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  return value.toFixed(1);
+}
+
+export function formatWatts(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  return `${value.toFixed(1)} W`;
+}
+
+export function formatMegabytes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  return value.toFixed(0);
+}
+
+export function formatFanPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  return `${Math.min(100, value).toFixed(0)}%`;
+}
+
+export function formatMegahertz(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  return `${value.toFixed(0)} MHz`;
+}
+
 export function formatResponseMs(ms: number): string {
-  if (!ms || ms <= 0 || !isFinite(ms)) return 'Avg: —';
+  if (!Number.isFinite(ms) || ms <= 0) return 'Avg: —';
   if (ms < 10) return `Avg: ${ms.toFixed(1)} ms`;
   return `Avg: ${Math.round(ms)} ms`;
+}
+
+export function formatGigabytes(value: number | null | undefined): string {
+  return value != null && Number.isFinite(value) && value >= 0 ? value.toFixed(1) : '—';
 }
 
 /** Human-readable label for card ids that do not resolve to a known metric. */

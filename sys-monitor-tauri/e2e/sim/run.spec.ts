@@ -7,7 +7,7 @@
  *   SIM_JOURNEYS  = comma-separated journey ids, or '*' for all
  *   SIM_PERSONAS  = comma-separated persona ids, or '*' for all
  *   SIM_SEED      = fixed seed (defaults to a random-per-run seed)
- *   SIM_SPEED     = mock clock speed factor for the mock lane (default 1)
+ *   SIM_SPEED     = mock clock speed factor for the mock lane (default 8)
  *   SIM_OUT       = artifact root dir (default e2e-results/sim)
  *
  * The run header (seed, journey, persona, driver) is logged per run so any
@@ -15,7 +15,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { JOURNEYS, getJourney } from './journeys';
 import { PERSONAS, getPersona } from './personas';
 import { MockHarnessDriver } from './drivers/MockHarnessDriver';
@@ -25,23 +25,21 @@ import { isQuarantined } from './flake-quarantine';
 import { mulberry32 } from './engine/prng';
 import { drawThinkTime, drawDwellTime } from './engine/behavior';
 import type { RunOptions, RunResult, SimDriver, SimScenario, SimContext } from './types';
+import { parseSimulationConfig, resolveSimulationIds } from '../../src/sim/simConfig';
 
-const LANE = (process.env.SIM_LANE ?? 'mock') as 'mock' | 'real';
-const JOURNEY_SELECTOR = process.env.SIM_JOURNEYS ?? '*';
-const PERSONA_SELECTOR = process.env.SIM_PERSONAS ?? '*';
-const SEED = process.env.SIM_SEED ? Number(process.env.SIM_SEED) : Math.floor(Math.random() * 0xffffffff);
-const SPEED = Number(process.env.SIM_SPEED ?? (LANE === 'mock' ? 8 : 1));
-const OUT_ROOT = resolve(process.env.SIM_OUT ?? join('e2e-results', 'sim'));
-const RUN_ID = `run-${Date.now().toString(36)}`;
+const config = parseSimulationConfig(process.env);
+const LANE = config.lane;
+const JOURNEY_SELECTOR = config.journeySelector;
+const PERSONA_SELECTOR = config.personaSelector;
+const SEED = config.seed;
+const SPEED = config.speed;
+const OUT_ROOT = resolve(config.out);
+const RUN_ID = `run-${Date.now().toString(36)}-${LANE}`;
 
-const selectedJourneys = JOURNEYS.filter((j) => {
-  if (JOURNEY_SELECTOR === '*') return true;
-  return JOURNEY_SELECTOR.split(',').includes(j.id);
-});
-const selectedPersonas = PERSONAS.filter((p) => {
-  if (PERSONA_SELECTOR === '*') return true;
-  return PERSONA_SELECTOR.split(',').includes(p.id);
-});
+const selectedJourneyIds = resolveSimulationIds(JOURNEY_SELECTOR, JOURNEYS.map((j) => j.id), 'SIM_JOURNEYS');
+const selectedPersonaIds = resolveSimulationIds(PERSONA_SELECTOR, PERSONAS.map((p) => p.id), 'SIM_PERSONAS');
+const selectedJourneys = JOURNEYS.filter((j) => selectedJourneyIds.includes(j.id));
+const selectedPersonas = PERSONAS.filter((p) => selectedPersonaIds.includes(p.id));
 
 function scenarioFor(journeyId: string): SimScenario {
   const base = defaultScenarioFor(LANE);
@@ -106,15 +104,22 @@ test.describe('simulation', () => {
     mkdirSync(OUT_ROOT, { recursive: true });
     const selections = buildSelections();
     if (selections.length === 0) {
-      test.skip(true, `no journeys selected for lane ${LANE} (SIM_JOURNEYS=${JOURNEY_SELECTOR})`);
-      return;
+      throw new Error(
+        `simulation configuration selected no journeys supporting lane ${LANE} (SIM_JOURNEYS=${JOURNEY_SELECTOR})`
+      );
+    }
+    const runnableSelections = selections.filter((selection) => !isQuarantined(selection.journeyId));
+    const quarantinedSelections = selections.filter((selection) => isQuarantined(selection.journeyId));
+    console.log(
+      `[sim] matrix selected=${selections.length} runnable=${runnableSelections.length} quarantined=${quarantinedSelections.length}`
+    );
+    if (runnableSelections.length === 0) {
+      throw new Error(
+        `simulation configuration selected only quarantined journeys: ${quarantinedSelections.map((s) => s.journeyId).join(', ')}`
+      );
     }
     const results: RunResult[] = [];
-    for (const sel of selections) {
-      if (isQuarantined(sel.journeyId)) {
-        console.log(`[sim] quarantined, skipping: ${sel.journeyId}`);
-        continue;
-      }
+    for (const sel of runnableSelections) {
       const opts: RunOptions = {
         seed: SEED,
         runId: RUN_ID,
@@ -135,6 +140,9 @@ test.describe('simulation', () => {
       );
     }
     const failed = results.filter((r) => !r.passed);
+    if (results.length === 0) {
+      throw new Error('simulation produced zero runnable results');
+    }
     if (failed.length > 0) {
       throw new Error(
         `simulation: ${failed.length}/${results.length} journey(s) failed (see ${OUT_ROOT})`

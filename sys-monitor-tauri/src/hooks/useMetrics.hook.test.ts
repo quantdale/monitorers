@@ -8,6 +8,8 @@ import type { HistoryPayload, MetricsSnapshot } from '../types/metrics';
 // "collector-error" listener wiring can be exercised end-to-end, the same way
 // it would run against a live backend — without a real Tauri runtime.
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
+let deferredHistory = false;
+const historyRequests: Array<{ resolve: (payload: HistoryPayload) => void; reject: (error: Error) => void }> = [];
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((eventName: string, cb: (event: { payload: unknown }) => void) => {
@@ -18,7 +20,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 function emptyHistoryPayload(): HistoryPayload {
   return {
-    schema_version: 3,
+    schema_version: 4,
     timestamps: [],
     cpu: [],
     cpu_name: 'CPU',
@@ -32,18 +34,25 @@ function emptyHistoryPayload(): HistoryPayload {
 }
 
 let historyInvokeError: Error | null = null;
+let historySchemaVersion: number | null = null;
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() =>
-    historyInvokeError ? Promise.reject(historyInvokeError) : Promise.resolve(emptyHistoryPayload())
-  ),
+  invoke: vi.fn(() => {
+    if (deferredHistory) {
+      return new Promise<HistoryPayload>((resolve, reject) => historyRequests.push({ resolve, reject }));
+    }
+    if (historyInvokeError) return Promise.reject(historyInvokeError);
+    const payload = emptyHistoryPayload();
+    if (historySchemaVersion !== null) payload.schema_version = historySchemaVersion;
+    return Promise.resolve(payload);
+  }),
 }));
 
 import { useMetrics, type SlicedHistory } from './useMetrics';
 
 function baseSnapshot(onTick: boolean): MetricsSnapshot {
   return {
-    schema_version: 3,
+    schema_version: 4,
     on_tick: onTick,
     cpu: 42,
     cpu_name: 'CPU',
@@ -68,6 +77,7 @@ interface RenderResult {
   result: () => SlicedHistory;
   historyLoadError: () => string | null;
   unmount: () => void;
+  rerender: (windowSecs: number) => void;
 }
 
 function renderUseMetrics(windowSecs: number): RenderResult {
@@ -92,6 +102,7 @@ function renderUseMetrics(windowSecs: number): RenderResult {
     },
     historyLoadError: () => hookValue?.historyLoadError ?? null,
     unmount: () => act(() => root.unmount()),
+    rerender: (w: number) => act(() => root.render(React.createElement(TestComponent, { w }))),
   };
 }
 
@@ -100,6 +111,9 @@ describe('useMetrics (Tauri event wiring)', () => {
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     listeners.clear();
     historyInvokeError = null;
+    historySchemaVersion = null;
+    deferredHistory = false;
+    historyRequests.length = 0;
   });
 
   afterEach(() => {
@@ -145,7 +159,7 @@ describe('useMetrics (Tauri event wiring)', () => {
       emit('metrics-update', {
         ...baseSnapshot(true),
         disks: [{ key: 'C:', active: 12, read_mb_s: 1, write_mb_s: 2, avg_response_ms: 3, temp_c: 40 }],
-        gpus: [{ name: 'GeForce RTX 4050', vendor: 'nvidia', util: 33, temp_c: 55 }],
+        gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', util: 33, temp_c: 55 }],
       });
     });
 
@@ -180,9 +194,9 @@ describe('useMetrics (Tauri event wiring)', () => {
       emit('metrics-update', baseSnapshot(false));
     });
 
-    // Live events clear the error (pipeline is alive) but the history must
-    // stay empty until an on_tick snapshot provides a commit point.
-    expect(historyLoadError()).toBeNull();
+    // A non-on_tick event proves liveness, but does not prove that the failed
+    // history request for the selected window recovered.
+    expect(historyLoadError()).toBe('IPC channel closed');
     expect(() => result()).toThrow('metrics not loaded yet');
 
     act(() => {
@@ -249,6 +263,57 @@ describe('useMetrics (Tauri event wiring)', () => {
     expect(result().cpu.length).toBe(10); // history grew 1:1 with elapsed seconds
     expect(result().cpu.length).not.toBe(40); // not 1:1 with raw event count
 
+    unmount();
+  });
+
+  it('rejects an incompatible history payload before it can seed state', async () => {
+    historySchemaVersion = 3;
+    const { result, historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(historyLoadError()).toMatch(/schema mismatch/i);
+    expect(() => result()).toThrow('metrics not loaded yet');
+    unmount();
+  });
+
+  it('rejects an incompatible live snapshot without mutating current state', async () => {
+    const { result, historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    expect(result().latestCpu).toBe(42);
+
+    act(() => emit('metrics-update', { ...baseSnapshot(true), schema_version: 3, cpu: 99 }));
+    expect(result().latestCpu).toBe(42);
+    expect(result().cpu).toEqual([42]);
+    expect(historyLoadError()).toMatch(/schema mismatch/i);
+    unmount();
+  });
+
+  it('keeps the newer history request when an older deferred request resolves last', async () => {
+    deferredHistory = true;
+    const { result, unmount, rerender } = renderUseMetrics(30);
+    rerender(60);
+    expect(historyRequests).toHaveLength(2);
+    const newer = { ...emptyHistoryPayload(), timestamps: [2_000], cpu: [20], mem: [20], net_recv: [0], net_sent: [0] };
+    const older = { ...emptyHistoryPayload(), timestamps: [1_000], cpu: [10], mem: [10], net_recv: [0], net_sent: [0] };
+    await act(async () => { historyRequests[1].resolve(newer); await Promise.resolve(); });
+    await act(async () => { historyRequests[0].resolve(older); await Promise.resolve(); });
+    expect(result().cpu).toEqual([20]);
+    unmount();
+  });
+
+  it('replays a live full-tick received during a deferred refetch instead of rolling back', async () => {
+    deferredHistory = true;
+    const { result, unmount } = renderUseMetrics(60);
+    act(() => emit('metrics-update', { ...baseSnapshot(true), cpu: 42 }));
+    await act(async () => {
+      historyRequests[0].resolve({ ...emptyHistoryPayload(), timestamps: [1_000], cpu: [10], mem: [10], net_recv: [0], net_sent: [0] });
+      await Promise.resolve();
+    });
+    expect(result().cpu.at(-1)).toBe(42);
     unmount();
   });
 });

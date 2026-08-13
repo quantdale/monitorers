@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { isTauri } from '../utils';
 
 export interface GpuProfileEntry {
+  /** Stable backend identity; display name is presentation-only. */
+  key: string;
   name: string;
   vendor: string;
   kind: string;
 }
 
 export interface DiskProfileEntry {
+  /** Stable backend identity; display name is presentation-only. */
+  key: string;
   name: string;
   kind: string;
 }
@@ -21,33 +25,82 @@ export interface HardwareProfile {
   disks: DiskProfileEntry[];
 }
 
-function fetchProfile(): Promise<HardwareProfile | null> {
-  return invoke<HardwareProfile | null>('get_hardware_profile').then(result => {
-    if (result) {
-      result.gpus = result.gpus ?? [];
-      result.disks = result.disks ?? [];
-    }
-    return result;
-  });
+export interface HardwareProfileState {
+  profile: HardwareProfile | null;
+  loading: boolean;
+  error: string | null;
+  retry: () => void;
 }
 
-export function useHardwareProfile(): HardwareProfile | null {
+function fallbackKey(prefix: string, name: string): string {
+  return `${prefix}:${name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
+}
+
+function normalizeProfile(result: HardwareProfile | null): HardwareProfile | null {
+  if (!result) return null;
+  return {
+    ...result,
+    gpus: (result.gpus ?? []).map((gpu) => ({
+      ...gpu,
+      key: gpu.key || fallbackKey('gpu', gpu.name),
+    })),
+    disks: (result.disks ?? []).map((disk) => ({
+      ...disk,
+      key: disk.key || fallbackKey('disk', disk.name),
+    })),
+  };
+}
+
+function fetchProfile(): Promise<HardwareProfile | null> {
+  return invoke<HardwareProfile | null>('get_hardware_profile').then(normalizeProfile);
+}
+
+export function useHardwareProfile(): HardwareProfileState {
   const [profile, setProfile] = useState<HardwareProfile | null>(null);
+  const [loading, setLoading] = useState(isTauri());
+  const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+
+  const retry = useCallback(() => setRetryToken((token) => token + 1), []);
 
   useEffect(() => {
     if (!isTauri()) {
+      setLoading(false);
       return;
     }
-    fetchProfile().then(setProfile).catch(() => setProfile(null));
+    let cancelled = false;
+    let requestInFlight = false;
 
-    const unlisten = listen('hardware-profile-ready', () => {
-      fetchProfile().then(setProfile).catch(() => setProfile(null));
-    });
-
-    return () => {
-      unlisten.then(fn => fn()).catch(() => {});
+    const load = () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      setLoading(true);
+      fetchProfile()
+        .then((next) => {
+          if (cancelled) return;
+          setProfile(next);
+          setError(null);
+        })
+        .catch((reason) => {
+          if (cancelled) return;
+          setError(reason instanceof Error ? reason.message : String(reason));
+          // Preserve the last known good profile during a transient refetch
+          // failure; the sidebar can show a retry affordance instead of
+          // reverting to an indefinite "Detecting" state.
+        })
+        .finally(() => {
+          requestInFlight = false;
+          if (!cancelled) setLoading(false);
+        });
     };
-  }, []);
 
-  return profile;
+    load();
+    const unlisten = listen('hardware-profile-ready', load);
+    return () => {
+      cancelled = true;
+      unlisten.then((dispose) => dispose()).catch(() => undefined);
+    };
+  }, [retryToken]);
+
+  return { profile, loading, error, retry };
 }

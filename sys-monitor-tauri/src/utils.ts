@@ -6,6 +6,7 @@
 //   @dnd-kit/utilities — CSS transform helpers (CSS.Transform.toString)
 
 export type ViewMode = 'default' | 'tile' | 'list';
+import type { MetricValue } from './types/metrics';
 
 /** True when running inside the Tauri shell (vs. a plain browser/mock-data context). */
 export function isTauri(): boolean {
@@ -22,10 +23,11 @@ export function gpuId(name: string): string {
  * Computed from the current windowed slice (what the user can see on the graph),
  * not the full 3600-point buffer — so min/max reflects what is visible.
  */
-export function historyMinMax(history: number[]): { min: number; max: number } {
-  if (history.length === 0) return { min: 0, max: 0 };
+export function historyMinMax(history: MetricValue[]): { min: number; max: number } {
+  const finite = history.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (finite.length === 0) return { min: 0, max: 0 };
   return {
-    min: history.reduce((a, b) => Math.min(a, b), Infinity),
-    max: history.reduce((a, b) => Math.max(a, b), -Infinity),
+    min: Math.min(...finite),
+    max: Math.max(...finite),
   };
 }

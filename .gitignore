@@ -22,3 +22,7 @@ debug-*.log
 
 # Cursor editor
 .cursor/
+
+# OpenCode runtime/session state (durable commands and skills under .opencode/
+# remain tracked; this directory is generated per agent session).
+.opencode/opencode-loop/

@@ -13,6 +13,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import type { SimDriver, DriverLaunchResult } from '../types';
 import type { SimFault, SimScenario } from '../../../src/sim/mockBackend';
+import { ClassifiedSimulationError } from '../errors';
 
 export const MOCK_BASE_URL = 'http://127.0.0.1:5180';
 
@@ -65,6 +66,19 @@ export class MockHarnessDriver implements SimDriver {
     const page = await ctx.newPage();
     this.page = page;
     await page.goto(`/?__sim_run=${encodeURIComponent(runId)}`, { waitUntil: 'domcontentloaded' });
+    try {
+      await page.waitForFunction(
+        ([expectedRunId, expectedScenarioVersion]) =>
+          window.__SIM__?.runId === expectedRunId && window.__SIM__?.scenario.version === expectedScenarioVersion,
+        [runId, scenario.version]
+      );
+    } catch (error) {
+      throw new ClassifiedSimulationError(
+        `mock scenario handoff failed for run ${runId}: ${String(error)}`,
+        'harness-defect',
+        'config',
+      );
+    }
     return { page, appStderrPath: null };
   }
 
@@ -74,11 +88,7 @@ export class MockHarnessDriver implements SimDriver {
    */
   async stopTrace(tracePath: string): Promise<void> {
     if (!this.context) return;
-    try {
-      await this.context.tracing.stop({ path: tracePath });
-    } catch {
-      // trace is best-effort; the journey outcome is reported regardless
-    }
+    await this.context.tracing.stop({ path: tracePath });
   }
 
   async injectFault(fault: SimFault): Promise<boolean> {
@@ -102,14 +112,24 @@ export class MockHarnessDriver implements SimDriver {
   }
 
   async close(): Promise<void> {
+    const errors: string[] = [];
     if (this.context) {
-      await this.context.close().catch(() => undefined);
+      try {
+        await this.context.close();
+      } catch (error) {
+        errors.push(`context close failed: ${String(error)}`);
+      }
       this.context = null;
     }
     if (this.browser) {
-      await this.browser.close().catch(() => undefined);
+      try {
+        await this.browser.close();
+      } catch (error) {
+        errors.push(`browser close failed: ${String(error)}`);
+      }
       this.browser = null;
     }
     this.page = null;
+    if (errors.length > 0) throw new Error(errors.join('; '));
   }
 }

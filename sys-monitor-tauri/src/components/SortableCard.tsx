@@ -2,18 +2,19 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { MetricCard } from './MetricCard';
 import type { ViewMode } from '../utils';
+import type { MetricValue } from '../types/metrics';
 
 interface Props {
   id: string;
   title: string;
   value: string;
-  history?: number[];
+  history?: MetricValue[];
   timestamps?: number[];
   color: string;
   yDomain?: [number, number | 'auto'];
   badge?: React.ReactNode;
   viewMode: ViewMode;
-  secondaryHistory?: number[];
+  secondaryHistory?: MetricValue[];
   secondaryColor?: string;
   listViewValue?: string | React.ReactNode;
   listViewMinMax?: string | React.ReactNode;

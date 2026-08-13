@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -23,18 +23,16 @@ import { MetricCardSelector } from './components/MetricCardSelector';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HardwareSidebar } from './components/HardwareSidebar';
 import { useHardwareProfile } from './hooks/useHardwareProfile';
-import { gpuId } from './utils';
 import { renderCardContent } from './cards/renderCardContent';
 import { fallbackCardLabel } from './cards/formatters';
 import {
-  computeDefaultCardIds,
   computeHasNvidiaData,
   computeVisibleCardOrder,
   hasMetricsButNoVisibleCards,
   isCardPresent,
-  mergeNewCardIds,
   shouldShowLoadingState,
 } from './cardIdentity';
+import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
 import { PanelLeft } from 'lucide-react';
 
 // Labels for the legal history-window sizes (values come from WINDOW_SECS_OPTIONS
@@ -60,25 +58,14 @@ export default function App() {
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const hardwareProfile = useHardwareProfile();
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const hardwareProfileState = useHardwareProfile();
   const { metrics, historyLoadError } = useMetrics(windowSecs);
+  useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-
-  // First launch: compute default card order. When saved order exists, merge in new disks/GPUs that appeared.
-  useEffect(() => {
-    if (!loaded || !metrics) return;
-    const defaultIds = computeDefaultCardIds(metrics);
-    if (settings.cardOrder === null) {
-      save({ cardOrder: defaultIds });
-      return;
-    }
-    const merged = mergeNewCardIds(settings.cardOrder, defaultIds);
-    if (merged === null) return;
-    save({ cardOrder: merged });
-  }, [metrics, settings.cardOrder, save]);
 
   if (settingsError) {
     return (
@@ -93,6 +80,8 @@ export default function App() {
         }}
       >
         <div
+          role="alert"
+          aria-live="assertive"
           style={{
             background: 'rgba(231, 76, 60, 0.15)',
             border: '1px solid rgba(231, 76, 60, 0.7)',
@@ -110,7 +99,9 @@ export default function App() {
     );
   }
 
-  if (!loaded) return null;
+  if (!loaded) {
+    return <div role="status" aria-live="polite" style={{ background: '#141414', color: '#888', minHeight: '100vh', padding: 24 }}>Loading settings…</div>;
+  }
 
   function handleMetricToggle(id: string, visible: boolean) {
     const next = new Set(hiddenCardIds);
@@ -128,7 +119,7 @@ export default function App() {
     if (id === 'network') return 'Network';
     if (id.startsWith('disk_')) return `Disk ${id.slice('disk_'.length)}`;
     if (id.startsWith('gpu_')) {
-      const gpuName = metrics.gpus.find(g => gpuId(g.name) === id)?.name;
+      const gpuName = metrics.gpus.find(g => `gpu_${g.key}` === id)?.name;
       if (gpuName) return gpuName;
     }
     return fallbackCardLabel(id);
@@ -156,7 +147,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      <HardwareSidebar open={sidebarOpen} profile={hardwareProfile} metrics={metrics} />
+      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} metrics={metrics} />
       <div
         style={{
           flex: 1,
@@ -177,6 +168,8 @@ export default function App() {
       {metrics?.collectorError && (
         <div
           data-testid="collector-error-banner"
+          role="alert"
+          aria-live="assertive"
           style={{
             background: 'rgba(231, 76, 60, 0.15)',
             border: '1px solid rgba(231, 76, 60, 0.7)',
@@ -194,6 +187,8 @@ export default function App() {
       {saveError && (
         <div
           data-testid="save-error-banner"
+          role="alert"
+          aria-live="polite"
           style={{
             background: 'rgba(243, 156, 18, 0.15)',
             border: '1px solid rgba(243, 156, 18, 0.7)',
@@ -219,6 +214,9 @@ export default function App() {
             type="button"
             onClick={() => setSidebarOpen((prev) => !prev)}
             title={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
+            aria-label={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
+            aria-expanded={sidebarOpen}
+            aria-controls="hardware-sidebar"
             style={{
               padding: '4px 8px',
               borderRadius: 4,
@@ -251,6 +249,8 @@ export default function App() {
 
       {historyLoadError && metrics && (
         <div
+          role="alert"
+          aria-live="polite"
           style={{
             color: '#ffd6d3',
             padding: '8px 12px',
@@ -267,6 +267,8 @@ export default function App() {
 
       {historyLoadError && !metrics ? (
         <div
+          role="alert"
+          aria-live="assertive"
           style={{
             color: '#ffd6d3',
             padding: '32px 0',
@@ -299,9 +301,24 @@ export default function App() {
           Collecting metrics…
         </div>
       ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={({ active }) => setDraggingCardId(String(active.id))}
+          onDragCancel={() => setDraggingCardId(null)}
+          onDragEnd={(event) => {
+            handleDragEnd(event);
+            setDraggingCardId(null);
+          }}
+        >
           <SortableContext items={visibleCardOrder} strategy={strategy}>
-            <div style={containerStyle}>
+            <div
+              data-testid="dashboard-card-list"
+              data-card-order={visibleCardOrder.join('|')}
+              data-dragging={draggingCardId !== null ? 'true' : 'false'}
+              data-active-card-id={draggingCardId ?? ''}
+              style={containerStyle}
+            >
               {visibleCardOrder.map(id => (
                 <ErrorBoundary key={id + '_boundary'}>
                   {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}

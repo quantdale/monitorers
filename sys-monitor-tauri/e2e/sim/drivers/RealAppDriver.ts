@@ -22,13 +22,23 @@
  *    settings persistence round-trips across a true relaunch.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
 import { chromium, type Browser, type Page } from '@playwright/test';
 import type { SimDriver, DriverLaunchResult } from '../types';
 import type { SimFault, SimScenario } from '../../../src/sim/mockBackend';
+import { ClassifiedSimulationError } from '../errors';
 
 export const APP_IDENTIFIER = 'com.quantdale.systemmonitor';
 
@@ -85,7 +95,126 @@ async function waitForCdp(url: string, timeoutMs: number): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms` + (lastErr ? ` (${String(lastErr)})` : ''));
+  throw new ClassifiedSimulationError(
+    `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms` + (lastErr ? ` (${String(lastErr)})` : ''),
+    'harness-defect',
+    'cdp',
+  );
+}
+
+export async function waitForCdpOrProcess(proc: ChildProcess, url: string, timeoutMs: number): Promise<void> {
+  let ready = false;
+  let settled = false;
+  let rejectExit: ((error: Error) => void) | null = null;
+  const processFailure = new Promise<never>((_, reject) => {
+    rejectExit = reject;
+  });
+  const onError = (error: Error): void => {
+    if (!settled) {
+      rejectExit?.(
+        new ClassifiedSimulationError(
+          `RealAppDriver: failed to spawn ${proc.spawnfile}: ${error.message}`,
+          'harness-defect',
+          'spawn',
+        ),
+      );
+    }
+  };
+  const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+    if (!settled && !ready) {
+      rejectExit?.(
+        new ClassifiedSimulationError(
+          `RealAppDriver: app exited before CDP was ready (code=${String(code)}, signal=${String(signal)})`,
+          'harness-defect',
+          'cdp',
+        ),
+      );
+    }
+  };
+  if (proc.exitCode !== null) {
+    throw new ClassifiedSimulationError(
+      `RealAppDriver: app exited before CDP was ready (code=${String(proc.exitCode)})`,
+      'harness-defect',
+      'cdp',
+    );
+  }
+  proc.once('error', onError);
+  proc.once('exit', onExit);
+  try {
+    await Promise.race([
+      waitForCdp(url, timeoutMs).then(() => {
+        ready = true;
+      }),
+      processFailure,
+    ]);
+  } finally {
+    settled = true;
+    proc.off('error', onError);
+    proc.off('exit', onExit);
+  }
+}
+
+export interface FileState {
+  exists: boolean;
+  bytes: Buffer | null;
+}
+
+export function readFileState(path: string): FileState {
+  return existsSync(path) ? { exists: true, bytes: readFileSync(path) } : { exists: false, bytes: null };
+}
+
+export function sameFileState(before: FileState, after: FileState): boolean {
+  if (before.exists !== after.exists) return false;
+  if (!before.exists) return true;
+  return before.bytes?.equals(after.bytes ?? Buffer.alloc(0)) ?? false;
+}
+
+function safeRunId(runId: string): string {
+  return runId.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+export function createOwnedWorkDir(root: string, runId: string): string {
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(join(root, `sysmon-sim-${safeRunId(runId)}-`));
+}
+
+/** Wait for the app target, then return as soon as a known fallback succeeds. */
+export async function navigateToAppOrigin(page: Page): Promise<void> {
+  const appUrl = /(127\.0\.0\.1:5180|tauri)/;
+  try {
+    await page.waitForURL(appUrl, { timeout: 15_000 });
+    return;
+  } catch {
+    const tried: string[] = [];
+    for (const candidate of ['http://127.0.0.1:5180/', 'tauri://localhost/']) {
+      tried.push(candidate);
+      try {
+        await page.goto(candidate, { waitUntil: 'domcontentloaded', timeout: 10_000 });
+        return;
+      } catch {
+        // Try the next known origin.
+      }
+    }
+    throw new ClassifiedSimulationError(
+      `RealAppDriver: page did not reach the app origin (tried ${tried.join(', ')})`,
+      'harness-defect',
+      'cdp',
+    );
+  }
+}
+
+async function validateAppPage(page: Page): Promise<void> {
+  await page.waitForSelector('#root', { state: 'attached', timeout: 30_000 });
+  const hasTauriBridge = await page.evaluate(
+    () => typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined'
+  );
+  if (!hasTauriBridge) {
+    throw new ClassifiedSimulationError(
+      'RealAppDriver: app page has no Tauri IPC bridge',
+      'harness-defect',
+      'cdp',
+    );
+  }
 }
 
 export class RealAppDriver implements SimDriver {
@@ -102,7 +231,8 @@ export class RealAppDriver implements SimDriver {
   private port: number | null = null;
   private appStderrPath: string | null = null;
   private realSettingsPath: string | null = null;
-  private realSettingsBefore: Buffer | null = null;
+  private realSettingsBefore: FileState | null = null;
+  private ownsWorkDir = false;
 
   constructor(options: RealDriverOptions = {}) {
     this.options = options;
@@ -127,17 +257,20 @@ export class RealAppDriver implements SimDriver {
     const root = this.options.workRoot ?? tmpdir();
     // Reuse an existing work dir on restart so settings.json persists across
     // the relaunch; otherwise create a fresh per-run dir.
-    this.workDir = this.workDir ?? join(root, `sysmon-sim-${runId}`);
+    if (!this.workDir) {
+      this.workDir = createOwnedWorkDir(root, runId);
+      this.ownsWorkDir = true;
+    }
     mkdirSync(join(this.workDir, 'appdata'), { recursive: true });
     mkdirSync(join(this.workDir, 'wv2'), { recursive: true });
     this.port = await freePort();
     this.appStderrPath = join(outDir, 'app-stderr.log');
 
-    const realAppData = process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming');
-    this.realSettingsPath = join(realAppData, APP_IDENTIFIER, 'settings.json');
-    this.realSettingsBefore = existsSync(this.realSettingsPath)
-      ? readFileSync(this.realSettingsPath)
-      : null;
+    if (!this.realSettingsPath) {
+      const realAppData = process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming');
+      this.realSettingsPath = join(realAppData, APP_IDENTIFIER, 'settings.json');
+      this.realSettingsBefore = readFileState(this.realSettingsPath);
+    }
 
     this.env = {
       ...process.env,
@@ -155,20 +288,36 @@ export class RealAppDriver implements SimDriver {
   async launch(runId: string, _scenario: SimScenario, outDir?: string): Promise<DriverLaunchResult> {
     this.runId = runId;
     await this.initRun(runId, outDir ?? process.cwd());
-    const stderrFd = this.appStderrPath ? (await import('node:fs')).openSync(this.appStderrPath, 'w') : undefined;
-    this.proc = spawn(this.appExe, [], { env: this.env, stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'] });
-    // Keep the fd from being GC'd while the child holds it.
-    this.proc.on('error', (err) => {
-      throw new Error(`RealAppDriver: failed to spawn ${this.appExe}: ${err.message}`);
-    });
+    const stderrFd = this.appStderrPath ? openSync(this.appStderrPath, 'w') : undefined;
+    try {
+      this.proc = spawn(this.appExe, [], { env: this.env, stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'] });
+    } catch (error) {
+      if (stderrFd !== undefined) closeSync(stderrFd);
+      throw new ClassifiedSimulationError(
+        `RealAppDriver: failed to spawn ${this.appExe}: ${String(error)}`,
+        'harness-defect',
+        'spawn',
+      );
+    }
+    if (stderrFd !== undefined) closeSync(stderrFd);
 
     const cdpUrl = `http://127.0.0.1:${this.port}/json/version`;
-    await waitForCdp(cdpUrl, this.options.extraEnv?.SIM_CDP_TIMEOUT ? Number(this.options.extraEnv.SIM_CDP_TIMEOUT) : 60_000);
+    await waitForCdpOrProcess(
+      this.proc,
+      cdpUrl,
+      this.options.extraEnv?.SIM_CDP_TIMEOUT ? Number(this.options.extraEnv.SIM_CDP_TIMEOUT) : 60_000
+    );
 
     this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${this.port}`);
     const context = this.browser.contexts()[0];
     const page = context?.pages()[0] ?? (await context?.newPage());
-    if (!page) throw new Error('RealAppDriver: no page target found after CDP attach');
+    if (!page) {
+      throw new ClassifiedSimulationError(
+        'RealAppDriver: no page target found after CDP attach',
+        'harness-defect',
+        'cdp',
+      );
+    }
     this.page = page;
 
     // The WebView2 target can still be `about:blank` at attach time (the app
@@ -176,25 +325,9 @@ export class RealAppDriver implements SimDriver {
     // it never arrives (stale/blank target), navigate it ourselves — Tauri v2
     // re-injects its IPC bridge into every document of the app webview, so a
     // driver-initiated navigation stays a fully functional app page.
-    const appUrl = /(127\.0\.0\.1:5180|tauri)/;
-    try {
-      await page.waitForURL(appUrl, { timeout: 15_000 });
-    } catch {
-      const tried: string[] = [];
-      for (const candidate of ['http://127.0.0.1:5180/', 'tauri://localhost/']) {
-        tried.push(candidate);
-        try {
-          await page.goto(candidate, { waitUntil: 'domcontentloaded', timeout: 10_000 });
-          break;
-        } catch {
-          // try next
-        }
-      }
-      throw new Error(
-        `RealAppDriver: page did not reach the app origin (tried ${tried.join(', ')})`
-      );
-    }
+    await navigateToAppOrigin(page);
     await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
+    await validateAppPage(page);
     return { page, appStderrPath: this.appStderrPath };
   }
 
@@ -219,27 +352,57 @@ export class RealAppDriver implements SimDriver {
   }
 
   private async closeProcess(): Promise<void> {
+    let closeError: unknown = null;
     if (this.browser) {
-      await this.browser.close().catch(() => undefined);
+      try {
+        await this.browser.close();
+      } catch (error) {
+        closeError = error;
+      }
       this.browser = null;
     }
     this.page = null;
-    if (this.proc && !this.proc.killed) {
-      this.proc.kill();
-      await new Promise((r) => setTimeout(r, 800));
-      if (this.proc.exitCode === null) {
-        this.proc.kill('SIGKILL');
+    const proc = this.proc;
+    if (proc && !proc.killed) {
+      await new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(resolve, 2_000);
+        proc.once('exit', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        proc.kill();
+      });
+      if (proc.exitCode === null) {
+        proc.kill('SIGKILL');
       }
     }
     this.proc = null;
+    if (closeError) throw new Error(`RealAppDriver: browser close failed: ${String(closeError)}`);
   }
 
   async close(): Promise<void> {
-    await this.closeProcess();
-    if (this.workDir && !this.options.keepWorkDir) {
-      rmSync(this.workDir, { recursive: true, force: true });
-      this.workDir = null;
+    let closeError: unknown = null;
+    try {
+      await this.closeProcess();
+    } catch (error) {
+      closeError = error;
     }
+    try {
+      if (this.workDir && this.ownsWorkDir && !this.options.keepWorkDir) {
+        rmSync(this.workDir, { recursive: true, force: true });
+        this.workDir = null;
+        this.ownsWorkDir = false;
+      }
+    } catch (error) {
+      closeError = closeError
+        ? new Error(`${String(closeError)}; work directory cleanup failed: ${String(error)}`)
+        : error;
+    }
+    if (closeError) throw closeError;
   }
 
   /**
@@ -248,8 +411,8 @@ export class RealAppDriver implements SimDriver {
    */
   async selfTest(): Promise<void> {
     if (!this.realSettingsPath) return;
-    const after = existsSync(this.realSettingsPath) ? readFileSync(this.realSettingsPath) : null;
-    if (after !== null && this.realSettingsBefore !== null && !after.equals(this.realSettingsBefore)) {
+    const after = readFileState(this.realSettingsPath);
+    if (!this.realSettingsBefore || !sameFileState(this.realSettingsBefore, after)) {
       throw new Error(
         `RealAppDriver isolation self-test FAILED: developer's real settings.json changed: ${this.realSettingsPath}`
       );

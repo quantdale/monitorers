@@ -1,0 +1,2 @@
+PASS
+total_records=233 observation_ms=60332 mean_interval_ms=260.1 event_interval_ms={p50:250 p95:265 max:1496} full_interval_ms={p50:1000 p95:1024 max:2236} on_tick_count=59 (expected 59 ± 1) cpu_len=59 ts_len=59 gpu_total_len=177 timestamp_span_ms=60332 elapsed_whole_secs=60

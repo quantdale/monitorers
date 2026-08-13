@@ -21,13 +21,14 @@ All commands run from `sys-monitor-tauri/src-tauri/`.
    ```
    cargo build --bin cadence_probe
    ```
-2. **Run the probe** (default 90s; `--secs` can be lowered to 30 for a smoke check)
+2. **Run the probe** (default 90s; real `--secs` runs must be at least 60s)
    ```
    cargo run --bin cadence_probe -- --secs 90 > cadence.jsonl 2> cadence.err
    ```
    The probe streams one JSONL record per emitted snapshot to stdout and
-   mirrors production's MTA/COM threading; WMI failure degrades to `wmi_con =
-   None` (tolerated) rather than aborting.
+   mirrors production's MTA/COM threading. WMI enrichment retries in the
+   background without delaying core metrics; a short `--ticks N` run is
+   available only as an explicit diagnostic mode and is not a cadence PASS.
 3. **Run the checker**
    ```
    cargo run --bin cadence_probe -- --check cadence.jsonl
@@ -37,22 +38,28 @@ All commands run from `sys-monitor-tauri/src-tauri/`.
    cargo run --bin cadence_probe -- --secs 90 --check -
    ```
 4. **Read the verdict.** The checker prints `PASS` or `FAIL` plus a metrics
-   table (total records, mean interval, on_tick count, final cpu_len, elapsed
-   whole seconds) and exits nonzero on any failure.
+   table containing event/full-tick p50/p95/max intervals, observation length,
+   on_tick count, aligned history lengths, timestamp coverage, and elapsed
+   whole seconds. It exits nonzero on any failure.
 5. **On PASS, attach the report as evidence** for the absorbed manual task
    (`fix-history-emission-rate` 8.7 / `add-realistic-usage-test-suite` 5.5),
    e.g. paste the checker's metrics table into the task.
 
 ## Invariants
 
-- (A) Mean inter-emit interval is sane (liveness — multiple refreshes/sec).
+- (A) Event p50 is 200–350ms, p95 is at most 500ms, no event is below 150ms,
+  and no event exceeds 1500ms; full-tick p50 is 800–1200ms, p95 is at most
+  1800ms, and max is at most 2500ms.
 - (B) `on_tick:true` count == `floor(total/4)` ± 1 (the 4:1 ratio).
 - (C) History grows +1 per `on_tick:true`, +0 per `on_tick:false` (guards the
   COR-001 ungated-4Hz-history bug class).
-- (D) Final history length consistent with the full-tick count (no drift).
+- (D) CPU and timestamp histories remain aligned; GPU histories advance by the
+  active GPU count only on full ticks.
+- (E) The run observes at least 60,000ms and final history/timestamp span tracks
+  real elapsed time. This rejects a slow loop with a superficially correct 4:1
+  ratio.
 
-The cadence is a fixed ratio, so a bounded 60–120s run establishes the
-invariants for any longer window; a full-hour run is not required.
+A 60–90s run establishes the SLOs without requiring a full-hour run.
 
 ## Optional Layer-2 corroboration (full app)
 

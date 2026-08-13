@@ -1,56 +1,72 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import type { MetricsSnapshot, HistoryPayload, DiskHistory, GpuHistory } from '../types/metrics';
+import type {
+  DiskHistory,
+  GpuHistory,
+  HistoryPayload,
+  MetricValue,
+  MetricsSnapshot,
+} from '../types/metrics';
 import { isTauri } from '../utils';
 import { getSimBackend } from '../sim/mockBackend';
 
-// Keep in sync with `HISTORY_CAPACITY` in src-tauri/src/state.rs (no shared-constant
-// mechanism crosses the IPC boundary between Rust and TypeScript).
-const MAX_HISTORY = 3600;
+// Keep in sync with `HISTORY_CAPACITY` in src-tauri/src/state.rs.
+export const MAX_HISTORY = 3600;
 
 /**
- * How long (ms) a disk/GPU card is retained on the frontend after its last
- * appearance in a live snapshot. Mirrors the backend's PRUNE_MISS_THRESHOLD
- * (4 consecutive missing full ticks ≈ 4s); slightly longer absorbs clock skew.
+ * How long a dynamic card is retained after it disappears from a live
+ * snapshot. The backend uses the same four-full-tick grace period; this small
+ * wall-clock cushion prevents a late browser event from dropping a card.
  */
 const PRUNE_GRACE_MS = 5000;
 
-export const EXPECTED_SCHEMA_VERSION = 3;
+export const EXPECTED_SCHEMA_VERSION = 4;
 
-export function assertSchemaVersion(actual: number, payloadName: string): void {
-  if (actual !== EXPECTED_SCHEMA_VERSION) {
-    console.error(
-      `[IPC] ${payloadName} schema version mismatch: ` +
-      `expected ${EXPECTED_SCHEMA_VERSION}, got ${actual}. ` +
-      `Rebuild both frontend and backend.`
+export const SCHEMA_MISMATCH_MESSAGE =
+  'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
+
+export class SchemaMismatchError extends Error {
+  readonly code = 'IPC_SCHEMA_MISMATCH';
+  readonly expected: number;
+  readonly actual: unknown;
+  readonly payloadName: string;
+
+  constructor(actual: unknown, payloadName: string) {
+    super(
+      `${SCHEMA_MISMATCH_MESSAGE} Expected ${payloadName} schema ${EXPECTED_SCHEMA_VERSION}, received ${String(actual)}.`
     );
+    this.name = 'SchemaMismatchError';
+    this.expected = EXPECTED_SCHEMA_VERSION;
+    this.actual = actual;
+    this.payloadName = payloadName;
   }
 }
 
-export function appendToHistory(arr: number[], value: number, maxLen: number): number[] {
-  if (arr.length < maxLen) {
-    return [...arr, value];
+/** Validate and reject incompatible IPC payloads before any state is touched. */
+export function assertSchemaVersion(actual: unknown, payloadName: string): void {
+  if (actual !== EXPECTED_SCHEMA_VERSION) {
+    const error = new SchemaMismatchError(actual, payloadName);
+    console.error(`[IPC] ${error.message}`);
+    throw error;
   }
-  const next = arr.slice(-(maxLen - 1));
-  next.push(value);
-  return next;
 }
 
-/** Pad a values array with NaN up to `timestampsLength - 1` so the next
- *  appended point lands on the same index as the newest global timestamp.
- *  New/mid-session cards then render at their true x-position instead of the
- *  left edge of the window. NOTE: computeChartPoints (chartPoints.ts) clamps
- *  NaN to 0, so this pre-discovery gap actually renders as a flat 0% line, not
- *  empty space — keep the two in sync if either changes. */
-function padToTimestamps(
-  values: number[],
-  timestampsLength: number,
-  maxLen: number
-): number[] {
-  const pad = Math.min(maxLen - 1, Math.max(0, timestampsLength - 1 - values.length));
-  if (pad === 0) return values;
-  return [...values, ...Array(pad).fill(NaN)];
+export function appendToHistory<T>(arr: T[], value: T, maxLen: number): T[] {
+  if (maxLen <= 0) return [];
+  if (arr.length < maxLen) return [...arr, value];
+  return [...arr.slice(-(maxLen - 1)), value];
+}
+
+function alignedValuesBeforeAppend(values: MetricValue[], timestampsLength: number): MetricValue[] {
+  const targetLength = Math.min(MAX_HISTORY, Math.max(0, timestampsLength - 1));
+  const tail = values.slice(-targetLength);
+  if (tail.length >= targetLength) return tail;
+  return [...Array<null>(targetLength - tail.length).fill(null), ...tail];
+}
+
+function normalizeMetricValue(value: MetricValue): MetricValue {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 export function mergeDiskHistory(
@@ -61,60 +77,61 @@ export function mergeDiskHistory(
   const now = Date.now();
   const updated: DiskHistory[] = [];
 
-  // Existing disks: append when present; keep (frozen) while a ghost within the
-  // grace window; drop once a ghost has been absent past PRUNE_GRACE_MS.
-  for (const d of prev) {
-    const update = snapshotDisks.find((x) => x.key === d.key);
+  for (const disk of prev) {
+    const update = snapshotDisks.find((candidate) => candidate.key === disk.key);
+    const aligned = alignedValuesBeforeAppend(disk.values, timestampsLength);
     if (update) {
       updated.push({
-        key: d.key,
-        values: appendToHistory(padToTimestamps(d.values, timestampsLength, MAX_HISTORY), update.active, MAX_HISTORY),
+        key: disk.key,
+        values: appendToHistory(aligned, normalizeMetricValue(update.active), MAX_HISTORY),
         read_mb_s: update.read_mb_s,
         write_mb_s: update.write_mb_s,
         avg_response_ms: update.avg_response_ms,
-        temp_c: update.temp_c ?? null,
+        temp_c: update.temp_c ?? disk.temp_c ?? null,
         last_seen_ts: now,
       });
-    } else if ((now - (d.last_seen_ts ?? now)) <= PRUNE_GRACE_MS) {
-      // Ghost within grace window: keep frozen (values unchanged).
-      updated.push(d);
+    } else if (now - (disk.last_seen_ts ?? now) <= PRUNE_GRACE_MS) {
+      // Keep the card identity during the grace period, but add a real gap so
+      // the missing sample cannot be mistaken for a frozen or zero reading.
+      updated.push({
+        ...disk,
+        values: appendToHistory(aligned, null, MAX_HISTORY),
+      });
     }
-    // Otherwise the ghost is pruned (card removed).
   }
 
-  // Newly discovered disks: NaN-pad to align with the global timestamps array,
-  // then append the first value.
-  for (const snap of snapshotDisks) {
-    if (!updated.find((d) => d.key === snap.key)) {
-      updated.push({
-        key: snap.key,
-        values: appendToHistory(Array(Math.max(0, timestampsLength - 1)).fill(NaN), snap.active, MAX_HISTORY),
-        read_mb_s: snap.read_mb_s,
-        write_mb_s: snap.write_mb_s,
-        avg_response_ms: snap.avg_response_ms,
-        temp_c: snap.temp_c ?? null,
-        last_seen_ts: now,
-      });
-    }
+  for (const snapshot of snapshotDisks) {
+    if (updated.some((disk) => disk.key === snapshot.key)) continue;
+    updated.push({
+      key: snapshot.key,
+      values: appendToHistory(
+        Array<null>(Math.max(0, timestampsLength - 1)).fill(null),
+        normalizeMetricValue(snapshot.active),
+        MAX_HISTORY
+      ),
+      read_mb_s: snapshot.read_mb_s,
+      write_mb_s: snapshot.write_mb_s,
+      avg_response_ms: snapshot.avg_response_ms,
+      temp_c: snapshot.temp_c ?? null,
+      last_seen_ts: now,
+    });
   }
 
   return updated;
 }
 
-/** History arrays only advance on history-committing (on_tick) events. */
+/** History arrays advance only on history-committing snapshots. */
 export function shouldCommitHistory(onTick: boolean): boolean {
   return onTick;
 }
 
-/** Merge fresh per-GPU util% into the latest-value map, updated on every event. */
+/** Merge live GPU scalars by stable key, never by display name. */
 export function mergeLatestGpu(
   prev: Record<string, number>,
-  gpus: { name: string; util: number }[]
+  gpus: Pick<MetricsSnapshot['gpus'][number], 'key' | 'util'>[]
 ): Record<string, number> {
   const next = { ...prev };
-  for (const g of gpus) {
-    next[g.name] = g.util;
-  }
+  for (const gpu of gpus) next[gpu.key] = gpu.util;
   return next;
 }
 
@@ -126,63 +143,82 @@ export function mergeGpuHistory(
   const now = Date.now();
   const updated: GpuHistory[] = [];
 
-  for (const g of prev) {
-    const update = snapshotGpus.find((x) => x.name === g.name);
+  for (const gpu of prev) {
+    const update = snapshotGpus.find((candidate) => candidate.key === gpu.key);
+    const aligned = alignedValuesBeforeAppend(gpu.values, timestampsLength);
     if (update) {
       updated.push({
-        name: g.name,
-        values: appendToHistory(padToTimestamps(g.values, timestampsLength, MAX_HISTORY), update.util, MAX_HISTORY),
-        temp_c: update.temp_c ?? g.temp_c ?? null,
+        key: gpu.key,
+        name: update.name,
+        vendor: update.vendor ?? gpu.vendor ?? 'unknown',
+        values: appendToHistory(aligned, normalizeMetricValue(update.util), MAX_HISTORY),
+        temp_c: update.temp_c ?? gpu.temp_c ?? null,
+        nvidia: update.nvidia ?? null,
         last_seen_ts: now,
       });
-    } else if ((now - (g.last_seen_ts ?? now)) <= PRUNE_GRACE_MS) {
-      updated.push(g);
+    } else if (now - (gpu.last_seen_ts ?? now) <= PRUNE_GRACE_MS) {
+      updated.push({
+        ...gpu,
+        values: appendToHistory(aligned, null, MAX_HISTORY),
+      });
     }
   }
 
-  for (const snap of snapshotGpus) {
-    if (!updated.find((g) => g.name === snap.name)) {
-      updated.push({
-        name: snap.name,
-        values: appendToHistory(Array(Math.max(0, timestampsLength - 1)).fill(NaN), snap.util, MAX_HISTORY),
-        temp_c: snap.temp_c ?? null,
-        last_seen_ts: now,
-      });
-    }
+  for (const snapshot of snapshotGpus) {
+    if (updated.some((gpu) => gpu.key === snapshot.key)) continue;
+    updated.push({
+      key: snapshot.key,
+      name: snapshot.name,
+      vendor: snapshot.vendor ?? 'unknown',
+      values: appendToHistory(
+        Array<null>(Math.max(0, timestampsLength - 1)).fill(null),
+        normalizeMetricValue(snapshot.util),
+        MAX_HISTORY
+      ),
+      temp_c: snapshot.temp_c ?? null,
+      nvidia: snapshot.nvidia ?? null,
+      last_seen_ts: now,
+    });
   }
 
   return updated;
 }
 
-/** Slice the rightmost `windowSeconds` points from a history array. */
-export function sliceWindow(arr: number[], windowSeconds: number): number[] {
-  if (arr.length <= windowSeconds) return arr;
-  return arr.slice(arr.length - windowSeconds);
+/** Return the global timestamp range for a real elapsed-time window. */
+export function timestampWindowRange(timestamps: number[], windowSeconds: number): [number, number] {
+  if (timestamps.length === 0 || !Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+    return [0, timestamps.length];
+  }
+  const newest = timestamps[timestamps.length - 1];
+  const cutoff = newest - windowSeconds * 1000;
+  const start = timestamps.findIndex((timestamp) => timestamp >= cutoff);
+  return [start < 0 ? Math.max(0, timestamps.length - 1) : start, timestamps.length];
 }
 
-interface NvidiaStats {
-  power_w: number | null;
-  mem_used_mb: number | null;
-  mem_total_mb: number | null;
-  fan_speed_pct: number | null;
-  clock_mhz: number | null;
-}
-
-interface GpuMeta {
-  name: string;
-  vendor: string;
+/**
+ * Slice a channel using the timestamps shared by the whole history payload.
+ * The optional tail alignment handles a channel whose backend history is
+ * shorter than the global ring without turning a 60-second request into 60
+ * arbitrary samples.
+ */
+export function sliceWindow<T>(arr: T[], timestamps: number[], windowSeconds: number): T[] {
+  if (arr.length === 0) return [];
+  const [globalStart, globalEnd] = timestampWindowRange(timestamps, windowSeconds);
+  if (timestamps.length === 0) return arr;
+  const offset = timestamps.length - arr.length;
+  const localStart = Math.max(0, globalStart - offset);
+  const localEnd = Math.min(arr.length, globalEnd - offset);
+  return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
 }
 
 export interface SlicedGpuHistory extends GpuHistory {
-  vendor: string;
-  /** Latest util%, refreshed on every event (~250ms) independent of history commits. */
+  /** Latest util%, refreshed on every event (~250ms), independent of history. */
   latest: number;
 }
 
 export interface SlicedHistory {
   timestamps: number[];
   cpu: number[];
-  /** Latest CPU%, refreshed on every event (~250ms) independent of history commits. */
   latestCpu: number;
   cpu_name: string;
   cpu_temp_c: number | null;
@@ -193,259 +229,263 @@ export interface SlicedHistory {
   net_recv: number[];
   net_sent: number[];
   gpus: SlicedGpuHistory[];
-  nvidia_power_w: number | null;
-  nvidia_mem_used_mb: number | null;
-  nvidia_mem_total_mb: number | null;
-  nvidia_fan_speed_pct: number | null;
-  nvidia_clock_mhz: number | null;
   collectorError: string | null;
 }
 
-interface SnapshotSetters {
-  setMemGb: Dispatch<SetStateAction<{ used: number; total: number }>>;
-  setNvidiaStats: Dispatch<SetStateAction<NvidiaStats>>;
-  setGpuMeta: Dispatch<SetStateAction<GpuMeta[]>>;
-  setLatestCpu: Dispatch<SetStateAction<number>>;
-  setLatestGpu: Dispatch<SetStateAction<Record<string, number>>>;
-  setHistory: Dispatch<SetStateAction<HistoryPayload | null>>;
-}
+/** Append a validated full-tick snapshot to a history payload. */
+export function appendSnapshotToHistory(
+  previous: HistoryPayload | null,
+  snapshot: MetricsSnapshot,
+  timestamp = Date.now()
+): HistoryPayload | null {
+  if (!shouldCommitHistory(snapshot.on_tick)) return previous;
+  if (!previous) return seedHistoryFromSnapshot(snapshot, timestamp);
 
-/**
- * Applies one MetricsSnapshot to React state — shared by the real `metrics-update`
- * listener and the browser-mock `setInterval` path so the two can't drift apart.
- */
-function applySnapshot(snap: MetricsSnapshot, setters: SnapshotSetters): void {
-  setters.setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
-  setters.setNvidiaStats({
-    power_w: snap.nvidia_power_w ?? null,
-    mem_used_mb: snap.nvidia_mem_used_mb ?? null,
-    mem_total_mb: snap.nvidia_mem_total_mb ?? null,
-    fan_speed_pct: snap.nvidia_fan_speed_pct ?? null,
-    clock_mhz: snap.nvidia_clock_mhz ?? null,
-  });
-  setters.setGpuMeta((prev) => {
-    const map = new Map<string, string>(prev.map((m) => [m.name, m.vendor]));
-    for (const g of snap.gpus) {
-      map.set(g.name, g.vendor ?? 'unknown');
-    }
-    return Array.from(map.entries()).map(([name, vendor]) => ({ name, vendor }));
-  });
-  // Latest scalars refresh on every event, independent of on_tick.
-  setters.setLatestCpu(snap.cpu);
-  setters.setLatestGpu((prev) => mergeLatestGpu(prev, snap.gpus));
-  // History arrays only advance on history-committing (on_tick) events —
-  // otherwise every ~250ms event would grow them 4x faster than real time.
-  if (!shouldCommitHistory(snap.on_tick)) return;
-  setters.setHistory((prev) => {
-    // No history yet (initial `get_history` failed or was slow): seed a
-    // one-point history from this snapshot so charts start immediately
-    // instead of hanging on the load error (METRICS-001).
-    if (!prev) return seedHistoryFromSnapshot(snap);
-    const now = Date.now();
-    const newTsLen = Math.min(MAX_HISTORY, prev.timestamps.length + 1);
-    return {
-      schema_version: prev.schema_version,
-      timestamps: appendToHistory(prev.timestamps, now, MAX_HISTORY),
-      cpu: appendToHistory(prev.cpu, snap.cpu, MAX_HISTORY),
-      cpu_name: snap.cpu_name ?? prev.cpu_name,
-      cpu_temp_c: snap.cpu_temp_c ?? prev.cpu_temp_c ?? null,
-      mem: appendToHistory(prev.mem, snap.mem, MAX_HISTORY),
-      disks: mergeDiskHistory(prev.disks, snap.disks, newTsLen),
-      net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb, MAX_HISTORY),
-      net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb, MAX_HISTORY),
-      gpus: mergeGpuHistory(prev.gpus, snap.gpus, newTsLen),
-    };
-  });
-}
-
-/**
- * Seeds a one-point HistoryPayload from a live MetricsSnapshot. Used when the
- * initial `get_history` call failed (e.g. it raced backend startup): live
- * `metrics-update` events keep arriving, and once the first on_tick snapshot
- * lands the charts can start from that point instead of hanging forever on the
- * "Couldn't load metrics history" dead end (METRICS-001).
- */
-export function seedHistoryFromSnapshot(snap: MetricsSnapshot): HistoryPayload {
+  const timestamps = appendToHistory(previous.timestamps, timestamp, MAX_HISTORY);
+  const timestampLength = timestamps.length;
   return {
-    schema_version: snap.schema_version,
-    timestamps: [Date.now()],
-    cpu: [snap.cpu],
-    cpu_name: snap.cpu_name ?? 'CPU',
-    cpu_temp_c: snap.cpu_temp_c ?? null,
-    mem: [snap.mem],
-    disks: mergeDiskHistory([], snap.disks, 1),
-    net_recv: [snap.net_recv_kb],
-    net_sent: [snap.net_sent_kb],
-    gpus: mergeGpuHistory([], snap.gpus, 1),
+    schema_version: EXPECTED_SCHEMA_VERSION,
+    timestamps,
+    cpu: appendToHistory(previous.cpu, snapshot.cpu, MAX_HISTORY),
+    cpu_name: snapshot.cpu_name ?? previous.cpu_name,
+    cpu_temp_c: snapshot.cpu_temp_c ?? previous.cpu_temp_c ?? null,
+    mem: appendToHistory(previous.mem, snapshot.mem, MAX_HISTORY),
+    disks: mergeDiskHistory(previous.disks, snapshot.disks, timestampLength),
+    net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kb, MAX_HISTORY),
+    net_sent: appendToHistory(previous.net_sent, snapshot.net_sent_kb, MAX_HISTORY),
+    gpus: mergeGpuHistory(previous.gpus, snapshot.gpus, timestampLength),
   };
+}
+
+/**
+ * Replays live full-tick events that arrived while a history request was in
+ * flight. This is intentionally pure so stale-response and no-rollback
+ * behavior can be tested without React or a Tauri runtime.
+ */
+export function reconcileHistoryWithLiveEvents(
+  payload: HistoryPayload,
+  events: readonly { snapshot: MetricsSnapshot; timestamp: number }[]
+): HistoryPayload {
+  return events.reduce(
+    (current, event) => {
+      // get_history can race an emitted event. If the backend already
+      // included that event in its response, replaying it would duplicate a
+      // point. A monotonic timestamp is the shared identity available at this
+      // boundary; events at or before the response tail are already covered.
+      const newest = current.timestamps.at(-1);
+      if (newest !== undefined && event.timestamp <= newest) return current;
+      return appendSnapshotToHistory(current, event.snapshot, event.timestamp) ?? current;
+    },
+    payload
+  );
+}
+
+export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = Date.now()): HistoryPayload {
+  return {
+    schema_version: EXPECTED_SCHEMA_VERSION,
+    timestamps: [timestamp],
+    cpu: [snapshot.cpu],
+    cpu_name: snapshot.cpu_name ?? 'CPU',
+    cpu_temp_c: snapshot.cpu_temp_c ?? null,
+    mem: [snapshot.mem],
+    disks: mergeDiskHistory([], snapshot.disks, 1),
+    net_recv: [snapshot.net_recv_kb],
+    net_sent: [snapshot.net_sent_kb],
+    gpus: mergeGpuHistory([], snapshot.gpus, 1),
+  };
+}
+
+function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
+  const now = Date.now();
+  return {
+    ...payload,
+    timestamps: payload.timestamps ?? [],
+    cpu: payload.cpu ?? [],
+    mem: payload.mem ?? [],
+    net_recv: payload.net_recv ?? [],
+    net_sent: payload.net_sent ?? [],
+    disks: (payload.disks ?? []).map((disk) => ({
+      ...disk,
+      values: (disk.values ?? []).map(normalizeMetricValue),
+      temp_c: disk.temp_c ?? null,
+      last_seen_ts: now,
+    })),
+    gpus: (payload.gpus ?? []).map((gpu) => ({
+      ...gpu,
+      vendor: gpu.vendor ?? 'unknown',
+      values: (gpu.values ?? []).map(normalizeMetricValue),
+      temp_c: gpu.temp_c ?? null,
+      nvidia: gpu.nvidia ?? null,
+      last_seen_ts: now,
+    })),
+  };
+}
+
+interface LiveEvent {
+  sequence: number;
+  snapshot: MetricsSnapshot;
+  timestamp: number;
 }
 
 export interface UseMetricsResult {
   metrics: SlicedHistory | null;
-  /** Set when the initial `get_history` IPC call rejects; cleared by the first live `metrics-update` event, which also seeds the charts from the snapshot (METRICS-001). */
+  /** Includes actionable schema mismatch text when an incompatible payload is rejected. */
   historyLoadError: string | null;
 }
 
 export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [history, setHistory] = useState<HistoryPayload | null>(null);
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
-  // Track the latest mem GB values separately (not historised).
-  const [memGb, setMemGb] = useState<{ used: number; total: number }>({
-    used: 0,
-    total: 0,
-  });
-  const [nvidiaStats, setNvidiaStats] = useState<NvidiaStats>({
-    power_w: null,
-    mem_used_mb: null,
-    mem_total_mb: null,
-    fan_speed_pct: null,
-    clock_mhz: null,
-  });
-  const [gpuMeta, setGpuMeta] = useState<GpuMeta[]>([]);
+  const [memGb, setMemGb] = useState({ used: 0, total: 0 });
   const [collectorError, setCollectorError] = useState<string | null>(null);
-  // Latest CPU/GPU scalar values, updated on every event regardless of on_tick —
-  // mirrors the memGb/nvidiaStats latest-vs-history split, so card readouts keep
-  // their ~250ms refresh rate even though history[] only appends on_tick.
-  const [latestCpu, setLatestCpu] = useState<number>(0);
+  const [latestCpu, setLatestCpu] = useState(0);
   const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
+  const historyRef = useRef<HistoryPayload | null>(null);
+  const historyRequestError = useRef<string | null>(null);
+  const liveSchemaError = useRef<string | null>(null);
+  const requestGeneration = useRef(0);
+  const liveSequence = useRef(0);
+  const liveEvents = useRef<LiveEvent[]>([]);
 
-  // Load history on mount and when the time window changes.
   useEffect(() => {
+    const generation = ++requestGeneration.current;
+    const startSequence = liveSequence.current;
+    let cancelled = false;
+
+    const acceptHistory = (payload: HistoryPayload) => {
+      if (cancelled || generation !== requestGeneration.current) return;
+      try {
+        assertSchemaVersion(payload?.schema_version, 'HistoryPayload');
+        let next = normalizeHistoryPayload(payload);
+        const replay = liveEvents.current
+          .filter((event) => event.sequence > startSequence)
+          .map(({ snapshot, timestamp }) => ({ snapshot, timestamp }));
+        if (replay.length > 0) next = reconcileHistoryWithLiveEvents(next, replay);
+        historyRef.current = next;
+        setHistory(next);
+        historyRequestError.current = null;
+        liveSchemaError.current = null;
+        setHistoryLoadError(null);
+        // The accepted payload now includes every event recorded so far.
+        liveEvents.current = liveEvents.current.filter((event) => event.sequence > liveSequence.current);
+      } catch (error) {
+        historyRequestError.current = error instanceof SchemaMismatchError ? error.message : String(error);
+        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      }
+    };
+
+    const rejectHistory = (error: unknown) => {
+      if (cancelled || generation !== requestGeneration.current) return;
+      console.warn('[useMetrics] get_history failed:', error);
+      historyRequestError.current = error instanceof Error ? error.message : String(error);
+      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+    };
+
     if (isTauri()) {
       invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
-        .then((payload) => {
-          assertSchemaVersion(payload.schema_version, 'HistoryPayload');
-          const now = Date.now();
-          // A successful (re)load clears any prior refetch/initial error so a
-          // retry that eventually succeeds doesn't leave a stale banner up.
-          setHistoryLoadError(null);
-          setHistory({
-            ...payload,
-            timestamps: payload.timestamps ?? [],
-            // Backend payloads carry no last_seen_ts; seed it so ghost pruning
-            // has a baseline (cards are "present" at load time).
-            disks: (payload.disks ?? []).map((d) => ({ ...d, last_seen_ts: now })),
-            gpus: (payload.gpus ?? []).map((g) => ({ ...g, last_seen_ts: now })),
-          });
-        })
-        .catch((err) => {
-          console.warn('[useMetrics] get_history failed:', err);
-          setHistoryLoadError(err instanceof Error ? err.message : String(err));
-        });
-      return;
+        .then(acceptHistory)
+        .catch(rejectHistory);
+    } else {
+      getSimBackend().getHistory().then(acceptHistory).catch(rejectHistory);
+      setMemGb({ used: 8, total: 16 });
     }
-    // Browser mock mode: seed history from the scriptable sim backend. The
-    // promise may fault (simulated slow/failing load) — rejection surfaces the
-    // same historyLoadError inline-warning path as a real IPC failure, and the
-    // first live snapshot seeds the charts (METRICS-001).
-    getSimBackend()
-      .getHistory()
-      .then((payload) => {
-        setHistory(payload);
-        setHistoryLoadError(null);
-      })
-      .catch((err) => {
-        console.warn('[useMetrics] mock get_history failed:', err);
-        setHistoryLoadError(err instanceof Error ? err.message : String(err));
-      });
-    setMemGb({ used: 8, total: 16 });
+
+    return () => {
+      cancelled = true;
+    };
   }, [windowSeconds]);
 
-  // Listen for live metric updates and append to history.
   useEffect(() => {
-    if (isTauri()) {
-      const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
-        const snap = event.payload;
-        assertSchemaVersion(snap.schema_version, 'MetricsSnapshot');
-        // Any live event proves the collector pipeline is running, so a
-        // historyLoadError from a failed initial `get_history` is moot.
-        setHistoryLoadError(null);
-        applySnapshot(snap, {
-          setMemGb,
-          setNvidiaStats,
-          setGpuMeta,
-          setLatestCpu,
-          setLatestGpu,
-          setHistory,
-        });
-      });
-      const unlistenErrorPromise = listen<string>('collector-error', (event) => {
-        setCollectorError(event.payload);
-      });
-      return () => {
-        unlistenMetricsPromise.then((f) => f()).catch(() => {});
-        unlistenErrorPromise.then((f) => f()).catch(() => {});
-      };
-    }
-    // Browser mock mode runs the same 250 ms period and 4:1 on_tick ratio as
-    // the real backend's tick loop, so the history-gating logic below is
-    // exercised the same way in dev mode as it is against live Tauri events.
-    // The sim backend drives the loop (and any scripted faults) and forwards
-    // snapshots + collector errors to the same applySnapshot path.
-    const backend = getSimBackend();
-    const onSnapshot = (snap: MetricsSnapshot) => {
-      // Any live event proves the pipeline is running, so a historyLoadError
-      // from a simulated failed initial load is moot (mirrors the Tauri path).
-      setHistoryLoadError(null);
-      applySnapshot(snap, {
-        setMemGb,
-        setNvidiaStats,
-        setGpuMeta,
-        setLatestCpu,
-        setLatestGpu,
-        setHistory,
+    const handleSnapshot = (snap: MetricsSnapshot) => {
+      try {
+        assertSchemaVersion(snap?.schema_version, 'MetricsSnapshot');
+      } catch (error) {
+        // Fail closed: do not update any scalar or history state from this
+        // payload. The listener remains attached so a compatible rebuild can
+        // recover without restarting the hook.
+        liveSchemaError.current = error instanceof SchemaMismatchError ? error.message : String(error);
+        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+        return;
+      }
+
+      const timestamp = Date.now();
+      // A compatible event proves the live IPC stream recovered from a live
+      // schema fault. It does not, by itself, prove that a failed history
+      // request for the selected window recovered, so keep that error until a
+      // history response succeeds or a full tick seeds an empty history.
+      liveSchemaError.current = null;
+      if (snap.on_tick && historyRef.current === null) historyRequestError.current = null;
+      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      const sequence = ++liveSequence.current;
+      liveEvents.current = [
+        ...liveEvents.current.slice(-MAX_HISTORY),
+        { sequence, snapshot: snap, timestamp },
+      ];
+      setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
+      setLatestCpu(snap.cpu);
+      setLatestGpu((previous) => mergeLatestGpu(previous, snap.gpus));
+      setHistory((previous) => {
+        const base = historyRef.current ?? previous;
+        const next = appendSnapshotToHistory(base, snap, timestamp);
+        if (next === base) return previous;
+        historyRef.current = next;
+        return next;
       });
     };
-    const onCollectorError = (message: string) => setCollectorError(message);
-    backend.onSnapshot(onSnapshot);
-    backend.onCollectorError(onCollectorError);
+
+    const handleCollectorError = (message: string) => setCollectorError(message);
+
+    if (isTauri()) {
+      const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
+        handleSnapshot(event.payload);
+      });
+      const unlistenErrorPromise = listen<string>('collector-error', (event) => {
+        handleCollectorError(event.payload);
+      });
+      return () => {
+        unlistenMetricsPromise.then((unlisten) => unlisten()).catch(() => undefined);
+        unlistenErrorPromise.then((unlisten) => unlisten()).catch(() => undefined);
+      };
+    }
+
+    const backend = getSimBackend();
+    backend.onSnapshot(handleSnapshot);
+    backend.onCollectorError(handleCollectorError);
     backend.start();
     return () => {
       backend.stop();
-      backend.offSnapshot(onSnapshot);
-      backend.offCollectorError(onCollectorError);
+      backend.offSnapshot(handleSnapshot);
+      backend.offCollectorError(handleCollectorError);
     };
   }, []);
 
   if (!history) return { metrics: null, historyLoadError };
 
-  const w = Math.min(windowSeconds, MAX_HISTORY);
+  const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
+  const timestamps = sliceWindow(history.timestamps, history.timestamps, window);
 
   return {
     metrics: {
-      timestamps: sliceWindow(history.timestamps, w),
-      cpu: sliceWindow(history.cpu, w),
+      timestamps,
+      cpu: sliceWindow(history.cpu, history.timestamps, window),
       latestCpu,
       cpu_name: history.cpu_name,
       cpu_temp_c: history.cpu_temp_c ?? null,
-      mem: sliceWindow(history.mem, w),
+      mem: sliceWindow(history.mem, history.timestamps, window),
       mem_used_gb: memGb.used,
       mem_total_gb: memGb.total,
-      disks: history.disks.map((d) => ({
-        key: d.key,
-        values: sliceWindow(d.values, w),
-        read_mb_s: d.read_mb_s,
-        write_mb_s: d.write_mb_s,
-        avg_response_ms: d.avg_response_ms,
-        temp_c: d.temp_c ?? null,
+      disks: history.disks.map((disk) => ({
+        ...disk,
+        values: sliceWindow(disk.values, history.timestamps, window),
+        temp_c: disk.temp_c ?? null,
       })),
-      net_recv: sliceWindow(history.net_recv, w),
-      net_sent: sliceWindow(history.net_sent, w),
-      gpus: history.gpus.map((g) => {
-        const meta = gpuMeta.find((m) => m.name === g.name);
-        return {
-          name: g.name,
-          values: sliceWindow(g.values, w),
-          temp_c: g.temp_c ?? null,
-          vendor: meta?.vendor ?? 'unknown',
-          latest: latestGpu[g.name] ?? g.values.at(-1) ?? 0,
-        };
-      }),
-      nvidia_power_w: nvidiaStats.power_w,
-      nvidia_mem_used_mb: nvidiaStats.mem_used_mb,
-      nvidia_mem_total_mb: nvidiaStats.mem_total_mb,
-      nvidia_fan_speed_pct: nvidiaStats.fan_speed_pct,
-      nvidia_clock_mhz: nvidiaStats.clock_mhz,
+      net_recv: sliceWindow(history.net_recv, history.timestamps, window),
+      net_sent: sliceWindow(history.net_sent, history.timestamps, window),
+      gpus: history.gpus.map((gpu) => ({
+        ...gpu,
+        values: sliceWindow(gpu.values, history.timestamps, window),
+        latest: latestGpu[gpu.key] ?? [...gpu.values].reverse().find((value) => value != null) ?? 0,
+      })),
       collectorError,
     },
     historyLoadError,

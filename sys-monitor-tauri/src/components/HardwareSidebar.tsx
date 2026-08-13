@@ -22,9 +22,10 @@ import {
   Network,
 } from 'lucide-react';
 import type { SlicedHistory } from '../hooks/useMetrics';
-import type { HardwareProfile } from '../hooks/useHardwareProfile';
+import type { HardwareProfile, HardwareProfileState } from '../hooks/useHardwareProfile';
 import { useSettings } from '../hooks/useSettings';
 import { SortableSidebarCard } from './SortableSidebarCard';
+import { formatGigabytes } from '../cards/formatters';
 
 const SIDEBAR_WIDTH = 220;
 const cardStyle: React.CSSProperties = {
@@ -90,29 +91,37 @@ function diskKindDisplay(kind: string): string {
 export function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
   return [
     'sb_cpu',
-    ...profile.gpus.map((_, i) => `sb_gpu_${i}`),
+    ...profile.gpus.map((gpu) => `sb_gpu_${gpu.key}`),
     'sb_memory',
-    ...profile.disks.map((_, i) => `sb_disk_${i}`),
+    ...profile.disks.map((disk) => `sb_disk_${disk.key}`),
     'sb_network',
   ];
 }
 
 /**
  * Merge a saved sidebar card order with the current default ids.
- * Unlike the dashboard's content-keyed merge (see cardIdentity.ts), this
- * scheme is purely positional: `sb_gpu_${i}` refers to whichever GPU occupies
- * index i of `profile.gpus`, not a specific physical GPU. If the profile's
- * array order changes between sessions, the same id now points at different
- * hardware — a known characterization gap, not a requirement (see design.md
- * Known Gaps in openspec/changes/add-realistic-usage-test-suite).
+ * IDs are keyed by the backend's stable hardware identity. Legacy positional
+ * ids cannot be mapped safely after enumeration reordering, so they are
+ * discarded and the current stable ids are appended in deterministic profile
+ * order rather than attaching an old position to a different device.
  */
-export function mergeSidebarCardOrder(current: string[], defaultIds: string[]): string[] {
-  if (current.length === 0) return defaultIds;
-  const currentSet = new Set(current);
+export function migrateLegacySidebarCardOrder(current: string[], profile: HardwareProfile): string[] {
+  void profile;
+  return current.filter((id) => !/^sb_(?:gpu|disk)_\d+$/.test(id));
+}
+
+export function mergeSidebarCardOrder(
+  current: string[],
+  defaultIds: string[],
+  profile?: HardwareProfile
+): string[] {
+  const migrated = profile ? migrateLegacySidebarCardOrder(current, profile) : current;
+  if (migrated.length === 0) return defaultIds;
+  const currentSet = new Set(migrated);
   const hasNew = defaultIds.some((id) => !currentSet.has(id));
-  if (!hasNew) return current.filter((id) => defaultIds.includes(id));
+  if (!hasNew) return migrated.filter((id) => defaultIds.includes(id));
   const merged: string[] = [];
-  for (const id of current) {
+  for (const id of migrated) {
     if (defaultIds.includes(id)) merged.push(id);
   }
   for (const id of defaultIds) {
@@ -123,23 +132,32 @@ export function mergeSidebarCardOrder(current: string[], defaultIds: string[]): 
 
 interface Props {
   open: boolean;
-  profile: HardwareProfile | null;
+  profileState?: HardwareProfileState;
+  /** Kept for focused component tests and embedders that already have a profile. */
+  profile?: HardwareProfile | null;
   metrics: SlicedHistory | null;
 }
 
-export function HardwareSidebar({ open, profile, metrics }: Props) {
+export function HardwareSidebar({ open, profileState, profile: suppliedProfile, metrics }: Props) {
   const { settings, save } = useSettings();
+  const profile = suppliedProfile !== undefined ? suppliedProfile : profileState?.profile ?? null;
+  const loading = suppliedProfile === undefined ? profileState?.loading ?? false : profile === null;
+  const profileError = suppliedProfile === undefined ? profileState?.error ?? null : null;
 
   // Compute ordered list: merge saved order with new cards from profile
   const cardOrder = profile
-    ? mergeSidebarCardOrder(settings.sidebarCardOrder ?? [], defaultSidebarCardOrder(profile))
+    ? mergeSidebarCardOrder(settings.sidebarCardOrder ?? [], defaultSidebarCardOrder(profile), profile)
     : [];
 
   useEffect(() => {
     if (!profile) return;
     const defaultIds = defaultSidebarCardOrder(profile);
-    if (settings.sidebarCardOrder === null && defaultIds.length > 0) {
-      save({ sidebarCardOrder: defaultIds });
+    if (defaultIds.length > 0) {
+      const migrated = migrateLegacySidebarCardOrder(settings.sidebarCardOrder ?? [], profile);
+      const next = mergeSidebarCardOrder(migrated, defaultIds);
+      if (settings.sidebarCardOrder === null || next.join('|') !== settings.sidebarCardOrder.join('|')) {
+        save({ sidebarCardOrder: next });
+      }
     }
   }, [profile, settings.sidebarCardOrder, save]);
 
@@ -185,9 +203,10 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
       );
     }
     if (id.startsWith('sb_gpu_')) {
-      const idx = parseInt(id.replace('sb_gpu_', ''), 10);
-      const gpu = profile.gpus[idx];
+      const key = id.slice('sb_gpu_'.length);
+      const gpu = profile.gpus.find((entry) => entry.key === key);
       if (!gpu) return null;
+      const idx = profile.gpus.findIndex((entry) => entry.key === key);
       return (
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -224,8 +243,8 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
             <div style={rowStyle}>
               <span style={labelStyle}>Total RAM</span>
               <span style={valueStyle}>
-                {metrics != null && metrics.mem_total_gb != null && Number.isFinite(metrics.mem_total_gb)
-                  ? `${metrics.mem_total_gb.toFixed(1)} GB`
+                {metrics != null && formatGigabytes(metrics.mem_total_gb) !== '—'
+                  ? `${formatGigabytes(metrics.mem_total_gb)} GB`
                   : '—'}
               </span>
             </div>
@@ -234,8 +253,8 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
       );
     }
     if (id.startsWith('sb_disk_')) {
-      const idx = parseInt(id.replace('sb_disk_', ''), 10);
-      const disk = profile.disks[idx];
+      const key = id.slice('sb_disk_'.length);
+      const disk = profile.disks.find((entry) => entry.key === key);
       if (!disk) return null;
       return (
         <div style={cardStyle}>
@@ -279,6 +298,7 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
 
   return (
     <div
+      id="hardware-sidebar"
       style={{
         width: open ? SIDEBAR_WIDTH : 0,
         flexShrink: 0,
@@ -301,11 +321,21 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
           gap: 8,
         }}
       >
-        {profile === null ? (
-          <div style={{ color: '#888', fontSize: 12, padding: 8 }}>
+        {profileError && (
+          <div role="alert" style={{ color: '#ffd6d3', fontSize: 12, padding: 8 }}>
+            <div>Hardware detection failed — {profileError}</div>
+            {profileState && <button type="button" onClick={profileState.retry} style={{ marginTop: 8 }}>Retry</button>}
+          </div>
+        )}
+        {profile === null && loading ? (
+          <div role="status" aria-live="polite" style={{ color: '#888', fontSize: 12, padding: 8 }}>
             Detecting hardware…
           </div>
-        ) : (
+        ) : profile === null ? (
+          <div role="status" style={{ color: '#888', fontSize: 12, padding: 8 }}>
+            No hardware profile is available yet.
+          </div>
+        ) : profile !== null ? (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={cardOrder} strategy={verticalListSortingStrategy}>
               {cardOrder.map((id) => (
@@ -315,7 +345,7 @@ export function HardwareSidebar({ open, profile, metrics }: Props) {
               ))}
             </SortableContext>
           </DndContext>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -4,7 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm --prefix sys-monitor-tauri test",
+    "build": "npm --prefix sys-monitor-tauri run build",
+    "typecheck": "npm --prefix sys-monitor-tauri run typecheck",
+    "e2e": "npm --prefix sys-monitor-tauri run e2e",
+    "sim": "npm --prefix sys-monitor-tauri run sim",
+    "sim:typecheck": "npm --prefix sys-monitor-tauri run sim:typecheck",
+    "audit": "npm audit --audit-level=high && npm --prefix sys-monitor-tauri audit --audit-level=high",
+    "verify:version": "npm --prefix sys-monitor-tauri run verify:version",
+    "verify:frontend": "npm --prefix sys-monitor-tauri run verify:frontend",
+    "verify:rust": "npm --prefix sys-monitor-tauri run verify:rust",
+    "verify:e2e": "npm --prefix sys-monitor-tauri run verify:e2e",
+    "verify:sim": "npm --prefix sys-monitor-tauri run verify:sim",
+    "verify:tauri": "npm --prefix sys-monitor-tauri run verify:tauri",
+    "verify": "npm --prefix sys-monitor-tauri run verify",
+    "verify:fast": "npm --prefix sys-monitor-tauri run verify:fast",
+    "verify:full": "npm --prefix sys-monitor-tauri run verify:full",
     "prepare": "husky"
   },
   "repository": {
@@ -20,7 +35,6 @@
   },
   "homepage": "https://github.com/quantdale/monitorers#readme",
   "devDependencies": {
-    "husky": "^9.1.7",
-    "lint-staged": "^16.3.2"
+    "husky": "^9.1.7"
   }
 }

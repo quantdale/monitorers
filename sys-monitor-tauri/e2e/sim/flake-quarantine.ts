@@ -4,8 +4,9 @@
  * A journey that fails under a FIXED seed is a defect (blocking, must be
  * fixed). A journey that fails only across DISTINCT seeds beyond the budget
  * is quarantined: removed from the blocking set, tracked here until fixed.
- * The CI simulation job is non-blocking at introduction, so quarantine only
- * affects local/CI exit status when the sim lane is promoted to blocking.
+ * The CI simulation job is blocking for the mock lane. Quarantine only
+ * affects a journey explicitly listed here; an empty quarantine list keeps
+ * the full registered matrix required.
  *
  * Entries are keyed by journey id. The budget is the number of distinct-seed
  * failures tolerated before a journey is quarantined.

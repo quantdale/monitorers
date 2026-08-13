@@ -1,14 +1,21 @@
 import type { ReactNode } from 'react';
 import type { ViewMode } from '../utils';
-import { gpuId, historyMinMax } from '../utils';
+import { historyMinMax } from '../utils';
 import type { SlicedHistory } from '../hooks/useMetrics';
 import { SortableCard } from '../components/SortableCard';
 import {
   badgeStyle,
   formatPercent,
+  formatGigabytes,
+  formatCompactTempC,
+  formatFanPercent,
+  formatMegabytes,
+  formatMegabytesPerSecond,
+  formatMegahertz,
   formatResponseMs,
   formatTempC,
   formatThroughput,
+  formatWatts,
   gpuVendorBadgeStyle,
   gpuVendorLabel,
 } from './formatters';
@@ -53,7 +60,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         color="#4ed87a"
         badge={
           <span style={badgeStyle}>
-            {`${metrics.mem_used_gb.toFixed(1)} / ${metrics.mem_total_gb.toFixed(1)} GB`}
+            {`${formatGigabytes(metrics.mem_used_gb)} / ${formatGigabytes(metrics.mem_total_gb)} GB`}
           </span>
         }
         viewMode={viewMode}
@@ -85,10 +92,9 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         badge={
           <>
             <span style={badgeStyle}>
-              R: {disk.read_mb_s.toFixed(1)} MB/s · W: {disk.write_mb_s.toFixed(1)} MB/s
+              R: {formatMegabytesPerSecond(disk.read_mb_s)} MB/s · W: {formatMegabytesPerSecond(disk.write_mb_s)} MB/s
             </span>
             <span style={badgeStyle}>{formatResponseMs(disk.avg_response_ms)}</span>
-            <span style={badgeStyle}>{formatTempC(disk.temp_c)}</span>
           </>
         }
         viewMode={viewMode}
@@ -145,21 +151,21 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
   }
 
   if (id.startsWith('gpu_')) {
-    const gpuIdx = metrics.gpus.findIndex(g => gpuId(g.name) === id);
+    const gpuIdx = metrics.gpus.findIndex(g => `gpu_${g.key}` === id);
     if (gpuIdx === -1) return null;
     const gpu = metrics.gpus[gpuIdx];
     const gpuTitle = gpu.name || (gpu.vendor === 'unknown' ? 'Unknown GPU' : 'GPU');
-    const showNvmlForThisCard = hasNvidiaData && gpu.vendor === 'nvidia';
-    const powerText =
-      metrics.nvidia_power_w != null ? `${metrics.nvidia_power_w.toFixed(1)} W` : '—';
+    const showNvmlForThisCard = hasNvidiaData && gpu.vendor === 'nvidia' && gpu.nvidia != null;
+    const telemetry = gpu.nvidia;
+    const powerText = formatWatts(telemetry?.power_w);
     const vramText =
-      metrics.nvidia_mem_used_mb != null && metrics.nvidia_mem_total_mb != null
-        ? `${metrics.nvidia_mem_used_mb} / ${metrics.nvidia_mem_total_mb} MB`
+      telemetry?.mem_used_mb != null && telemetry.mem_total_mb != null &&
+      Number.isFinite(telemetry.mem_used_mb) && Number.isFinite(telemetry.mem_total_mb) &&
+      telemetry.mem_used_mb >= 0 && telemetry.mem_total_mb >= 0
+        ? `${formatMegabytes(telemetry.mem_used_mb)} / ${formatMegabytes(telemetry.mem_total_mb)} MB`
         : '—';
-    const fanText =
-      metrics.nvidia_fan_speed_pct != null ? `${metrics.nvidia_fan_speed_pct}%` : '—';
-    const clockText =
-      metrics.nvidia_clock_mhz != null ? `${metrics.nvidia_clock_mhz} MHz` : '—';
+    const fanText = formatFanPercent(telemetry?.fan_speed_pct);
+    const clockText = formatMegahertz(telemetry?.clock_mhz);
     return (
       <SortableCard
         key={id}
@@ -175,7 +181,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
               {gpuVendorLabel(gpu.vendor)}
             </span>
             <span style={badgeStyle}>
-              {gpu.temp_c != null ? `${gpu.temp_c.toFixed(1)}°C` : '—'}
+              {formatCompactTempC(gpu.temp_c)}
             </span>
             {showNvmlForThisCard && (
               <>

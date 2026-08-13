@@ -8,9 +8,10 @@
  * groups the failure slice (log tail, screenshot, trace/video paths, console
  * capture, app stderr) under the run directory.
  */
-import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { JsonLog, RunResult } from '../types';
+import { ClassifiedSimulationError } from '../errors';
 
 export interface ConsoleCapture {
   messages: { type: string; text: string }[];
@@ -33,6 +34,10 @@ function xmlEscape(s: string): string {
     .replace(/'/g, '&apos;');
 }
 
+function cdata(s: string): string {
+  return `<![CDATA[${s.replaceAll(']]>', ']]]]><![CDATA[>')}]]>`;
+}
+
 export function writeJunit(runDir: string, results: RunResult[]): string {
   const path = join(runDir, 'junit.xml');
   mkdirSync(runDir, { recursive: true });
@@ -40,10 +45,10 @@ export function writeJunit(runDir: string, results: RunResult[]): string {
     .map((r) => {
       const testName = `${r.journeyId} [${r.personaId}] (${r.driverKind})`;
       const time = (r.durationMs / 1000).toFixed(3);
-      const failure = r.passed ? '' : `\n    <failure message="${xmlEscape(r.failureMessage ?? 'failed')}"><![CDATA[${xmlEscape(
+      const failure = r.passed ? '' : `\n    <failure message="${xmlEscape(r.failureMessage ?? 'failed')}">${cdata(
         `journey=${r.journeyId}\npersona=${r.personaId}\ndriver=${r.driverKind}\nseed=${r.seed}\nfailingStep=${r.failingStep ?? 'unknown'}
 ${r.failureMessage ?? ''}`
-      )}]]></failure>`;
+      )}</failure>`;
       return `  <testsuite name="${xmlEscape(testName)}" tests="1" failures="${r.passed ? 0 : 1}" time="${time}">
     <testcase name="${xmlEscape(testName)}" time="${time}">${failure}
     </testcase>
@@ -65,14 +70,14 @@ export function writeHtml(runDir: string, results: RunResult[]): string {
     .map((r) => {
       const color = r.passed ? '#2ecc71' : '#e74c3c';
       return `<tr>
-        <td>${r.journeyId}</td>
-        <td>${r.personaId}</td>
-        <td>${r.driverKind}</td>
+        <td>${xmlEscape(r.journeyId)}</td>
+        <td>${xmlEscape(r.personaId)}</td>
+        <td>${xmlEscape(r.driverKind)}</td>
         <td style="color:${color};font-weight:600">${r.passed ? 'PASS' : 'FAIL'}</td>
-        <td>${r.failureClass}</td>
+        <td>${xmlEscape(r.failureClass)}</td>
         <td>${(r.durationMs / 1000).toFixed(1)}s</td>
         <td>${r.assertPassed}/${r.assertCount}</td>
-        <td>seed=${r.seed}</td>
+        <td>seed=${xmlEscape(String(r.seed))}</td>
         <td style="max-width:360px">${xmlEscape(r.failureMessage ?? '')}</td>
       </tr>`;
     })
@@ -91,8 +96,11 @@ export function writeHtml(runDir: string, results: RunResult[]): string {
 export function classifyFailure(
   err: unknown,
   isUndrivableHint: boolean
-): { failureClass: RunResult['failureClass']; message: string } {
+): { failureClass: Exclude<RunResult['failureClass'], 'none'>; message: string } {
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof ClassifiedSimulationError) {
+    return { failureClass: err.failureClass, message: `[${err.code}] ${err.message}` };
+  }
   if (isUndrivableHint || /\b(not supported|undrivable|no .*driver|does not support)\b/i.test(message)) {
     return { failureClass: 'undrivable', message };
   }
@@ -131,7 +139,7 @@ export function writeTriageBundle(input: TriageBundleInput): string {
     const dest = join(triageDir, basename(src));
     try {
       readFileSync(src); // existence check
-      renameSync(src, dest);
+      copyFileSync(src, dest);
       copied.push(dest);
       return dest;
     } catch {

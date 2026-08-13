@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { Store: FakeStore };
 });
 
-import { useSettings } from './useSettings';
+import { resolveStorePath, useSettings } from './useSettings';
 
 interface RenderResult {
   result: () => ReturnType<typeof useSettings>;
@@ -72,7 +72,7 @@ async function flush() {
 
 describe('useSettings load failure (4.1 / ERR-001)', () => {
   beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<null> } }).__TAURI_INTERNALS__ = { invoke: async () => null };
     backing.clear();
     failLoad = false;
   });
@@ -92,11 +92,32 @@ describe('useSettings load failure (4.1 / ERR-001)', () => {
 
     unmount();
   });
+
+  it('fails closed when the simulation override command rejects', async () => {
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<never> } }).__TAURI_INTERNALS__ = {
+      invoke: async () => { throw new Error('override unavailable'); },
+    };
+    await expect(resolveStorePath()).rejects.toThrow('override unavailable');
+  });
+
+  it('rejects a relative override instead of constructing a real-store fallback', async () => {
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<string> } }).__TAURI_INTERNALS__ = {
+      invoke: async () => 'relative/appdata',
+    };
+    await expect(resolveStorePath()).rejects.toThrow(/absolute directory/);
+  });
+
+  it('uses the normal production store when no override is configured', async () => {
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<null> } }).__TAURI_INTERNALS__ = {
+      invoke: async () => null,
+    };
+    await expect(resolveStorePath()).resolves.toBe('settings.json');
+  });
 });
 
 describe('useSettings versioning and per-field validation (4.2 / ARC-005)', () => {
   beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    (window as unknown as { __TAURI_INTERNALS__?: { invoke: () => Promise<null> } }).__TAURI_INTERNALS__ = { invoke: async () => null };
     backing.clear();
     failLoad = false;
   });
@@ -143,7 +164,7 @@ describe('useSettings versioning and per-field validation (4.2 / ARC-005)', () =
     unmount();
   });
 
-  it('a settingsVersion mismatch still preserves valid fields rather than resetting them', async () => {
+  it('a future settingsVersion fails visibly without loading or rewriting the file', async () => {
     backing.set(
       'settings.json',
       new Map<string, unknown>([
@@ -155,8 +176,8 @@ describe('useSettings versioning and per-field validation (4.2 / ARC-005)', () =
     const { result, unmount } = renderUseSettings();
     await flush();
 
-    expect(result().loaded).toBe(true);
-    expect(result().settings.windowSecs).toBe(1800);
+    expect(result().loaded).toBe(false);
+    expect(result().error).toMatch(/newer than this app supports/i);
 
     unmount();
   });

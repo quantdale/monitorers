@@ -272,6 +272,25 @@ fn merge_gpu_utilization_by_caption(
     entries
 }
 
+/// PDH still exposes stable LUIDs even when WMI is unavailable. Keep those
+/// entries visible with conservative metadata instead of hiding every GPU;
+/// enrichment can be retried later and the stable key remains unchanged.
+fn merge_gpu_utilization_without_vendor_map(
+    luid_3d_totals: &HashMap<String, f64>,
+) -> Vec<(String, String, GpuClass, f64)> {
+    luid_3d_totals
+        .iter()
+        .map(|(luid, util)| {
+            (
+                luid.clone(),
+                format!("GPU {luid}"),
+                GpuClass::Unknown,
+                (*util).clamp(0.0, 100.0),
+            )
+        })
+        .collect()
+}
+
 /// Read GPU 3D-engine utilization from PDH. Returns list of (history_key, display_name, util%) per GPU.
 ///
 /// PdhCollectQueryData is called once per poll in poll() before this function runs.
@@ -341,7 +360,11 @@ pub fn query_gpu_utilization_pdh(
     let vendor_map = gpu_vendor_map.as_ref();
 
     let mut entries: Vec<(String, String, GpuClass, f64)> =
-        merge_gpu_utilization_by_caption(vendor_map, &luid_3d_totals, gpu_error_lock);
+        if vendor_map.is_none_or(|map| map.is_empty()) {
+            merge_gpu_utilization_without_vendor_map(&luid_3d_totals)
+        } else {
+            merge_gpu_utilization_by_caption(vendor_map, &luid_3d_totals, gpu_error_lock)
+        };
 
     // Sort: iGPU first, then dGPU; within each class by display name.
     entries.sort_by(|a, b| {

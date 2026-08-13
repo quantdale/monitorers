@@ -7,6 +7,19 @@ pub use crate::pdh::PdhHandles;
 
 use crate::hardware::HardwareProfile;
 
+/// Per-device Nvidia enrichment. The map key is the collector's stable GPU
+/// identity; a missing entry means telemetry was not safely reconciled to that
+/// card and must be rendered unavailable rather than copied from another GPU.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NvidiaTelemetry {
+    pub temp_c: Option<f64>,
+    pub power_w: Option<f64>,
+    pub mem_used_mb: Option<u64>,
+    pub mem_total_mb: Option<u64>,
+    pub fan_speed_pct: Option<u32>,
+    pub clock_mhz: Option<u32>,
+}
+
 // ── RawPoll ──────────────────────────────────────────────────────────────────
 // Intermediate result produced by the collector after all I/O completes.
 // Passed to the history commit function without holding any lock.
@@ -19,17 +32,7 @@ pub struct RawPoll {
     pub mem_total_gb: f64,
     pub mem_pct: f64,
     pub gpu_updates: Vec<(String, String, f64)>, // (history_key, display_name, util%)
-    pub nvidia_temp: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_power_w: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_used_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_total_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_fan_speed_pct: Option<u32>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_clock_mhz: Option<u32>,
+    pub nvidia_telemetry: Option<HashMap<String, NvidiaTelemetry>>,
     pub disk_active: HashMap<String, f64>,
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
@@ -53,6 +56,11 @@ pub struct CollectorState {
     pub system: System,
     pub sysinfo_disks: Disks,
     pub sysinfo_networks: Networks,
+    /// Monotonic timestamp of the last network refresh. `sysinfo` exposes
+    /// `received()`/`transmitted()` as deltas since the previous refresh, so
+    /// rates must be normalized against this interval rather than assuming a
+    /// one-second cadence.
+    pub network_last_refresh: Instant,
     /// Only exists in builds that use NVAPI for Nvidia temperatures (nvml has
     /// its own init path and never reads this flag).
     #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
@@ -65,11 +73,19 @@ pub struct CollectorState {
     pub gpu_vendor_map: Option<HashMap<String, String>>,
     /// When the cached GPU vendor map was last built (rebuild rate limiter).
     pub gpu_vendor_map_last_build: Instant,
-    /// 1-second TTL cache for the CPU temperature WMI query — temps change
+    /// 5-second TTL cache for the CPU temperature WMI query — temps change
     /// slowly, and the raw query is ~2x the collector's per-tick budget.
     pub cpu_temp_cache: Option<(Instant, f64)>,
     #[cfg(feature = "nvml")]
     pub nvml: Option<nvml_wrapper::Nvml>,
+    #[cfg(feature = "nvml")]
+    /// Enrichment is intentionally slower than GPU utilization polling: NVML
+    /// driver calls add cost without improving the 250ms live scalar cadence.
+    pub nvidia_last_enrichment: Instant,
+    #[cfg(feature = "nvml")]
+    /// Retry a failed NVML initialization at a bounded cadence so a driver or
+    /// hot-plug recovery can become visible without reinitializing per tick.
+    pub nvml_last_attempt: Instant,
 }
 
 impl CollectorState {
@@ -120,6 +136,7 @@ impl CollectorState {
             system,
             sysinfo_disks: disks,
             sysinfo_networks: networks,
+            network_last_refresh: Instant::now(),
             #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
             nvapi_initialized,
             gpu_error_lock: OnceLock::new(),
@@ -132,6 +149,29 @@ impl CollectorState {
             cpu_temp_cache: None,
             #[cfg(feature = "nvml")]
             nvml,
+            #[cfg(feature = "nvml")]
+            nvidia_last_enrichment: Instant::now() - std::time::Duration::from_secs(1),
+            #[cfg(feature = "nvml")]
+            nvml_last_attempt: Instant::now(),
+        }
+    }
+
+    #[cfg(feature = "nvml")]
+    pub fn nvidia_enrichment_due(&self) -> bool {
+        self.nvidia_last_enrichment.elapsed() >= std::time::Duration::from_secs(1)
+    }
+
+    #[cfg(feature = "nvml")]
+    pub fn mark_nvidia_enrichment(&mut self) {
+        self.nvidia_last_enrichment = Instant::now();
+    }
+
+    #[cfg(feature = "nvml")]
+    pub fn retry_nvml_if_due(&mut self) {
+        const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        if self.nvml.is_none() && self.nvml_last_attempt.elapsed() >= RETRY_INTERVAL {
+            self.nvml_last_attempt = Instant::now();
+            self.nvml = crate::collector::nvidia::init_nvml();
         }
     }
 }
@@ -160,17 +200,7 @@ pub struct HistoryStore {
     pub mem_total_gb: f64,
     pub gpu_entries: Vec<(String, String, VecDeque<f64>)>,
     pub gpu_latest: HashMap<String, f64>,
-    pub nvidia_temp: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_power_w: Option<f64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_used_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_mem_total_mb: Option<u64>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_fan_speed_pct: Option<u32>,
-    #[cfg(feature = "nvml")]
-    pub nvidia_clock_mhz: Option<u32>,
+    pub nvidia_telemetry: HashMap<String, NvidiaTelemetry>,
     pub disk_active_histories: HashMap<String, VecDeque<f64>>,
     pub disk_display_order: Vec<String>,
     pub disk_read_mb_s: HashMap<String, f64>,
@@ -208,17 +238,7 @@ impl HistoryStore {
             mem_total_gb: 0.0,
             gpu_entries: Vec::new(),
             gpu_latest: HashMap::new(),
-            nvidia_temp: None,
-            #[cfg(feature = "nvml")]
-            nvidia_power_w: None,
-            #[cfg(feature = "nvml")]
-            nvidia_mem_used_mb: None,
-            #[cfg(feature = "nvml")]
-            nvidia_mem_total_mb: None,
-            #[cfg(feature = "nvml")]
-            nvidia_fan_speed_pct: None,
-            #[cfg(feature = "nvml")]
-            nvidia_clock_mhz: None,
+            nvidia_telemetry: HashMap::new(),
             disk_active_histories: HashMap::new(),
             disk_display_order: Vec::new(),
             disk_read_mb_s: HashMap::new(),

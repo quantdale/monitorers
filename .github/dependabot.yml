@@ -1,0 +1,42 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      root-tooling:
+        patterns:
+          - "husky"
+
+  - package-ecosystem: npm
+    directory: "/sys-monitor-tauri"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    groups:
+      frontend-tooling:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  - package-ecosystem: cargo
+    directory: "/sys-monitor-tauri/src-tauri"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
