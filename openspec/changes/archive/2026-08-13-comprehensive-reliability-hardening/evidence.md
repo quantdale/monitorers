@@ -145,4 +145,4 @@ enrichment slowdown was adopted without that measurement.
 
 ## Evidence policy
 
-Each task below is checked only after its targeted test or static proof exists. Final entries will include exact commands, hosted run URLs/IDs, release-build output, and the real-hardware cadence environment/result. A missing physical multi-GPU or installer environment is recorded as `NOT-VALIDATED`, never as a pass.
+Each task below is checked only after its targeted test or static proof exists. The final evidence above records exact commands, release-build output, and the real-hardware cadence environment/result. Hosted validation for commit `31a33fe32bc8d1b658fc298dcd22f22b2148add4` is recorded in [Rust and release run 31655093078](https://github.com/quantdale/monitorers/actions/runs/31655093078), [E2E run 31655093041](https://github.com/quantdale/monitorers/actions/runs/31655093041), and [Simulation run 31655093056](https://github.com/quantdale/monitorers/actions/runs/31655093056). A missing physical multi-GPU or installer environment is recorded as `NOT-VALIDATED`, never as a pass.
