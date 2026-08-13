@@ -3,7 +3,7 @@
  *
  * Replaces the hardcoded sine mock that used to live in `useMetrics.ts` with
  * a scenario-driven backend: identical default behavior (sine metrics, 250 ms
- * ticks, 4:1 history cadence, two disks, two GPUs, schema version 3) plus a
+ * ticks, 4:1 history cadence, two disks, two GPUs, schema version 4) plus a
  * timeline/fault-injection surface for simulation journeys (`window.__SIM__`).
  *
  * Active only when `isTauri()` is false. In a real Tauri context no module in
@@ -25,11 +25,13 @@
  *      survive page reloads within a run and parallel runs never share state.
  *
  * Determinism: all waveforms are tick-based (tick 0 = simulation second 0,
- * each tick advances the simulated clock by 250 ms × speed), so a scenario
+ * each tick advances the simulated clock by 250 ms). Speed changes wall-clock
+ * timer frequency only, so speed=N means N simulated seconds per wall second.
+ * A scenario
  * produces the same snapshot sequence regardless of wall clock.
  */
 
-import type { HistoryPayload, MetricsSnapshot } from '../types/metrics';
+import type { HistoryPayload, MetricsSnapshot, NvidiaTelemetry } from '../types/metrics';
 
 export type GpuVendor = 'nvidia' | 'intel' | 'amd' | 'unknown';
 
@@ -42,16 +44,19 @@ export interface SimDiskSpec {
 }
 
 export interface SimGpuSpec {
+  /** Stable fixture identity; required for duplicate display-name scenarios. */
+  key?: string;
   name: string;
   vendor?: GpuVendor;
+  nvidia?: NvidiaTelemetry;
 }
 
 export type SimFault =
   | { kind: 'collector-error'; message: string }
   | { kind: 'disk-remove'; key: string }
   | { kind: 'disk-add'; key: string }
-  | { kind: 'gpu-remove'; name: string }
-  | { kind: 'gpu-add'; name: string; vendor?: GpuVendor }
+  | { kind: 'gpu-remove'; name?: string; key?: string }
+  | { kind: 'gpu-add'; name: string; vendor?: GpuVendor; key?: string; nvidia?: NvidiaTelemetry }
   | { kind: 'schema-version'; version: number }
   /** Hold all live values for `ticks` further emissions (a PDH freeze). */
   | { kind: 'freeze'; ticks: number };
@@ -64,7 +69,7 @@ export type HistoryLoadFault = { mode: 'fail' } | { mode: 'slow'; delayMs: numbe
 export interface SimScenario {
   /** Scenario shape version (bump on incompatible changes). */
   version: 1;
-  /** Emitted `schema_version` in snapshots/history. Default 3 (production). */
+  /** Emitted `schema_version` in snapshots/history. Default 4 (production). */
   schema_version?: number;
   /** Mock clock speed factor (1 = real-time 250 ms ticks). */
   speed?: number;
@@ -78,6 +83,28 @@ export interface SimScenario {
   corrupt_settings?: boolean;
   /** Ordered timeline of faults, keyed by tick number (0-based). */
   timeline?: SimTimelineEvent[];
+}
+
+/**
+ * Supported mock-clock range. At the upper bound the timer's 10 ms safety
+ * floor is not reached, so the meaning of speed remains stable: N simulated
+ * seconds per wall-clock second.
+ */
+export const MIN_SIM_SPEED = 0.25;
+export const MAX_SIM_SPEED = 16;
+export const MIN_TIMER_PERIOD_MS = 10;
+
+export function validateSimSpeed(value: number): number {
+  if (!Number.isFinite(value) || value < MIN_SIM_SPEED || value > MAX_SIM_SPEED) {
+    throw new Error(
+      `simulation speed must be finite and between ${MIN_SIM_SPEED} and ${MAX_SIM_SPEED} (got ${String(value)})`
+    );
+  }
+  return value;
+}
+
+export function timerPeriodMs(speed: number): number {
+  return Math.max(MIN_TIMER_PERIOD_MS, 250 / validateSimSpeed(speed));
 }
 
 /** A sin-basis waveform generator for one metric. */
@@ -136,11 +163,26 @@ const DEFAULT_GPUS: SimGpuSpec[] = [
 export function defaultScenario(): SimScenario {
   return {
     version: 1,
-    schema_version: 3,
+    schema_version: 4,
     speed: 1,
-    disks: DEFAULT_DISKS,
-    gpus: DEFAULT_GPUS,
+    disks: DEFAULT_DISKS.map((disk) => ({ ...disk })),
+    gpus: DEFAULT_GPUS.map((gpu) => ({ ...gpu })),
   };
+}
+
+function cloneScenario(scenario: SimScenario): SimScenario {
+  const speed = scenario.speed === undefined ? 1 : validateSimSpeed(scenario.speed);
+  return {
+    ...scenario,
+    speed,
+    disks: scenario.disks?.map((disk) => ({ ...disk })),
+    gpus: scenario.gpus?.map((gpu) => ({ ...gpu })),
+    timeline: scenario.timeline?.map((event) => ({ ...event })),
+  };
+}
+
+function gpuKey(gpu: SimGpuSpec, index: number): string {
+  return gpu.key ?? `sim_gpu_${hashKey(`${gpu.name}:${index}`).toString(16)}`;
 }
 
 /** 300-point seed kept identical to the pre-bridge mock (chart cap parity). */
@@ -217,15 +259,19 @@ export class MockBackend {
 
   constructor(title: string, scenario: SimScenario, runId: string) {
     this.title = title;
-    this.scenario = scenario;
+    this.scenario = cloneScenario(scenario);
     this.runId = runId;
-    this.disks = scenario.disks?.length ? scenario.disks : DEFAULT_DISKS;
-    this.gpus = scenario.gpus?.length ? scenario.gpus : DEFAULT_GPUS;
-    this.schemaVersion = scenario.schema_version ?? 3;
-    this.speed = scenario.speed ?? 1;
-    this.historyFault = scenario.history_fault ?? null;
-    this.corruptSettings = scenario.corrupt_settings ?? false;
-    this.pendingTimeline = [...(scenario.timeline ?? [])].sort((a, b) => a.at - b.at);
+    this.disks = this.scenario.disks === undefined
+      ? DEFAULT_DISKS.map((disk) => ({ ...disk }))
+      : this.scenario.disks.map((disk) => ({ ...disk }));
+    this.gpus = this.scenario.gpus === undefined
+      ? DEFAULT_GPUS.map((gpu) => ({ ...gpu }))
+      : this.scenario.gpus.map((gpu) => ({ ...gpu }));
+    this.schemaVersion = this.scenario.schema_version ?? 4;
+    this.speed = this.scenario.speed ?? 1;
+    this.historyFault = this.scenario.history_fault ?? null;
+    this.corruptSettings = this.scenario.corrupt_settings ?? false;
+    this.pendingTimeline = [...(this.scenario.timeline ?? [])].sort((a, b) => a.at - b.at);
   }
 
   get speedFactor(): number {
@@ -243,7 +289,7 @@ export class MockBackend {
   /** Starts the emission loop. Idempotent; restarts adjust to the new speed. */
   start(): void {
     if (this.halted || this.timer !== null) return;
-    const period = Math.max(10, 250 / this.speed);
+    const period = timerPeriodMs(this.speed);
     this.timer = setInterval(() => this.advance(), period);
   }
 
@@ -302,11 +348,19 @@ export class MockBackend {
         }
         break;
       case 'gpu-remove':
-        this.gpus = this.gpus.filter((g) => g.name !== fault.name);
+        this.gpus = this.gpus.filter((g, index) => {
+          const key = fault.key;
+          return key !== undefined ? gpuKey(g, index) !== key : g.name !== fault.name;
+        });
         break;
       case 'gpu-add':
         if (!this.gpus.some((g) => g.name === fault.name)) {
-          this.gpus.push({ name: fault.name, vendor: fault.vendor ?? 'unknown' });
+          this.gpus.push({
+            key: fault.key ?? `sim_gpu_${hashKey(`${fault.name}:${this.gpus.length}`).toString(16)}`,
+            name: fault.name,
+            vendor: fault.vendor ?? 'unknown',
+            nvidia: fault.nvidia,
+          });
         }
         break;
       case 'schema-version':
@@ -320,8 +374,7 @@ export class MockBackend {
 
   /** Sets the clock speed factor (restarts the emission timer). */
   setSpeed(factor: number): void {
-    if (factor <= 0) return;
-    this.speed = factor;
+    this.speed = validateSimSpeed(factor);
     if (this.timer !== null) {
       this.stop();
       this.start();
@@ -337,9 +390,9 @@ export class MockBackend {
     return this.corruptSettings;
   }
 
-  /** Simulated clock seconds elapsed (tick × 0.25 × speed). */
+  /** Simulated clock seconds elapsed (tick × 0.25). Timer frequency carries speed. */
   get simSeconds(): number {
-    return this.tick * 0.25 * this.speed;
+    return this.tick * 0.25;
   }
 
   private advance(): void {
@@ -402,13 +455,24 @@ export class MockBackend {
       };
     });
 
-    const gpus = this.gpus.map((g) => {
+    const gpus = this.gpus.map((g, index) => {
       const wave = gpuWave(g.name);
       return {
+        key: gpuKey(g, index),
         name: g.name,
         vendor: g.vendor ?? ('unknown' as GpuVendor),
         util: Math.max(0, sinAt(wave, t)),
         temp_c: (hashKey(g.name) % 25) + 40,
+        nvidia: g.vendor === 'nvidia'
+          ? {
+              temp_c: g.nvidia?.temp_c ?? (hashKey(gpuKey(g, index)) % 20) + 50,
+              power_w: g.nvidia?.power_w ?? (hashKey(gpuKey(g, index)) % 80) + 40,
+              mem_used_mb: g.nvidia?.mem_used_mb ?? 2048,
+              mem_total_mb: g.nvidia?.mem_total_mb ?? 6144,
+              fan_speed_pct: g.nvidia?.fan_speed_pct ?? 35,
+              clock_mhz: g.nvidia?.clock_mhz ?? 2100,
+            }
+          : null,
       };
     });
 
@@ -418,12 +482,6 @@ export class MockBackend {
       cpu,
       cpu_name: 'CPU',
       cpu_temp_c: 52,
-      nvidia_temp: gpus.some((g) => g.vendor === 'nvidia') ? 55 : undefined,
-      nvidia_power_w: gpus.some((g) => g.vendor === 'nvidia') ? 45 : undefined,
-      nvidia_mem_used_mb: gpus.some((g) => g.vendor === 'nvidia') ? 2048 : undefined,
-      nvidia_mem_total_mb: gpus.some((g) => g.vendor === 'nvidia') ? 6144 : undefined,
-      nvidia_fan_speed_pct: gpus.some((g) => g.vendor === 'nvidia') ? 35 : undefined,
-      nvidia_clock_mhz: gpus.some((g) => g.vendor === 'nvidia') ? 2100 : undefined,
       mem,
       mem_used_gb: 6 + 2 * Math.sin(t * 0.1),
       mem_total_gb: 16,
@@ -480,12 +538,24 @@ export class MockBackend {
       }),
       net_recv: netRecv,
       net_sent: netSent,
-      gpus: this.gpus.map((g) => {
+      gpus: this.gpus.map((g, index) => {
         const wave = gpuWave(g.name);
         return {
+          key: gpuKey(g, index),
           name: g.name,
+          vendor: g.vendor ?? 'unknown',
           values: Array.from({ length: n }, (_, i) => Math.max(0, sinAt(wave, i * dt))),
           temp_c: (hashKey(g.name) % 25) + 40,
+          nvidia: g.vendor === 'nvidia'
+            ? {
+                temp_c: g.nvidia?.temp_c ?? (hashKey(gpuKey(g, index)) % 20) + 50,
+                power_w: g.nvidia?.power_w ?? (hashKey(gpuKey(g, index)) % 80) + 40,
+                mem_used_mb: g.nvidia?.mem_used_mb ?? 2048,
+                mem_total_mb: g.nvidia?.mem_total_mb ?? 6144,
+                fan_speed_pct: g.nvidia?.fan_speed_pct ?? 35,
+                clock_mhz: g.nvidia?.clock_mhz ?? 2100,
+              }
+            : null,
           last_seen_ts: now,
         };
       }),
@@ -542,7 +612,7 @@ export class LocalStorageSettingsBackend implements SimSettingsBackend {
 
   async save(patch: Record<string, unknown>): Promise<void> {
     try {
-      const next = { ...this.read(), ...patch, settingsVersion: 1 };
+      const next = { ...this.read(), ...patch, settingsVersion: 2 };
       localStorage.setItem(this.key(), JSON.stringify(next));
     } catch {
       // localStorage can hit quota/serialization errors in odd embedders;

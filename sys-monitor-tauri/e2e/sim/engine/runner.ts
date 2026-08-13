@@ -5,7 +5,7 @@
  * decisions from the seeded PRNG, and the run header logs seed + persona +
  * journey + driver so a failure reproduces locally from the header alone.
  */
-import { mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   SimContext,
@@ -37,6 +37,84 @@ export interface RunSelection {
   scenario: SimScenario;
 }
 
+export interface JourneyOutcomeInput {
+  assertions: AssertionRecord[];
+  consoleErrors: string[];
+  pageErrors: string[];
+  allowedConsoleErrors?: RegExp[];
+  allowedPageErrors?: RegExp[];
+  currentStep: string;
+}
+
+export interface JourneyOutcome {
+  passed: boolean;
+  failureClass: Exclude<FailureClass, 'none'> | 'none';
+  failureMessage: string | null;
+  failingStep: string | null;
+}
+
+/**
+ * Applies the runner's pass contract without requiring a browser. Keeping
+ * this decision pure makes the false-green rules directly testable:
+ * meaningful assertions are mandatory, and unexpected browser errors always
+ * fail the journey unless an explicit journey-scoped allowlist matches.
+ */
+export function evaluateJourneyOutcome(input: JourneyOutcomeInput): JourneyOutcome {
+  const unexpectedConsole = input.consoleErrors.filter(
+    (message) => !input.allowedConsoleErrors?.some((pattern) => pattern.test(message))
+  );
+  const unexpectedPage = input.pageErrors.filter(
+    (message) => !input.allowedPageErrors?.some((pattern) => pattern.test(message))
+  );
+  if (unexpectedConsole.length || unexpectedPage.length) {
+    return {
+      passed: false,
+      failureClass: 'app-defect',
+      failureMessage: `unexpected browser errors: ${[...unexpectedConsole, ...unexpectedPage].join(' | ')}`,
+      failingStep: input.currentStep,
+    };
+  }
+  if (input.assertions.length === 0) {
+    return {
+      passed: false,
+      failureClass: 'harness-defect',
+      failureMessage: 'journey completed with zero meaningful assertions',
+      failingStep: input.currentStep,
+    };
+  }
+  const failing = input.assertions.find((assertion) => assertion.result === 'fail');
+  if (failing) {
+    return {
+      passed: false,
+      failureClass: 'app-defect',
+      failureMessage: failing.detail ?? `assertion failed: ${failing.label}`,
+      failingStep: failing.label,
+    };
+  }
+  return { passed: true, failureClass: 'none', failureMessage: null, failingStep: null };
+}
+
+function pathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+export function createRunDirectory(opts: RunOptions, selection: RunSelection): string {
+  const name = [
+    pathSegment(opts.runId),
+    pathSegment(opts.lane),
+    pathSegment(selection.driver.kind),
+    pathSegment(selection.journey.id),
+    pathSegment(selection.persona.id),
+    `seed-${opts.seed}`,
+  ].join('__');
+  const runDir = join(opts.outDir, name);
+  if (existsSync(runDir)) {
+    throw new Error(`harness run directory already exists; refusing overwrite: ${runDir}`);
+  }
+  mkdirSync(runDir, { recursive: true });
+  return runDir;
+}
+
 export function defaultScenarioFor(_lane: RunOptions['lane']): SimScenario {
   return {
     version: 1,
@@ -50,8 +128,7 @@ export function defaultScenarioFor(_lane: RunOptions['lane']): SimScenario {
 }
 
 export async function runJourney(opts: RunOptions, selection: RunSelection): Promise<RunResult> {
-  const runDir = join(opts.outDir, `${opts.runId}__${selection.journey.id}__${selection.persona.id}`);
-  mkdirSync(runDir, { recursive: true });
+  const runDir = createRunDirectory(opts, selection);
 
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
@@ -67,6 +144,22 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
   let failureMessage: string | null = null;
   let failingStep: string | null = null;
   let currentStep = 'journey';
+  const diagnostics: string[] = [];
+
+  const appendDiagnostic = (message: string): void => {
+    diagnostics.push(message);
+  };
+
+  const setPrimaryFailure = (kind: Exclude<FailureClass, 'none'>, message: string, step: string): void => {
+    if (failureClass === 'none') {
+      failureClass = kind;
+      failureMessage = message;
+      failingStep = step;
+    } else {
+      appendDiagnostic(message);
+    }
+    passed = false;
+  };
 
   const rng = mulberry32(opts.seed);
   const startWall = Date.now();
@@ -117,15 +210,14 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
     const launched = await selection.driver.launch(opts.runId, selection.scenario, runDir);
     appStderrPath = launched.appStderrPath;
     const page = launched.page;
+    consoleCapture = { messages: [], pageErrors: [] };
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
-        consoleCapture = consoleCapture ?? { messages: [], pageErrors: [] };
-        consoleCapture.messages.push({ type: msg.type(), text: msg.text() });
+        consoleCapture?.messages.push({ type: msg.type(), text: msg.text() });
       }
     });
     page.on('pageerror', (err) => {
-      consoleCapture = consoleCapture ?? { messages: [], pageErrors: [] };
-      consoleCapture.pageErrors.push(String(err));
+      consoleCapture?.pageErrors.push(String(err));
     });
 
     currentStep = `journey:${selection.journey.id}`;
@@ -133,49 +225,61 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
     await selection.journey.run(ctx);
     logLine('step-end', { label: currentStep });
 
-    passed = assertions.every((a) => a.result === 'pass');
-    if (!passed) {
-      const failing = assertions.find((a) => a.result === 'fail');
-      failureClass = 'app-defect';
-      failureMessage = failing?.detail ?? `assertion failed: ${failing?.label ?? 'unknown'}`;
-      failingStep = failing?.label ?? currentStep;
+    const outcome = evaluateJourneyOutcome({
+      assertions,
+      consoleErrors: (consoleCapture?.messages ?? []).map((message) => message.text),
+      pageErrors: consoleCapture?.pageErrors ?? [],
+      allowedConsoleErrors: selection.journey.allowedConsoleErrors,
+      allowedPageErrors: selection.journey.allowedPageErrors,
+      currentStep,
+    });
+    if (outcome.passed) {
+      passed = true;
+    } else if (outcome.failureClass !== 'none' && outcome.failureMessage) {
+      setPrimaryFailure(outcome.failureClass, outcome.failureMessage, outcome.failingStep ?? currentStep);
     }
   } catch (err) {
     const classified = classifyFailure(err, false);
-    failureClass = classified.failureClass;
-    failureMessage = classified.message;
-    failingStep = currentStep;
-    passed = false;
-    try {
-      screenshotPath = await captureFailureScreenshot(selection.driver, runDir);
-    } catch {
-      // screenshot is best-effort; the triage bundle still carries the log
-    }
+    setPrimaryFailure(classified.failureClass, classified.message, currentStep);
   } finally {
     // ── artifact finalization ─────────────────────────────────────────────
     type WithTrace = { stopTrace?: (path: string) => Promise<void> };
     const d = selection.driver as SimDriver & WithTrace;
-    if (d.stopTrace) {
-      const trace = join(runDir, 'trace.zip');
-      await d.stopTrace(trace);
+
+    if (!passed && !screenshotPath) {
       try {
-        readdirSync(runDir).includes('trace.zip') && (tracePath = trace);
-      } catch {
-        // ignore
+        screenshotPath = await captureFailureScreenshot(selection.driver, runDir);
+      } catch (error) {
+        appendDiagnostic(`failure screenshot capture failed: ${String(error)}`);
       }
     }
-    await selection.driver.close();
+
+    if (d.stopTrace) {
+      const trace = join(runDir, 'trace.zip');
+      try {
+        await d.stopTrace(trace);
+        if (readdirSync(runDir).includes('trace.zip')) tracePath = trace;
+        else appendDiagnostic('trace stop completed without producing trace.zip');
+      } catch (error) {
+        appendDiagnostic(`trace cleanup failed: ${String(error)}`);
+      }
+    }
+    try {
+      await selection.driver.close();
+    } catch (error) {
+      appendDiagnostic(`driver close failed: ${String(error)}`);
+    }
 
     // Video is flushed on browser close; find and normalize it.
     try {
       const webm = readdirSync(runDir).find((f) => f.endsWith('.webm'));
       if (webm) {
         const target = join(runDir, 'video.webm');
-        renameSync(join(runDir, webm), target);
+        copyFileSync(join(runDir, webm), target);
         videoPath = target;
       }
-    } catch {
-      // no video
+    } catch (error) {
+      appendDiagnostic(`video artifact finalization failed: ${String(error)}`);
     }
 
     // Real driver isolation self-test is the platform's own gate.
@@ -183,9 +287,15 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
       try {
         await selection.driver.selfTest();
       } catch (e) {
-        failureClass = 'harness-defect';
-        failureMessage = (failureMessage ? failureMessage + '; ' : '') + String(e);
-        passed = false;
+        setPrimaryFailure('harness-defect', `driver self-test failed: ${String(e)}`, currentStep);
+      }
+    }
+
+    if (diagnostics.length > 0) {
+      if (passed) {
+        setPrimaryFailure('harness-defect', 'harness cleanup/isolation diagnostics failed', currentStep);
+      } else if (failureMessage) {
+        failureMessage = `${failureMessage}; diagnostics: ${diagnostics.join(' | ')}`;
       }
     }
   }
@@ -205,6 +315,7 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
     assertCount: assertions.length,
     assertPassed: assertions.filter((a) => a.result === 'pass').length,
     seed: opts.seed,
+    diagnostics,
     artifacts: {
       outDir: runDir,
       jsonl: '',

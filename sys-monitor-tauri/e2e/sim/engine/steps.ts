@@ -139,7 +139,7 @@ export async function setViewMode(ctx: SimContext, mode: 'default' | 'tile' | 'l
 async function openDropdown(ctx: SimContext): Promise<void> {
   const page = ctx.driver.page;
   if (!page) return;
-  await page.locator('button[aria-haspopup="true"]').click();
+  await page.getByRole('button', { name: /^Metrics \(/ }).click();
   await page.locator('input[type="checkbox"]').first().waitFor({ state: 'visible' });
 }
 

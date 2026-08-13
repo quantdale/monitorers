@@ -30,6 +30,12 @@ export async function readCardIds(page: Page): Promise<string[]> {
   );
 }
 
+/** Reads the app-owned order signal emitted by the dashboard after a reorder. */
+export async function readDashboardCardOrder(page: Page): Promise<string[]> {
+  const value = await page.getByTestId('dashboard-card-list').getAttribute('data-card-order');
+  return value ? value.split('|').filter(Boolean) : [];
+}
+
 /**
  * First GPU card id. The exact GPU is unknown until runtime (slug from the
  * display name), so specs must resolve it dynamically instead of hardcoding.
@@ -41,19 +47,18 @@ export async function firstGpuCardId(page: Page): Promise<string> {
   return gpu;
 }
 
-/**
- * Counts the data points rendered in a card's chart. The area fill path
- * (`.recharts-area-area`) carries one command letter per data point, unlike
- * the stroke curve, which Recharts downsamples when the point count exceeds
- * the pixel width. Falls back to the longest path if the class is renamed.
- */
+/** Reads app-owned chart metadata. This deliberately does not depend on
+ * Recharts' internal SVG class names or path commands. */
 export async function chartPointCount(page: Page, id: string): Promise<number> {
-  return page.locator(`${CARD_ID(id)} svg path`).evaluateAll((paths) => {
-    const count = (p: Element) => (p.getAttribute('d') ?? '').match(/[MLCQAST]/g)?.length ?? 0;
-    const fill = paths.find((p) => (p.getAttribute('class') ?? '').includes('area-area'));
-    if (fill) return count(fill);
-    return paths.reduce((max, p) => Math.max(max, count(p)), 0);
-  });
+  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-point-count'));
+}
+
+export async function chartTimeSpanMs(page: Page, id: string): Promise<number> {
+  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-span-ms'));
+}
+
+export async function chartLatestTimestamp(page: Page, id: string): Promise<number> {
+  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-latest-ts'));
 }
 
 /**

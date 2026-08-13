@@ -137,21 +137,16 @@ const longWatchCadence: Journey = {
     const count = async () => {
       const page = ctx.driver.page;
       if (!page) return 0;
-      return page.locator('[data-testid="metric-card-cpu"] svg path').evaluateAll((paths) => {
-        const count2 = (p: Element) => (p.getAttribute('d') ?? '').match(/[MLCQAST]/g)?.length ?? 0;
-        const fill = paths.find((p) => (p.getAttribute('class') ?? '').includes('area-area'));
-        return fill ? count2(fill) : Math.max(...paths.map((p) => count2(p)), 0);
-      });
+      return Number(await page.locator('[data-testid="metric-chart-cpu"]').getAttribute('data-chart-latest-ts'));
     };
 
     const start = await count();
     await ctx.dwell();
-    // With an 8× clock, the persona's dwell (sim-time) yields a commensurate
-    // number of 1 Hz history commits — growth is proportional to sim-time;
+    // With an 8× clock, the persona's dwell advances simulated timestamps;
     // real-time cadence truth belongs to cadence_probe, not re-derived here.
     const end = await count();
-    ctx.assert('chart-grows', end > start, `chart grew from ${start} to ${end}`);
-    ctx.assert('bounded-growth', end - start < 200, `growth within CI bounds (${end - start})`);
+    ctx.assert('chart-advances', end > start, `chart timestamp advanced from ${start} to ${end}`);
+    ctx.assert('bounded-growth', end - start < 120_000, `timestamp advanced within CI bounds (${end - start}ms)`);
   },
 };
 
@@ -210,6 +205,80 @@ const diskGhostCycle: Journey = {
   },
 };
 
+const gpuHotplugGap: Journey = {
+  id: 'gpu-hotplug-gap',
+  title: 'Hot-plug: a newly discovered GPU starts with a genuine history gap',
+  supportedDrivers: ['mock'],
+  personaIds: ['sentinel'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const before = await S.readCardIds(ctx);
+    await S.injectFault(ctx, { kind: 'gpu-add', key: 'sim_gpu_hotplug_fixture', name: 'Hotplug Fixture GPU', vendor: 'nvidia' });
+
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'mock journey requires a page');
+      return;
+    }
+    const deadline = Date.now() + 8_000;
+    let addedId: string | undefined;
+    while (Date.now() < deadline) {
+      const current = await S.readCardIds(ctx);
+      addedId = current.find((id) => id.startsWith('gpu_') && !before.includes(id));
+      if (addedId) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    ctx.assert('gpu-card-added', !!addedId, `new GPU card appeared: ${addedId ?? 'none'}`);
+    if (!addedId) return;
+
+    const chart = page.locator(`[data-testid="metric-chart-${addedId}"]`);
+    await chart.waitFor({ state: 'visible', timeout: 8_000 });
+    const gapCount = Number(await chart.getAttribute('data-chart-gap-count'));
+    ctx.assert('pre-discovery-gap', gapCount > 0, `new GPU chart exposes ${gapCount} missing historical points`);
+  },
+};
+
+const schemaMismatch: Journey = {
+  id: 'ipc-schema-mismatch',
+  title: 'IPC contract fault: incompatible live payload is rejected visibly',
+  supportedDrivers: ['mock'],
+  personaIds: ['glancer'],
+  // The application intentionally logs the actionable mismatch once; the
+  // journey allowlist is narrow and scoped to this injected contract fault.
+  allowedConsoleErrors: [/metrics schema mismatch/i],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'schema journey requires a page');
+      return;
+    }
+    const chart = page.locator('[data-testid="metric-chart-cpu"]');
+    await S.injectFault(ctx, { kind: 'schema-version', version: 3 });
+    await page.getByText(/Frontend\/backend metrics schema mismatch/i).waitFor({ state: 'visible', timeout: 5_000 });
+    ctx.assert('schema-error-visible', true, 'incompatible payload shows rebuild guidance');
+    const afterError = {
+      points: await chart.getAttribute('data-chart-point-count'),
+      latest: await chart.getAttribute('data-chart-latest-ts'),
+    };
+    const errorClock = await page.evaluate(() => window.__SIM__?.backend.simSeconds ?? 0);
+    await page.waitForFunction(
+      (start) => (window.__SIM__?.backend.simSeconds ?? 0) >= start + 0.5,
+      errorClock,
+      { timeout: 5_000 },
+    );
+    const afterMoreIncompatibleEvents = {
+      points: await chart.getAttribute('data-chart-point-count'),
+      latest: await chart.getAttribute('data-chart-latest-ts'),
+    };
+    ctx.assert(
+      'schema-data-rejected',
+      afterMoreIncompatibleEvents.points === afterError.points && afterMoreIncompatibleEvents.latest === afterError.latest,
+      `incompatible live payload changed chart state (${afterError.points}/${afterError.latest} -> ${afterMoreIncompatibleEvents.points}/${afterMoreIncompatibleEvents.latest})`,
+    );
+  },
+};
+
 // ── 5. Degraded startup ───────────────────────────────────────────────────────
 
 const degradedStartup: Journey = {
@@ -227,6 +296,7 @@ const degradedStartup: Journey = {
     if (page) {
       const deadline = Date.now() + 5000;
       let seenWarning = false;
+      let recovered = false;
       while (Date.now() < deadline) {
         const hasWarning =
           (await page.getByText(/Couldn't (load|refresh) metrics history/).count()) > 0;
@@ -235,10 +305,13 @@ const degradedStartup: Journey = {
           seenWarning = true;
           ctx.log('observation', { kind: 'history-warning-seen' });
         }
-        if (hasCards) break;
+        if (hasCards) {
+          recovered = true;
+          break;
+        }
         await new Promise((r) => setTimeout(r, 200));
       }
-      ctx.assert('recovery-to-live', true, 'live charts rendered after failed initial history load');
+      ctx.assert('recovery-to-live', recovered, 'live charts rendered after failed initial history load');
       void seenWarning;
     }
     await S.waitForState(ctx, 'live');
@@ -262,6 +335,8 @@ export const JOURNEYS: Journey[] = [
   longWatchCadence,
   faultResponse,
   diskGhostCycle,
+  gpuHotplugGap,
+  schemaMismatch,
   degradedStartup,
 ];
 

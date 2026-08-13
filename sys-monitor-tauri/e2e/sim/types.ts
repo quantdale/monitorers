@@ -91,6 +91,9 @@ export interface Journey {
   supportedDrivers: DriverKind[];
   /** Empty array = runs with every persona. */
   personaIds: string[];
+  /** Narrow, journey-scoped allowlist for intentional browser errors. */
+  allowedConsoleErrors?: RegExp[];
+  allowedPageErrors?: RegExp[];
   run: (ctx: SimContext) => Promise<void>;
 }
 
@@ -190,6 +193,8 @@ export interface RunResult {
   assertCount: number;
   assertPassed: number;
   seed: number;
+  /** Non-primary diagnostics such as cleanup or screenshot failures. */
+  diagnostics: string[];
   artifacts: {
     outDir: string;
     jsonl: string;
