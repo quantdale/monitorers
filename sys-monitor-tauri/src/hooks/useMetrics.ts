@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type {
@@ -21,7 +21,7 @@ export const MAX_HISTORY = 3600;
  */
 const PRUNE_GRACE_MS = 5000;
 
-export const EXPECTED_SCHEMA_VERSION = 4;
+export const EXPECTED_SCHEMA_VERSION = 5;
 
 export const SCHEMA_MISMATCH_MESSAGE =
   'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
@@ -87,7 +87,6 @@ export function mergeDiskHistory(
         read_mb_s: update.read_mb_s,
         write_mb_s: update.write_mb_s,
         avg_response_ms: update.avg_response_ms,
-        temp_c: update.temp_c ?? disk.temp_c ?? null,
         last_seen_ts: now,
       });
     } else if (now - (disk.last_seen_ts ?? now) <= PRUNE_GRACE_MS) {
@@ -112,7 +111,6 @@ export function mergeDiskHistory(
       read_mb_s: snapshot.read_mb_s,
       write_mb_s: snapshot.write_mb_s,
       avg_response_ms: snapshot.avg_response_ms,
-      temp_c: snapshot.temp_c ?? null,
       last_seen_ts: now,
     });
   }
@@ -251,8 +249,8 @@ export function appendSnapshotToHistory(
     cpu_temp_c: snapshot.cpu_temp_c ?? previous.cpu_temp_c ?? null,
     mem: appendToHistory(previous.mem, snapshot.mem, MAX_HISTORY),
     disks: mergeDiskHistory(previous.disks, snapshot.disks, timestampLength),
-    net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kb, MAX_HISTORY),
-    net_sent: appendToHistory(previous.net_sent, snapshot.net_sent_kb, MAX_HISTORY),
+    net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kib_s, MAX_HISTORY),
+    net_sent: appendToHistory(previous.net_sent, snapshot.net_sent_kib_s, MAX_HISTORY),
     gpus: mergeGpuHistory(previous.gpus, snapshot.gpus, timestampLength),
   };
 }
@@ -289,8 +287,8 @@ export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = D
     cpu_temp_c: snapshot.cpu_temp_c ?? null,
     mem: [snapshot.mem],
     disks: mergeDiskHistory([], snapshot.disks, 1),
-    net_recv: [snapshot.net_recv_kb],
-    net_sent: [snapshot.net_sent_kb],
+    net_recv: [snapshot.net_recv_kib_s],
+    net_sent: [snapshot.net_sent_kib_s],
     gpus: mergeGpuHistory([], snapshot.gpus, 1),
   };
 }
@@ -307,7 +305,6 @@ function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
     disks: (payload.disks ?? []).map((disk) => ({
       ...disk,
       values: (disk.values ?? []).map(normalizeMetricValue),
-      temp_c: disk.temp_c ?? null,
       last_seen_ts: now,
     })),
     gpus: (payload.gpus ?? []).map((gpu) => ({
@@ -459,13 +456,16 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     };
   }, []);
 
-  if (!history) return { metrics: null, historyLoadError };
-
-  const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
-  const timestamps = sliceWindow(history.timestamps, history.timestamps, window);
-
-  return {
-    metrics: {
+  // Derived windowed slice, memoized so the returned `metrics` object (and
+  // every channel array inside it) keeps a stable identity across renders
+  // that don't change the underlying data — drag start/stop, sidebar
+  // toggles, selector open/close — so downstream chart cards only recompute
+  // when a tick actually landed.
+  const metrics = useMemo<SlicedHistory | null>(() => {
+    if (!history) return null;
+    const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
+    const timestamps = sliceWindow(history.timestamps, history.timestamps, window);
+    return {
       timestamps,
       cpu: sliceWindow(history.cpu, history.timestamps, window),
       latestCpu,
@@ -477,7 +477,6 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       disks: history.disks.map((disk) => ({
         ...disk,
         values: sliceWindow(disk.values, history.timestamps, window),
-        temp_c: disk.temp_c ?? null,
       })),
       net_recv: sliceWindow(history.net_recv, history.timestamps, window),
       net_sent: sliceWindow(history.net_sent, history.timestamps, window),
@@ -487,7 +486,8 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         latest: latestGpu[gpu.key] ?? [...gpu.values].reverse().find((value) => value != null) ?? 0,
       })),
       collectorError,
-    },
-    historyLoadError,
-  };
+    };
+  }, [history, memGb, latestCpu, latestGpu, collectorError, windowSeconds]);
+
+  return { metrics, historyLoadError };
 }

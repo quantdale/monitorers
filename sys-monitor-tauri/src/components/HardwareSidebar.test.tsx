@@ -138,7 +138,7 @@ describe('HardwareSidebar (render)', () => {
 
     act(() => {
       root = createRoot(container);
-      root.render(React.createElement(HardwareSidebar, { open: true, profile: p, metrics: null }));
+      root.render(React.createElement(HardwareSidebar, { open: true, profile: p, memTotalGb: null }));
     });
 
     expect(container.textContent).toContain('Intel Core i7');
@@ -152,7 +152,7 @@ describe('HardwareSidebar (render)', () => {
 
     act(() => {
       root = createRoot(container);
-      root.render(React.createElement(HardwareSidebar, { open: true, profile: null, metrics: null }));
+      root.render(React.createElement(HardwareSidebar, { open: true, profile: null, memTotalGb: null }));
     });
 
     expect(container.textContent).toContain('Detecting hardware');

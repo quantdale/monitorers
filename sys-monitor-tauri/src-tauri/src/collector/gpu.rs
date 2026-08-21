@@ -695,6 +695,37 @@ mod tests {
         assert_eq!(entries.len(), 2);
     }
 
+    // --- merge_gpu_utilization_without_vendor_map (WMI-unavailable fallback) ---
+
+    #[test]
+    fn test_merge_without_vendor_map_emits_one_unknown_class_entry_per_luid() {
+        let mut totals = HashMap::new();
+        totals.insert("0x00017A00".to_string(), 30.0);
+        totals.insert("0x00017B00".to_string(), 45.0);
+        let entries = merge_gpu_utilization_without_vendor_map(&totals);
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|(_, _, class, _)| *class == GpuClass::Unknown),
+            "without a vendor map no card may claim a vendor"
+        );
+        let utils: Vec<f64> = entries.iter().map(|(_, _, _, u)| *u).collect();
+        assert!(utils.contains(&30.0) && utils.contains(&45.0));
+    }
+
+    #[test]
+    fn test_merge_without_vendor_map_names_by_luid_and_clamps_util() {
+        // Engine utilizations are summed per LUID before this function runs;
+        // an over-100 sum must clamp rather than render a >100% chart point.
+        let mut totals = HashMap::new();
+        totals.insert("0x00017D0F".to_string(), 250.0);
+        let entries = merge_gpu_utilization_without_vendor_map(&totals);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1, "GPU 0x00017D0F");
+        assert_eq!(entries[0].3, 100.0);
+    }
+
     // --- classify_luid ---
 
     #[test]

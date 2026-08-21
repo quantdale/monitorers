@@ -14,11 +14,11 @@ Tracked, non-gitignored documentation (`.cursorrules`, root `CLAUDE.md`) that st
 - **THEN** that count matches the actual output of `cargo test --verbose` / `npm test -- --run` as of the latest merge
 
 ### Requirement: .cursorrules accurately describes the real CI pipeline
-`.cursorrules`' CI section SHALL describe the CI jobs and checks that actually run in `.github/workflows/rust.yml`, including all three jobs (`rust-test`, `rust-lint`, `frontend`) and every check each job performs.
+`.cursorrules`' CI section SHALL describe the checks that actually run in `.github/workflows/rust.yml`: the `rust` job (fmt, feature-matrix tests, clippy, audit via the canonical `verify:rust` lane), the `frontend` job (audit, typecheck, tests, build via `verify:frontend`), plus the Windows production-executable and tag/manual-dispatch installer jobs.
 
-#### Scenario: CI section lists all three jobs
+#### Scenario: CI section lists the real gates
 - **WHEN** `.cursorrules`' CI section is read
-- **THEN** it describes `rust-test`, `rust-lint` (including `cargo audit`), and `frontend` (including `npm audit` and `tsc --noEmit`), matching the real workflow file
+- **THEN** it describes the canonical verify lanes covering Rust fmt/test/clippy/audit and frontend audit/tsc/tests/build, matching the real workflow file
 
 ### Requirement: README onboarding facts match actual project configuration
 `sys-monitor-tauri/README.md` SHALL state the actual dev server port, actual `src-tauri/src/` file layout, and actual minimum Node.js version required by the toolchain.

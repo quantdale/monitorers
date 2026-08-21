@@ -23,7 +23,10 @@ import { RealAppDriver } from './drivers/RealAppDriver';
 import { runJourney, defaultScenarioFor, type RunSelection } from './engine/runner';
 import { isQuarantined } from './flake-quarantine';
 import { mulberry32 } from './engine/prng';
-import { drawThinkTime, drawDwellTime } from './engine/behavior';
+import { drawThinkTime, drawDwellTime, mistakes, wantsAction } from './engine/behavior';
+import { createReloadGuard, type ReloadWatchTarget } from './engine/reloadGuard';
+import { ClassifiedSimulationError } from './errors';
+import { FREE_ROAM_ACTIONS, planFreeRoamTick } from './engine/freeroam';
 import type { RunOptions, RunResult, SimDriver, SimScenario, SimContext } from './types';
 import { parseSimulationConfig, resolveSimulationIds } from '../../src/sim/simConfig';
 
@@ -81,16 +84,22 @@ const pretendContext = (rng: ReturnType<typeof mulberry32>): SimContext =>
 test.describe('simulation', () => {
   test('determinism: same seed reproduces the identical decision/timing sequence', () => {
     // Two independent PRNG instances from the same seed must produce the same
-    // think/dwell draws and dice rolls — the core "reproduce from run header"
-    // contract (spec "Deterministic, reproducible execution").
-    const draws = (seed: number): number[] => {
+    // think/dwell draws AND the same decisions (mistakes, action dice) — the
+    // core "reproduce from run header" contract (spec "Deterministic,
+    // reproducible execution").
+    const draws = (seed: number): (number | boolean)[] => {
       const rng1 = mulberry32(seed);
       const rng2 = mulberry32(seed);
-      const a = [];
+      const a: (number | boolean)[] = [];
       const ctx1 = pretendContext(rng1);
       const ctx2 = pretendContext(rng2);
       for (let i = 0; i < 40; i += 1) {
-        a.push(drawThinkTime(ctx1), drawDwellTime(ctx2));
+        a.push(
+          drawThinkTime(ctx1),
+          drawDwellTime(ctx2),
+          mistakes(ctx1, 'misdrag'),
+          wantsAction(ctx2, 'toggleMetric'),
+        );
       }
       ctx1.rng.chance(0.5);
       a.push(ctx2.rng.int(1, 100));
@@ -98,6 +107,79 @@ test.describe('simulation', () => {
     };
     expect(draws(42)).toEqual(draws(42));
     expect(draws(42)).not.toEqual(draws(43));
+  });
+
+  test('free-roam: same seed reproduces the identical decision plan', () => {
+    // The free-roam step's contract: fixed draw order ⇒ same seed ⇒ same
+    // plan (which actions each tick wants, plus the wrongClick die).
+    const plan = (seed: number): ReturnType<typeof planFreeRoamTick>[] => {
+      const ctx = pretendContext(mulberry32(seed));
+      return Array.from({ length: 6 }, (_, i) => planFreeRoamTick(ctx, i));
+    };
+    const a = plan(42);
+    expect(plan(42)).toEqual(a);
+    expect(plan(43)).not.toEqual(a);
+    for (const decision of a) {
+      expect(decision.actions.every((kind) => FREE_ROAM_ACTIONS.includes(kind))).toBe(true);
+      expect(typeof decision.wrongClick).toBe('boolean');
+    }
+  });
+
+  test('reload guard: main-frame reload fails fast as harness-defect; child frames and restartApp reloads are tolerated', async () => {
+    class FakeFrame {
+      constructor(public urlValue: string) {}
+      url(): string {
+        return this.urlValue;
+      }
+    }
+    class FakePage implements ReloadWatchTarget {
+      private listeners = new Set<(frame: FakeFrame) => void>();
+      readonly main = new FakeFrame('http://127.0.0.1:5180/?__sim_run=run-x');
+      readonly child = new FakeFrame('about:blank');
+      mainFrame(): FakeFrame {
+        return this.main;
+      }
+      on(_event: 'framenavigated', listener: (frame: FakeFrame) => void): unknown {
+        this.listeners.add(listener);
+        return this;
+      }
+      off(_event: 'framenavigated', listener: (frame: FakeFrame) => void): unknown {
+        this.listeners.delete(listener);
+        return this;
+      }
+      navigate(frame: FakeFrame, url: string): void {
+        frame.urlValue = url;
+        for (const listener of this.listeners) listener(frame);
+      }
+    }
+
+    const page = new FakePage();
+    const guard = createReloadGuard(page);
+
+    // Child-frame navigation (app-internal iframe) never trips the guard.
+    page.navigate(page.child, 'http://127.0.0.1:5180/@vite/client');
+    // An expected reload (driver restartApp) is suspended for its duration.
+    guard.suspend();
+    page.navigate(page.main, 'http://127.0.0.1:5180/?__sim_run=run-x&r');
+    guard.resume();
+
+    let rejection: unknown = null;
+    guard.failure.catch((error) => {
+      rejection = error;
+    });
+    // Vite HMR full reload mid-journey → fail-fast rejection naming the cause.
+    page.navigate(page.main, 'http://127.0.0.1:5180/?__sim_run=run-x&t=0');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rejection).toBeInstanceOf(ClassifiedSimulationError);
+    expect((rejection as ClassifiedSimulationError).failureClass).toBe('harness-defect');
+    expect((rejection as ClassifiedSimulationError).message).toContain('HMR');
+
+    // After dispose (runner teardown) further navigations are inert; the
+    // recorded violation remains drainable exactly once.
+    guard.dispose();
+    page.navigate(page.main, 'http://127.0.0.1:5180/?__sim_run=run-x&t=1');
+    expect(guard.drainViolations()).toHaveLength(1);
+    expect(guard.drainViolations()).toHaveLength(0);
   });
 
   test(`sim matrix (${LANE} lane)`, async () => {

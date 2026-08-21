@@ -114,6 +114,23 @@ export function migrateLegacyGpuCardOrder(
 }
 
 /**
+ * Reorder `order` so the dragged card `activeId` lands at `overId`'s position
+ * (the dnd-kit drag-end contract, matching arrayMove for valid indices).
+ * Returns null when either id is absent or they are equal, signalling the
+ * caller should skip the settings write. The guard keeps a stale drop target
+ * (hardware that vanished from the visible list mid-drag) from silently
+ * corrupting the saved order via arrayMove's negative-index wrap-around.
+ */
+export function moveCardId(order: string[], activeId: string, overId: string): string[] | null {
+  const from = order.indexOf(activeId);
+  const to = order.indexOf(overId);
+  if (from < 0 || to < 0 || from === to) return null;
+  const next = [...order];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
+}
+
+/**
  * True once metrics have arrived but every card is hidden/absent — distinct
  * from still-collecting, so the UI can show "all hidden" instead of leaving the
  * user staring at the loading message with unknown cards.

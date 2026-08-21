@@ -9,6 +9,7 @@
 
 pub mod cadence;
 pub mod collector;
+pub mod error_log;
 pub mod hardware;
 pub mod pdh;
 pub mod sensor;

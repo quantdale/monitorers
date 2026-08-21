@@ -17,10 +17,12 @@ import type {
   AssertionRecord,
   JsonLog,
   FailureClass,
+  ReloadGuardSession,
 } from '../types';
 import type { SimScenario } from '../../../src/sim/mockBackend';
 import { mulberry32 } from './prng';
 import { thinkWait, dwellWait } from './behavior';
+import { ClassifiedSimulationError } from '../errors';
 import {
   classifyFailure,
   writeJsonl,
@@ -145,6 +147,7 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
   let failingStep: string | null = null;
   let currentStep = 'journey';
   const diagnostics: string[] = [];
+  let reloadSession: ReloadGuardSession | null = null;
 
   const appendDiagnostic = (message: string): void => {
     diagnostics.push(message);
@@ -222,8 +225,33 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
 
     currentStep = `journey:${selection.journey.id}`;
     logLine('step-start', { label: currentStep });
-    await selection.journey.run(ctx);
+    // Fail-fast reload guard: a Vite HMR full reload (or stray navigation)
+    // wipes the page mid-journey and previously surfaced as foreign console
+    // errors attributed to the app. Race the journey against the guard so the
+    // defect is attributed to the harness the moment it happens.
+    reloadSession = selection.driver.guardUnexpectedReload?.() ?? null;
+    const guard = reloadSession;
+    const journeyPromise = selection.journey.run(ctx);
+    // No-op consumer: when the reload guard wins the race below, the losing
+    // journey promise may still reject (its page just navigated away) — that
+    // late rejection must not become an unhandled one. The race remains the
+    // real consumer for the normal path.
+    journeyPromise.catch(() => {});
+    if (guard) await Promise.race([journeyPromise, guard.failure]);
+    else await journeyPromise;
     logLine('step-end', { label: currentStep });
+
+    // Belt and braces: a violation recorded but not fatalized through the
+    // race (e.g. it landed between journey completion and this check) still
+    // fails the run as a harness defect.
+    const lateViolations = guard?.drainViolations() ?? [];
+    if (lateViolations.length > 0) {
+      throw new ClassifiedSimulationError(
+        `unexpected page navigation/reload completed during the journey: ${lateViolations.join(' | ')}`,
+        'harness-defect',
+        'config',
+      );
+    }
 
     const outcome = evaluateJourneyOutcome({
       assertions,
@@ -243,8 +271,21 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
     setPrimaryFailure(classified.failureClass, classified.message, currentStep);
   } finally {
     // ── artifact finalization ─────────────────────────────────────────────
+    // Stop watching for reloads before teardown navigations begin.
+    reloadSession?.dispose();
+    reloadSession = null;
     type WithTrace = { stopTrace?: (path: string) => Promise<void> };
     const d = selection.driver as SimDriver & WithTrace;
+
+    // Flush the log BEFORE any cleanup runs: if the process dies or the test
+    // harness times out during screenshot/trace/close below, the partial
+    // run.jsonl (with the reproduction header) still lands on disk. The
+    // final writeJsonl below overwrites this with the complete log.
+    try {
+      writeJsonl(runDir, logs);
+    } catch (error) {
+      appendDiagnostic(`partial jsonl flush failed: ${String(error)}`);
+    }
 
     if (!passed && !screenshotPath) {
       try {
@@ -351,6 +392,9 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
 async function captureFailureScreenshot(driver: SimDriver, runDir: string): Promise<string | null> {
   if (!driver.page) return null;
   const shot = join(runDir, 'failure.png');
-  await driver.page.screenshot({ path: shot, fullPage: true });
-  return shot;
+  // A wedged browser must not hang artifact finalization; bounded like the
+  // driver teardown paths.
+  const timer = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
+  const taken = driver.page.screenshot({ path: shot, fullPage: true }).then(() => shot);
+  return Promise.race([taken, timer]);
 }

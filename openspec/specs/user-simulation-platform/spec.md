@@ -66,8 +66,8 @@ The platform SHALL replace the hardcoded mock in `useMetrics.ts` with a scriptab
 The bridge's default script SHALL reproduce the pre-existing mock behavior (sine-wave metrics, 250 ms ticks, 4:1 history cadence, two disks, two GPUs, schema version 4) such that the existing E2E suite passes against the bridge.
 
 #### Scenario: Existing E2E specs pass against the bridge with no edits
-- **WHEN** the simulation bridge replaces the inline mock and the five existing Playwright specs run unchanged
-- **THEN** all five pass without modification
+- **WHEN** the simulation bridge replaces the inline mock and the existing Playwright specs run unchanged
+- **THEN** all of them pass without modification
 
 ### Requirement: Real packaged app is drivable via CDP attach
 The platform SHALL provide a real-app driver that launches the built Tauri app with WebView2 remote debugging enabled (loopback-only port, set via environment at launch, never via shipped configuration) and attaches Playwright over CDP, enabling journeys to drive the real backend: real Tauri IPC, real `settings.json` persistence, and real sensor data. If CDP attach cannot be made reliable, this driver SHALL be descoped to the exploratory register with a recorded reason rather than shipped flaky.

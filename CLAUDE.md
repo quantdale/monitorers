@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Single app, not a monorepo. Repo root is `monitorers/`; **all code lives in `sys-monitor-tauri/`**. Run every command below from `sys-monitor-tauri/` unless noted. A Windows-only real-time system monitor: a Rust/Tauri v2 backend collects CPU/mem/disk/network/GPU metrics via Win32 PDH/WMI/NVAPI/NVML, streams them over Tauri IPC, and a React + TypeScript (Vite) frontend renders live Recharts area charts with drag-to-reorder cards.
 
-**`.cursorrules` at the repo root is the detailed architectural source of truth** — read it for coding conventions, anti-patterns, and the full invariant list. It is mostly current but has drifted in a few places; where this file and `.cursorrules` disagree, this file (verified against source) wins:
-- The project is **Tauri v2** (`Cargo.toml` `tauri = "2"`, `@tauri-apps/api` v2), not v1. Some `.cursorrules` prose still says v1.
-- Cargo default features are **`["nvapi", "nvml"]`** — both Nvidia paths on by default, not nvapi-only.
-- Card order / view mode / window / hidden cards **are now persisted** via `@tauri-apps/plugin-store` (`useSettings.ts`) — `.cursorrules` claim of "no persistence by design" is stale.
-- CI uses canonical verification scripts plus separate E2E/simulation workflows.
+**`.cursorrules` at the repo root is the detailed architectural source of truth** — read it for coding conventions, anti-patterns, and the full invariant list. It has been reconciled against source (schema version, modular backend layout, plugin-store persistence, cargo features all verified); if this file and `.cursorrules` ever disagree again, trust the source and fix both. Key facts both files agree on:
+- The project is **Tauri v2** (`Cargo.toml` `tauri = "2"`, `@tauri-apps/api` v2).
+- Cargo default features are **`["nvapi", "nvml"]`** — both Nvidia paths on by default (NVML primary, NVAPI fallback).
+- Card order / view mode / window / hidden cards **are persisted** via `@tauri-apps/plugin-store` (`useSettings.ts`) with a versioned migration layer.
+- CI calls the canonical verification scripts (`npm run verify:*`, defined in `scripts/verify.mjs`) plus separate E2E/simulation workflows.
 
 ## Commands (from `sys-monitor-tauri/`)
 
@@ -21,7 +21,7 @@ npm run dev                 # frontend only in browser at http://127.0.0.1:5180 
 npm run tauri build         # production .msi/.exe bundle; does not launch
 npm run build               # tsc + vite build (frontend only)
 npm test -- --run           # frontend tests (Vitest; count intentionally drifts)
-npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (9 tests)
+npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (12 tests)
 npx tsc --noEmit            # frontend type check
 
 cd src-tauri && cargo test                  # Rust tests (Cargo reports the current count)
@@ -43,7 +43,7 @@ Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `
 
 The whole backend is one background thread doing a polling loop. Understanding the concurrency model requires `main.rs` + `snapshot.rs` + `state.rs` + `sensor.rs` + `collector/mod.rs` + `collector/run_loop.rs` together:
 
-- **`main.rs`** — thin Tauri shell: `setup()` spawns the collector thread (which runs `run_collector_loop`), and registers the commands `get_history(window_secs)` and `get_hardware_profile()`.
+- **`main.rs`** — thin Tauri shell: `setup()` spawns the collector thread (which runs `run_collector_loop`), and registers the commands `get_history(window_secs)`, `get_hardware_profile()`, and the simulation-only `sim_store_override()`.
 - **`collector/snapshot.rs`** — the IPC payload structs (`MetricsSnapshot`, `GpuSnapshot`, `DiskSnapshot`, `HistoryPayload`, `GpuHistory`, `DiskHistory`), `SCHEMA_VERSION`, and `build_snapshot` / `build_history_payload`. GPU entries carry stable keys and optional per-device Nvidia telemetry.
 - **`state.rs`** — `CollectorState` (owns all OS handles: sysinfo, `PdhHandles`, WMI, NVAPI/NVML state, the hardware profile) lives on the background thread and is **never behind a Mutex**. `HistoryStore` (ring buffers) is the **only** type behind `Mutex` (aliased `SafeHistoryStore` / `SafeAppState`). `RawPoll` carries one poll's values from I/O to commit.
 - **`collector/`** — `mod.rs` has `new_pdh_gpu_query()`, `poll()` (all slow Win32 I/O, no lock), the granular `commit_cpu` / `commit_gpu` / `commit_disk_network`, and `push_history()`. Submodules: `cpu.rs` (WMI thermal), `disk.rs` (PDH active%/throughput/response + physical-disk enumeration), `gpu.rs` (PDH 3D util + WMI vendor classification), `nvidia.rs` (NVAPI/NVML, feature-gated).
@@ -73,7 +73,7 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
 - Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), and `collector-error` (a `string` message) when the collector thread panics and halts.
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
-- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `4`.** Bump both together when payload shape changes.
+- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `5`.** Bump both together when payload shape changes.
 
 ## Conventions worth internalizing (see `.cursorrules` for the full list)
 - **Add an IPC field**: struct in `collector/snapshot.rs` → `build_snapshot` + `build_history_payload` → mirror in `types/metrics.ts`.

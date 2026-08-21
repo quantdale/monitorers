@@ -13,6 +13,7 @@ pub fn tenths_kelvin_to_celsius_checked(tenths_kelvin: f64) -> Option<f64> {
 }
 
 /// Extract tenths-of-Kelvin from a WMI Variant. Handles UI4, UI8, I4, I8, R4, R8, String.
+/// A non-numeric String is not a reading and yields None (not Some(0.0)).
 pub fn variant_to_tenths_kelvin(v: Option<&wmi::Variant>) -> Option<f64> {
     let tenths = match v? {
         wmi::Variant::UI4(n) => *n as f64,
@@ -21,7 +22,7 @@ pub fn variant_to_tenths_kelvin(v: Option<&wmi::Variant>) -> Option<f64> {
         wmi::Variant::I8(n) => (*n).max(0) as f64,
         wmi::Variant::R4(n) => *n as f64,
         wmi::Variant::R8(n) => *n,
-        wmi::Variant::String(s) => s.parse::<f64>().unwrap_or(0.0),
+        wmi::Variant::String(s) => s.parse::<f64>().ok()?,
         _ => return None,
     };
     Some(tenths)
@@ -114,9 +115,15 @@ mod tests {
             variant_to_tenths_kelvin(Some(&wmi::Variant::String("3232".into()))),
             Some(3232.0)
         );
+    }
+
+    #[test]
+    fn test_variant_to_tenths_kelvin_non_numeric_string_is_none() {
+        // Garbage must not be reported as Some(0.0) — that value only survived
+        // because the downstream Celsius range check rejects -273.15 °C.
         assert_eq!(
             variant_to_tenths_kelvin(Some(&wmi::Variant::String("invalid".into()))),
-            Some(0.0)
+            None
         );
     }
 

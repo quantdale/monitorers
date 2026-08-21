@@ -40,7 +40,6 @@ export interface SimDiskSpec {
   read_mb_s?: number;
   write_mb_s?: number;
   avg_response_ms?: number;
-  temp_c?: number | null;
 }
 
 export interface SimGpuSpec {
@@ -69,7 +68,7 @@ export type HistoryLoadFault = { mode: 'fail' } | { mode: 'slow'; delayMs: numbe
 export interface SimScenario {
   /** Scenario shape version (bump on incompatible changes). */
   version: 1;
-  /** Emitted `schema_version` in snapshots/history. Default 4 (production). */
+  /** Emitted `schema_version` in snapshots/history. Default 5 (production). */
   schema_version?: number;
   /** Mock clock speed factor (1 = real-time 250 ms ticks). */
   speed?: number;
@@ -151,8 +150,8 @@ function gpuWave(name: string): Wave {
 
 /** Default disk specs — byte-for-byte the values of the pre-bridge mock. */
 const DEFAULT_DISKS: SimDiskSpec[] = [
-  { key: 'C:', read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
-  { key: 'D:', read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
+  { key: 'C:', read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2 },
+  { key: 'D:', read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7 },
 ];
 
 const DEFAULT_GPUS: SimGpuSpec[] = [
@@ -163,7 +162,7 @@ const DEFAULT_GPUS: SimGpuSpec[] = [
 export function defaultScenario(): SimScenario {
   return {
     version: 1,
-    schema_version: 4,
+    schema_version: 5,
     speed: 1,
     disks: DEFAULT_DISKS.map((disk) => ({ ...disk })),
     gpus: DEFAULT_GPUS.map((gpu) => ({ ...gpu })),
@@ -267,7 +266,7 @@ export class MockBackend {
     this.gpus = this.scenario.gpus === undefined
       ? DEFAULT_GPUS.map((gpu) => ({ ...gpu }))
       : this.scenario.gpus.map((gpu) => ({ ...gpu }));
-    this.schemaVersion = this.scenario.schema_version ?? 4;
+    this.schemaVersion = this.scenario.schema_version ?? 5;
     this.speed = this.scenario.speed ?? 1;
     this.historyFault = this.scenario.history_fault ?? null;
     this.corruptSettings = this.scenario.corrupt_settings ?? false;
@@ -451,7 +450,6 @@ export class MockBackend {
         read_mb_s: d.read_mb_s ?? wave.base + 4,
         write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
         avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
-        temp_c: d.temp_c ?? ((hashKey(d.key) % 25) + 30),
       };
     });
 
@@ -486,8 +484,8 @@ export class MockBackend {
       mem_used_gb: 6 + 2 * Math.sin(t * 0.1),
       mem_total_gb: 16,
       disks,
-      net_recv_kb: Math.max(0, sinAt({ base: 100, amp: 200, periodFactor: 0.4, phase: 2.5 }, t)),
-      net_sent_kb: Math.max(0, sinAt({ base: 50, amp: 150, periodFactor: 0.4, phase: 3 }, t)),
+      net_recv_kib_s: Math.max(0, sinAt({ base: 100, amp: 200, periodFactor: 0.4, phase: 2.5 }, t)),
+      net_sent_kib_s: Math.max(0, sinAt({ base: 50, amp: 150, periodFactor: 0.4, phase: 3 }, t)),
       gpus,
     };
   }
@@ -532,7 +530,6 @@ export class MockBackend {
           read_mb_s: d.read_mb_s ?? wave.base + 4,
           write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
           avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
-          temp_c: d.temp_c ?? ((hashKey(d.key) % 25) + 30),
           last_seen_ts: now,
         };
       }),

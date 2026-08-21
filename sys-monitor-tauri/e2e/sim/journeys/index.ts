@@ -5,44 +5,9 @@
  * lane drives the packaged app and leaves unsupported steps registered (see
  * the register discipline in e2e/exploratory-register.md).
  */
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import type { Journey, SimContext } from '../types';
+import type { Journey } from '../types';
 import * as S from '../engine/steps';
-
-async function readSettingsShim(ctx: SimContext): Promise<Record<string, unknown>> {
-  const page = ctx.driver.page;
-  if (!page) return {};
-  // Read the per-run localStorage settings namespace synchronously.
-  return (await page.evaluate(
-    (runId) => {
-      try {
-        const raw = localStorage.getItem(`sysmon_sim_settings_${runId}`);
-        return raw ? JSON.parse(raw) : {};
-      } catch {
-        return {};
-      }
-    },
-    ctx.opts.runId
-  )) as Record<string, unknown>;
-}
-
-function readRealSettings(ctx: SimContext): Record<string, unknown> {
-  const d = ctx.driver as unknown as { appDataDir?: string | null };
-  const dir = d.appDataDir;
-  if (!dir) return {};
-  const p = join(dir, 'settings.json');
-  if (!existsSync(p)) return {};
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-async function persistedSettings(ctx: SimContext): Promise<Record<string, unknown>> {
-  return ctx.driver.kind === 'real' ? readRealSettings(ctx) : readSettingsShim(ctx);
-}
+import { freeRoam } from '../engine/freeroam';
 
 // ── 1. First-launch onboarding ────────────────────────────────────────────────
 
@@ -59,11 +24,17 @@ const firstLaunch: Journey = {
     ctx.assert('default-order-cpu-first', ids[0] === 'cpu', `first card should be cpu, got ${ids.join(',')}`);
     ctx.assert('default-memory-second', ids[1] === 'memory', `second card should be memory`);
     // The default order is persisted to the per-run settings store.
-    const persisted = await persistedSettings(ctx);
+    const persisted = await S.persistedSettings(ctx);
     ctx.assert('card-order-persisted', Array.isArray(persisted.cardOrder), 'cardOrder persisted');
     await new Promise((r) => setTimeout(r, 500));
     const again = await S.readCardIds(ctx);
     ctx.assert('order-stable', JSON.stringify(again) === JSON.stringify(ids), 'order stable across re-read');
+
+    // Free-roam epilogue: the persona spends a couple of self-directed ticks
+    // exercising its decision dice (wantsAction/wrongClick/inspectSettings).
+    // Runs AFTER every assertion above, so these deliberate mutations cannot
+    // invalidate the first-launch contract.
+    await freeRoam(ctx, { ticks: 2 });
   },
 };
 
@@ -99,8 +70,8 @@ const customizationRoundtrip: Journey = {
     await S.setWindow(ctx, 300);
     await S.setViewMode(ctx, 'tile');
 
-    // Wait for persistence to settle, then restart.
-    await new Promise((r) => setTimeout(r, 700));
+    // Wait for persistence to actually land (no fixed sleep), then restart.
+    await S.waitForPersistedSettings(ctx, (s) => s.windowSecs === 300 && s.viewMode === 'tile');
     await S.restartApp(ctx);
     await S.waitForState(ctx, 'live');
 
@@ -115,7 +86,7 @@ const customizationRoundtrip: Journey = {
     ctx.assert('restored-hidden', !restored.includes(toHide), `${toHide} still hidden after restart`);
 
     // Persistence layer check (real settings.json on the real driver).
-    const persisted = await persistedSettings(ctx);
+    const persisted = await S.persistedSettings(ctx);
     ctx.assert('persisted-window', persisted.windowSecs === 300, `windowSecs persisted as 300, got ${persisted.windowSecs}`);
     ctx.assert('persisted-view-mode', persisted.viewMode === 'tile', 'viewMode persisted as tile');
   },
@@ -194,13 +165,20 @@ const diskGhostCycle: Journey = {
     const key = diskId.slice('disk_'.length);
 
     await S.injectFault(ctx, { kind: 'disk-remove', key });
-    await new Promise((r) => setTimeout(r, 7000));
-    const during = await S.readCardIds(ctx);
+    // Semantic wait: poll until the ghost TTL prunes the card (no fixed sleep).
+    const during = await S.pollUntil(
+      () => S.readCardIds(ctx),
+      (ids) => !ids.includes(diskId),
+      15_000
+    );
     ctx.assert('disk-hidden', !during.includes(diskId), `${diskId} pruned from view`);
 
     await S.injectFault(ctx, { kind: 'disk-add', key });
-    await new Promise((r) => setTimeout(r, 1500));
-    const restored = await S.readCardIds(ctx);
+    const restored = await S.pollUntil(
+      () => S.readCardIds(ctx),
+      (ids) => ids.includes(diskId),
+      8_000
+    );
     ctx.assert('disk-restored', restored.includes(diskId), `${diskId} restored`);
   },
 };
@@ -329,6 +307,114 @@ const degradedStartup: Journey = {
   },
 };
 
+// ── 6. PDH freeze hold + recovery (mock lane; scripted fault) ─────────────────
+
+const freezeRecovery: Journey = {
+  id: 'fault-freeze-recovery',
+  title: 'Fault response: values hold during a PDH freeze, then resume',
+  supportedDrivers: ['mock'],
+  personaIds: ['sentinel'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const val = async () => {
+      const page = ctx.driver.page;
+      if (!page) return '';
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      // Only the metric value freezes — the card also renders a clock that
+      // keeps ticking through the hold, so compare the percentage alone.
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
+    };
+
+    // 128 ticks ≈ 32 simulated seconds ≈ 4 wall seconds at the lane's 8×
+    // clock — comfortably longer than the sampling latency below.
+    await S.injectFault(ctx, { kind: 'freeze', ticks: 128 });
+    await new Promise((r) => setTimeout(r, 300)); // let a frozen emission render
+    const held = await val();
+    await new Promise((r) => setTimeout(r, 2_000)); // mid-freeze sample
+    const mid = await val();
+    ctx.assert(
+      'values-held-during-freeze',
+      held.length > 0 && held === mid,
+      `cpu value held during freeze (${held.slice(0, 40)})`
+    );
+
+    // Once the freeze budget is spent the pipeline must resume moving.
+    const resumed = await S.pollUntil(val, (v) => v !== held, 12_000);
+    ctx.assert('values-resume-after-freeze', resumed !== held, 'cpu value resumed after freeze');
+  },
+};
+
+// ── 7. Layout persistence: view modes + sidebar order across restart ──────────
+
+const layoutPersistence: Journey = {
+  id: 'layout-persistence',
+  title: 'View-mode switch mid-run survives a restart (DOM + persisted settings)',
+  supportedDrivers: ['mock'],
+  personaIds: ['customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'layout journey requires a page');
+      return;
+    }
+    const listDisplay = () =>
+      page
+        .locator('[data-testid="dashboard-card-list"]')
+        .evaluate((el) => getComputedStyle(el).display);
+    // List rows are fixed-height compact cards (height: 50); default/tile
+    // cards embed a 140px chart and are far taller.
+    const firstCardHeight = () =>
+      page
+        .locator('[data-testid^="metric-card-"]')
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().height);
+
+    // default → tile: the dashboard becomes a two-column grid.
+    await S.setViewMode(ctx, 'tile');
+    await S.pollUntil(listDisplay, (d) => d === 'grid', 5_000);
+    ctx.assert('tile-grid-applied', (await listDisplay()) === 'grid', 'tile view renders a grid');
+
+    // tile → list: cards collapse into fixed-height compact rows.
+    await S.setViewMode(ctx, 'list');
+    await S.pollUntil(firstCardHeight, (h) => h > 0 && h < 80, 5_000);
+    const listHeight = await firstCardHeight();
+    ctx.assert('list-compacts-cards', listHeight > 0 && listHeight < 80, `list card height ${listHeight}px`);
+
+    // Restart: layout comes back exactly as left. Sidebar reorder is NOT
+    // exercised here — the mock harness has no hardware profile, so sidebar
+    // cards never render (see e2e/exploratory-register.md).
+    await S.restartApp(ctx);
+    await S.waitForState(ctx, 'live', 30_000);
+    const restored = await S.persistedSettings(ctx);
+    ctx.assert(
+      'restored-view-mode',
+      restored.viewMode === 'list',
+      `viewMode restored as list, got ${String(restored.viewMode)}`
+    );
+    await S.pollUntil(firstCardHeight, (h) => h > 0 && h < 80, 5_000);
+    const restoredHeight = await firstCardHeight();
+    ctx.assert('restored-list-dom', restoredHeight > 0 && restoredHeight < 80, `restored card height ${restoredHeight}px`);
+  },
+};
+
+// ── 8. Persona free roam: decision dice drive self-directed ticks ─────────────
+
+const personaFreeRoam: Journey = {
+  id: 'persona-free-roam',
+  title: 'Free roam: persona decision dice (wantsAction/wrongClick/inspectSettings) over N ticks',
+  // Mock only: the pointer-drag reorder is tuned to the compressed mock clock;
+  // on the real lane that step self-skips, and the lane stays unregistered
+  // until driven once by hand (exploratory-register discipline).
+  supportedDrivers: ['mock'],
+  personaIds: ['glancer', 'customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    await S.waitForCards(ctx, 3);
+    await freeRoam(ctx, { ticks: 6 });
+  },
+};
+
 export const JOURNEYS: Journey[] = [
   firstLaunch,
   customizationRoundtrip,
@@ -338,6 +424,9 @@ export const JOURNEYS: Journey[] = [
   gpuHotplugGap,
   schemaMismatch,
   degradedStartup,
+  freezeRecovery,
+  layoutPersistence,
+  personaFreeRoam,
 ];
 
 export function getJourney(id: string): Journey {

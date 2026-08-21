@@ -65,11 +65,11 @@ describe('sliceWindow', () => {
 describe('mergeDiskHistory', () => {
   const now = Date.now();
   const existing: DiskHistory[] = [
-    { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, temp_c: 40, last_seen_ts: now },
+    { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: now },
   ];
 
   it('appends new active value to existing disk', () => {
-    const snapshot = [{ key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0, temp_c: 41 }];
+    const snapshot = [{ key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0 }];
     const result = mergeDiskHistory(existing, snapshot, 3);
     expect(result.length).toBe(1);
     expect(result[0].values).toEqual([10, 20, 30]);
@@ -79,8 +79,8 @@ describe('mergeDiskHistory', () => {
 
   it('adds a newly discovered disk null-padded to align with timestamps', () => {
     const snapshot = [
-      { key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0, temp_c: 41 },
-      { key: 'D:', active: 5, read_mb_s: 1, write_mb_s: 0.5, avg_response_ms: 0.8, temp_c: 35 },
+      { key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0 },
+      { key: 'D:', active: 5, read_mb_s: 1, write_mb_s: 0.5, avg_response_ms: 0.8 },
     ];
     const result = mergeDiskHistory(existing, snapshot, 4);
     expect(result.length).toBe(2);
@@ -91,7 +91,7 @@ describe('mergeDiskHistory', () => {
 
   it('preserves a ghost disk within the grace window (frozen)', () => {
     const ghost: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, temp_c: 40, last_seen_ts: Date.now() },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() },
     ];
     const result = mergeDiskHistory(ghost, [], 4);
     expect(result[0].values).toEqual([null, 10, 20, null]);
@@ -99,7 +99,7 @@ describe('mergeDiskHistory', () => {
 
   it('prunes a ghost disk absent past the grace window', () => {
     const stale: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, temp_c: 40, last_seen_ts: Date.now() - 6000 },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() - 6000 },
     ];
     const result = mergeDiskHistory(stale, [], 4);
     expect(result.length).toBe(0);
@@ -107,9 +107,9 @@ describe('mergeDiskHistory', () => {
 
   it('reappearing disk re-aligns its values to the current timestamp length', () => {
     const reappear: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, temp_c: 40, last_seen_ts: Date.now() - 6000 },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() - 6000 },
     ];
-    const snapshot = [{ key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0, temp_c: 41 }];
+    const snapshot = [{ key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0 }];
     const result = mergeDiskHistory(reappear, snapshot, 5);
     expect(result[0].values).toEqual([null, null, 10, 20, 30]);
     expect(result[0].last_seen_ts).toBeGreaterThanOrEqual(Date.now() - 100);
@@ -249,8 +249,8 @@ describe('reconcileHistoryWithLiveEvents', () => {
       mem_used_gb: 1,
       mem_total_gb: 2,
       disks: [],
-      net_recv_kb: 0,
-      net_sent_kb: 0,
+      net_recv_kib_s: 0,
+      net_sent_kib_s: 0,
       gpus: [],
     };
 

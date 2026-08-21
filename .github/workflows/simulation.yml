@@ -111,6 +111,7 @@ jobs:
           key: ${{ runner.os }}-sim-real-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-sim-real-
+            ${{ runner.os }}-cargo-
 
       - name: Install deps
         run: npm ci

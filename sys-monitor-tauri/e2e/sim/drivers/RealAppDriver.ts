@@ -205,14 +205,26 @@ export async function navigateToAppOrigin(page: Page): Promise<void> {
 
 async function validateAppPage(page: Page): Promise<void> {
   await page.waitForSelector('#root', { state: 'attached', timeout: 30_000 });
-  const hasTauriBridge = await page.evaluate(
-    () => typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined'
-  );
-  if (!hasTauriBridge) {
+  const bridge = await page.evaluate(() => ({
+    hasTauriBridge: typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined',
+    // The simulation bridge must NEVER be live here: its presence means the
+    // webview is showing the Vite mock harness (e.g. via the dev-origin
+    // fallback while a stray dev server runs), and the lane would silently
+    // drive mock data instead of the real backend.
+    hasSimBridge: typeof (window as Window & { __SIM__?: unknown }).__SIM__ !== 'undefined',
+  }));
+  if (!bridge.hasTauriBridge) {
     throw new ClassifiedSimulationError(
       'RealAppDriver: app page has no Tauri IPC bridge',
       'harness-defect',
       'cdp',
+    );
+  }
+  if (bridge.hasSimBridge) {
+    throw new ClassifiedSimulationError(
+      'RealAppDriver: mock simulation bridge present on the real-app page (wrong origin/document)',
+      'harness-defect',
+      'isolation',
     );
   }
 }
@@ -393,7 +405,15 @@ export class RealAppDriver implements SimDriver {
     }
     try {
       if (this.workDir && this.ownsWorkDir && !this.options.keepWorkDir) {
-        rmSync(this.workDir, { recursive: true, force: true });
+        // WebView2 may still hold handles for a moment after process death
+        // (icon DB, cache flushes); one bounded retry avoids spurious
+        // harness-defect failures from Windows file locking.
+        try {
+          rmSync(this.workDir, { recursive: true, force: true });
+        } catch {
+          await new Promise((r) => setTimeout(r, 500));
+          rmSync(this.workDir, { recursive: true, force: true });
+        }
         this.workDir = null;
         this.ownsWorkDir = false;
       }

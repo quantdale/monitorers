@@ -8,7 +8,7 @@
  * groups the failure slice (log tail, screenshot, trace/video paths, console
  * capture, app stderr) under the run directory.
  */
-import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, renameSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { JsonLog, RunResult } from '../types';
 import { ClassifiedSimulationError } from '../errors';
@@ -18,10 +18,22 @@ export interface ConsoleCapture {
   pageErrors: string[];
 }
 
+/**
+ * Atomic file write: temp file + rename on the same volume, so a crash or
+ * process kill mid-write can never leave a truncated artifact behind (CI
+ * uploads these files; a half-written run.jsonl breaks the reproduce
+ * contract it exists to serve).
+ */
+export function writeAtomic(path: string, data: string): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, data, 'utf8');
+  renameSync(tmp, path);
+}
+
 export function writeJsonl(runDir: string, lines: JsonLog[]): string {
   const path = join(runDir, 'run.jsonl');
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+  writeAtomic(path, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   return path;
 }
 
@@ -55,10 +67,9 @@ ${r.failureMessage ?? ''}`
   </testsuite>`;
     })
     .join('\n');
-  writeFileSync(
+  writeAtomic(
     path,
-    `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites tests="${results.length}" failures="${results.filter((r) => !r.passed).length}">\n${suites}\n</testsuites>\n`,
-    'utf8'
+    `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites tests="${results.length}" failures="${results.filter((r) => !r.passed).length}">\n${suites}\n</testsuites>\n`
   );
   return path;
 }
@@ -82,12 +93,11 @@ export function writeHtml(runDir: string, results: RunResult[]): string {
       </tr>`;
     })
     .join('\n');
-  writeFileSync(
+  writeAtomic(
     path,
     `<!doctype html><html><head><meta charset="utf-8"><title>Simulation run report</title>
 <style>body{font-family:system-ui;margin:24px;background:#111;color:#ddd}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:6px 10px;font-size:13px;text-align:left}th{background:#222}</style>
-</head><body><h2>Simulation run — ${results.length} journey(s)</h2><table><tr><th>journey</th><th>persona</th><th>driver</th><th>result</th><th>class</th><th>duration</th><th>asserts</th><th>seed</th><th>message</th></tr>\n${rows}\n</table></body></html>\n`,
-    'utf8'
+</head><body><h2>Simulation run — ${results.length} journey(s)</h2><table><tr><th>journey</th><th>persona</th><th>driver</th><th>result</th><th>class</th><th>duration</th><th>asserts</th><th>seed</th><th>message</th></tr>\n${rows}\n</table></body></html>\n`
   );
   return path;
 }
@@ -172,7 +182,7 @@ export function writeTriageBundle(input: TriageBundleInput): string {
     '## reproduce',
     `run the failing journey with the logged seed (see run.jsonl header).`,
   ].join('\n');
-  writeFileSync(join(triageDir, 'TRIAGE.md'), manifest + '\n', 'utf8');
+  writeAtomic(join(triageDir, 'TRIAGE.md'), manifest + '\n');
   copied.push(join(triageDir, 'TRIAGE.md'));
 
   void jsonl;

@@ -11,9 +11,10 @@
  * fixtures) so mock and real lanes share one driver shape.
  */
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import type { SimDriver, DriverLaunchResult } from '../types';
+import type { SimDriver, DriverLaunchResult, ReloadGuardSession } from '../types';
 import type { SimFault, SimScenario } from '../../../src/sim/mockBackend';
 import { ClassifiedSimulationError } from '../errors';
+import { createReloadGuard, type ReloadGuard } from '../engine/reloadGuard';
 
 export const MOCK_BASE_URL = 'http://127.0.0.1:5180';
 
@@ -28,6 +29,8 @@ export class MockHarnessDriver implements SimDriver {
 
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
+  /** Unexpected-reload (HMR) guard armed for the launched page. */
+  private reloadGuard: ReloadGuard | null = null;
 
   async launch(
     runId: string,
@@ -79,16 +82,33 @@ export class MockHarnessDriver implements SimDriver {
         'config',
       );
     }
+    // Arm the HMR/reload guard only AFTER the initial goto + handoff: the
+    // launch navigation itself is expected; anything from here on is not.
+    this.reloadGuard = createReloadGuard(page);
     return { page, appStderrPath: null };
   }
 
-    /**
+  /** Rejects if `p` does not settle within `ms` — bounds teardown against a
+   *  wedged browser, which otherwise eats the whole test budget. */
+  private async bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    try {
+      return await Promise.race([p, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * Stops context tracing and saves the trace to `tracePath`. Note: stopTrace
    * must be called before `close()` (which flushes video and shuts the browser).
    */
   async stopTrace(tracePath: string): Promise<void> {
     if (!this.context) return;
-    await this.context.tracing.stop({ path: tracePath });
+    await this.bounded(this.context.tracing.stop({ path: tracePath }), 15_000, 'tracing.stop');
   }
 
   async injectFault(fault: SimFault): Promise<boolean> {
@@ -104,18 +124,33 @@ export class MockHarnessDriver implements SimDriver {
     await this.page.evaluate((x) => window.__SIM__?.backend.setSpeed(x), factor);
   }
 
+  /** Exposes the armed guard to the runner (see SimDriver contract). */
+  guardUnexpectedReload(): ReloadGuardSession {
+    if (!this.reloadGuard) throw new Error('guardUnexpectedReload: driver has no launched page');
+    const guard = this.reloadGuard;
+    return { failure: guard.failure, dispose: guard.dispose, drainViolations: guard.drainViolations };
+  }
+
   async restartApp(): Promise<void> {
     if (!this.page) return;
     // Same context ⇒ same localStorage namespace ⇒ settings persist; the
-    // addInitScript re-installs the scenario for the fresh page.
-    await this.page.reload({ waitUntil: 'domcontentloaded' });
+    // addInitScript re-installs the scenario for the fresh page. This reload
+    // is driver-initiated, so the HMR guard is suspended for its duration.
+    this.reloadGuard?.suspend();
+    try {
+      await this.page.reload({ waitUntil: 'domcontentloaded' });
+    } finally {
+      this.reloadGuard?.resume();
+    }
   }
 
   async close(): Promise<void> {
     const errors: string[] = [];
+    this.reloadGuard?.dispose();
+    this.reloadGuard = null;
     if (this.context) {
       try {
-        await this.context.close();
+        await this.bounded(this.context.close(), 15_000, 'context.close');
       } catch (error) {
         errors.push(`context close failed: ${String(error)}`);
       }
@@ -123,7 +158,7 @@ export class MockHarnessDriver implements SimDriver {
     }
     if (this.browser) {
       try {
-        await this.browser.close();
+        await this.bounded(this.browser.close(), 15_000, 'browser.close');
       } catch (error) {
         errors.push(`browser close failed: ${String(error)}`);
       }

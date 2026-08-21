@@ -63,6 +63,13 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
             return HashMap::new();
         }
 
+        // Allocate 3× the byte size PDH reported in the sizing call. The
+        // instance list can grow between the two calls (a new GPU engine
+        // process, a hot-plugged disk), and PDH then needs more than
+        // `buffer_size` bytes — without headroom the second call fails with
+        // PDH_MORE_DATA and the entire tick's readings would be dropped.
+        // Rounded up to whole u64s so `backing` can be cast to the aligned
+        // item array below.
         let u64_count = (buffer_size as usize * 3).div_ceil(8);
         let mut backing: Vec<u64> = vec![0u64; u64_count];
         let mut actual_buf_size: u32 = (u64_count * 8) as u32;

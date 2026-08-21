@@ -24,7 +24,7 @@ sort by original index. Secondary series and null gaps remain aligned.
 
 ## Card content module
 `src/cards/` — the pure-ish presentation layer for dashboard cards:
-`renderCardContent(id, { metrics, viewMode, hasNvidiaData })` maps a card id
+`renderCardContent({ id, metrics, viewMode, hasNvidiaData })` maps a card id
 to the `SortableCard` that renders it (or null when the metric is absent),
 and `formatters.ts` holds every value formatter and badge style. App.tsx
 stays layout/drag/settings glue and never formats values itself.

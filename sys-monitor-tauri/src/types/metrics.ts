@@ -15,7 +15,6 @@ export interface DiskSnapshot {
   read_mb_s: number;
   write_mb_s: number;
   avg_response_ms: number;
-  temp_c?: number | null;
 }
 
 export interface GpuSnapshot {
@@ -39,8 +38,8 @@ export interface MetricsSnapshot {
   mem_used_gb: number;
   mem_total_gb: number;
   disks: DiskSnapshot[];
-  net_recv_kb: number;
-  net_sent_kb: number;
+  net_recv_kib_s: number;
+  net_sent_kib_s: number;
   gpus: GpuSnapshot[];
 }
 
@@ -50,7 +49,6 @@ export interface DiskHistory {
   read_mb_s: number;
   write_mb_s: number;
   avg_response_ms: number;
-  temp_c?: number | null;
   /**
    * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
    * this disk was last seen in a live snapshot. Not part of the Rust IPC

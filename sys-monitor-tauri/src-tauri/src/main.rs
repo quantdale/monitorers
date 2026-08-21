@@ -71,6 +71,36 @@ fn emit_hardware_profile_ready(app_handle: &tauri::AppHandle, stopping: &AtomicB
     }
 }
 
+/// Best-effort append of a fatal collector error to `collector-error.log` in
+/// the app-data directory, so a crash leaves a trace that survives relaunch
+/// (stderr is invisible in a windowed release build). Never panics; any I/O
+/// failure is reported once on stderr and otherwise ignored.
+fn persist_collector_error(app_handle: &tauri::AppHandle, msg: &str) {
+    let unix_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = sys_monitor_tauri::error_log::format_error_line(unix_secs, msg);
+    let result = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())
+        .and_then(|dir| {
+            sys_monitor_tauri::error_log::append_capped(
+                &dir.join(sys_monitor_tauri::error_log::ERROR_LOG_FILE),
+                &line,
+                sys_monitor_tauri::error_log::ERROR_LOG_CAP_BYTES,
+            )
+            .map_err(|e| e.to_string())
+        });
+    if let Err(error) = result {
+        static PERSIST_ERROR: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        PERSIST_ERROR.get_or_init(|| {
+            eprintln!("[Collector] could not persist collector-error log: {error}");
+        });
+    }
+}
+
 /// Reconcile the sidebar profile with the stable identities currently present
 /// in the committed dashboard snapshot. This is intentionally metadata-only:
 /// all PDH/WMI/sysinfo work remains on the collector thread and outside the
@@ -312,6 +342,7 @@ fn main() {
                             }
                         },
                         |msg| {
+                            persist_collector_error(&app_handle, msg);
                             if let Err(error) = app_handle.emit("collector-error", msg) {
                                 static COLLECTOR_ERROR_EMIT_ERROR: std::sync::OnceLock<()> =
                                     std::sync::OnceLock::new();
@@ -331,6 +362,10 @@ fn main() {
                     eprintln!("[Collector] background thread panicked: {:?}", e);
                     // Best-effort: emit a collector-error so the frontend knows.
                     let app_handle_for_error = app_handle.clone();
+                    persist_collector_error(
+                        &app_handle_for_error,
+                        "metrics collection stopped — restart the app",
+                    );
                     if !stop_flag.load(Ordering::Relaxed) {
                         if let Err(emit_error) = app_handle_for_error.emit(
                             "collector-error",
@@ -435,10 +470,9 @@ mod tests {
                 read_mb_s: 0.0,
                 write_mb_s: 0.0,
                 avg_response_ms: 0.0,
-                temp_c: None,
             }],
-            net_recv_kb: 0.0,
-            net_sent_kb: 0.0,
+            net_recv_kib_s: 0.0,
+            net_sent_kib_s: 0.0,
             gpus: vec![GpuSnapshot {
                 key: "gpu-new".to_string(),
                 name: "Intel Arc A770".to_string(),

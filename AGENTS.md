@@ -4,10 +4,10 @@ Windows-only real-time system monitor: Rust/Tauri v2 backend (Win32 PDH/WMI/NVML
 
 ## Instruction sources
 
-- `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both have drifted from source; where they disagree, trust the source. Verified stale claims:
-  - Schema version is **4**, not 2 or 3 (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
-  - The backend is no longer a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `src/bin/cadence_probe.rs`.
-  - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store` — the "no persistence by design" claim is stale.
+- `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both were re-reconciled against source on 2026-08-21; if they ever appear to disagree again, trust the source and fix the docs. Previously-stale claims, now corrected in all three files:
+  - Schema version is **4** (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
+  - The backend is not a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `src/bin/cadence_probe.rs`.
+  - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store`.
   - Cargo default features are `["nvapi", "nvml"]`.
 
 ## Commands (from `sys-monitor-tauri/`)
@@ -37,14 +37,14 @@ reproducible from the run header
 cargo test                # test count is reported by Cargo; do not hard-code it in docs
 cargo test collector::disk   # one module
 cargo fmt -- --check      # CI-enforced; run `cargo fmt` first if it fails
-cargo clippy -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
+cargo clippy --all-targets --all-features -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
 cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (>=60s)
 cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 ```
 
 ## CI gate (never commit failing; CI runs the same checks)
 
-- Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo audit`
+- Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo audit`
 - Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
 - Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is a required PR/push gate in `.github/workflows/simulation.yml`
 - CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane on workflow_dispatch, shipped-config lint).
@@ -66,7 +66,7 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 - Rust params are `snake_case` (`window_secs`); JS **must pass camelCase** (`{ windowSecs }`). Mismatch fails silently — history stays `null`, UI hangs on "Collecting metrics…".
 - `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-error` (string).
 - Detect Tauri v2 runtime with `window.__TAURI_INTERNALS__`, **not** `window.__TAURI__`.
-- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **4**. Bump both together when the payload shape changes.
+- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **5**. Bump both together when the payload shape changes.
 
 ## Frontend conventions
 

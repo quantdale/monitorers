@@ -120,7 +120,12 @@ pub fn new_pdh_gpu_query() -> Option<crate::state::PdhHandles> {
 
         // First collect — establishes the baseline (value₁). Real readings
         // start on the second poll. The first result is always 0%, by design.
-        let _ = PdhCollectQueryData(query);
+        let baseline_status = PdhCollectQueryData(query);
+        if baseline_status != 0 {
+            eprintln!(
+                "[PDH] initial PdhCollectQueryData failed (status {baseline_status:#x}) — first readings may read 0%."
+            );
+        }
         if gpu_3d_counter.is_some() {
             eprintln!("[PDH] GPU and disk counters initialized successfully.");
         } else {
@@ -229,8 +234,8 @@ pub fn poll(
         total_recv_bytes = total_recv_bytes.saturating_add(data.received());
         total_sent_bytes = total_sent_bytes.saturating_add(data.transmitted());
     }
-    let net_recv_kb_s = normalize_network_rate(total_recv_bytes, refresh_elapsed);
-    let net_sent_kb_s = normalize_network_rate(total_sent_bytes, refresh_elapsed);
+    let net_recv_kib_s = normalize_network_rate(total_recv_bytes, refresh_elapsed);
+    let net_sent_kib_s = normalize_network_rate(total_sent_bytes, refresh_elapsed);
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
     let pdh_collected_ok = collect_pdh(collector);
@@ -267,29 +272,10 @@ pub fn poll(
     };
 
     #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
-    let nvidia_telemetry = {
-        let candidates: Vec<_> = gpu_updates
-            .iter()
-            .filter(|(_, name, _)| gpu::is_nvidia_gpu(name))
-            .collect();
-        match (
-            candidates.as_slice(),
-            nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized),
-        ) {
-            ([(key, _, _)], Some(temp)) => Some(
-                std::iter::once((
-                    key.clone(),
-                    crate::state::NvidiaTelemetry {
-                        temp_c: Some(temp as f64),
-                        ..Default::default()
-                    },
-                ))
-                .collect(),
-            ),
-            (_, Some(_)) => Some(HashMap::new()),
-            _ => Some(HashMap::new()),
-        }
-    };
+    let nvidia_telemetry = nvidia::nvapi_telemetry_for(
+        &gpu_updates,
+        nvidia::query_nvidia_gpu_temp(collector.nvapi_initialized),
+    );
 
     #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
     let nvidia_telemetry = None;
@@ -308,8 +294,8 @@ pub fn poll(
         disk_avg_response_ms,
         disk_display_order,
         pdh_ok: pdh_collected_ok,
-        net_recv_kb_s,
-        net_sent_kb_s,
+        net_recv_kib_s,
+        net_sent_kib_s,
     }
 }
 
@@ -446,8 +432,16 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
     );
     store.mem_used_gb = poll.mem_used_gb;
     store.mem_total_gb = poll.mem_total_gb;
-    push_history(&mut store.net_recv_history, poll.net_recv_kb_s, MAX_HISTORY);
-    push_history(&mut store.net_sent_history, poll.net_sent_kb_s, MAX_HISTORY);
+    push_history(
+        &mut store.net_recv_history,
+        poll.net_recv_kib_s,
+        MAX_HISTORY,
+    );
+    push_history(
+        &mut store.net_sent_history,
+        poll.net_sent_kib_s,
+        MAX_HISTORY,
+    );
 
     // On PDH failure, freeze disk active histories and throughput maps at last-known values.
     // Do not commit empty maps from a failed PdhCollectQueryData.

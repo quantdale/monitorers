@@ -6,6 +6,7 @@ import {
   isCardPresent,
   migrateLegacyGpuCardOrder,
   mergeNewCardIds,
+  moveCardId,
   shouldShowLoadingState,
   type CardMetricsShape,
 } from './cardIdentity';
@@ -251,5 +252,47 @@ describe('shouldShowLoadingState', () => {
     // Caller must pass the filtered visibleCardOrder, not the raw saved cardOrder —
     // this pins that a fully-hidden dashboard shows the message, not a blank canvas.
     expect(shouldShowLoadingState(metrics(), [])).toBe(true);
+  });
+});
+
+// --- moveCardId ---
+
+describe('moveCardId', () => {
+  it('moves a card down to the target position', () => {
+    expect(moveCardId(['cpu', 'memory', 'network'], 'cpu', 'network')).toEqual([
+      'memory',
+      'network',
+      'cpu',
+    ]);
+  });
+
+  it('moves a card up without disturbing the other ids', () => {
+    expect(moveCardId(['a', 'b', 'c', 'd'], 'd', 'b')).toEqual(['a', 'd', 'b', 'c']);
+  });
+
+  it('handles an adjacent swap like arrayMove does', () => {
+    expect(moveCardId(['a', 'b', 'c'], 'a', 'b')).toEqual(['b', 'a', 'c']);
+  });
+
+  it('returns null for a no-op drop onto itself', () => {
+    expect(moveCardId(['cpu', 'memory'], 'cpu', 'cpu')).toBeNull();
+  });
+
+  it('returns null when the dragged id is missing (stale drag source)', () => {
+    expect(moveCardId(['cpu', 'memory'], 'ghost', 'cpu')).toBeNull();
+  });
+
+  it('returns null when the drop target id is missing (vanished mid-drag)', () => {
+    expect(moveCardId(['cpu', 'memory'], 'cpu', 'ghost')).toBeNull();
+  });
+
+  it('returns null on an empty order', () => {
+    expect(moveCardId([], 'cpu', 'memory')).toBeNull();
+  });
+
+  it('does not mutate the input order', () => {
+    const order = ['cpu', 'memory'];
+    moveCardId(order, 'cpu', 'memory');
+    expect(order).toEqual(['cpu', 'memory']);
   });
 });

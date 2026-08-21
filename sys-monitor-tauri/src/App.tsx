@@ -10,7 +10,6 @@ import {
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  arrayMove,
   verticalListSortingStrategy,
   rectSortingStrategy,
   sortableKeyboardCoordinates,
@@ -30,6 +29,7 @@ import {
   computeVisibleCardOrder,
   hasMetricsButNoVisibleCards,
   isCardPresent,
+  moveCardId,
   shouldShowLoadingState,
 } from './cardIdentity';
 import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
@@ -65,6 +65,25 @@ export default function App() {
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const hasNvidiaData = computeHasNvidiaData(metrics);
+  // Memoized derived state: element identity changes only when metrics, view
+  // mode, or visibility change, so unrelated re-renders (drag start/end,
+  // sidebar toggle, selector open/close) reuse the exact card tree and React
+  // skips every SortableCard/Recharts subtree.
+  const visibleCardOrder = useMemo(
+    () => computeVisibleCardOrder(cardOrder, hiddenCardIds, metrics),
+    [cardOrder, hiddenCardIds, metrics],
+  );
+  const cards = useMemo(
+    () =>
+      visibleCardOrder.map((id) => (
+        <ErrorBoundary key={id + '_boundary'}>
+          {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}
+        </ErrorBoundary>
+      )),
+    [visibleCardOrder, metrics, viewMode, hasNvidiaData],
   );
 
   if (settingsError) {
@@ -127,16 +146,14 @@ export default function App() {
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = cardOrder.indexOf(active.id as string);
-      const newIndex = cardOrder.indexOf(over.id as string);
-      save({ cardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
-    }
+    if (!over || active.id === over.id) return;
+    // moveCardId returns null when either id is missing from cardOrder (e.g.
+    // the drop target's hardware vanished mid-drag): skip the write instead
+    // of letting arrayMove's negative-index wrap-around silently corrupt the
+    // persisted order.
+    const next = moveCardId(cardOrder, active.id as string, over.id as string);
+    if (next) save({ cardOrder: next });
   }
-
-  const hasNvidiaData = computeHasNvidiaData(metrics);
-
-  const visibleCardOrder = computeVisibleCardOrder(cardOrder, hiddenCardIds, metrics);
 
   const containerStyle =
     viewMode === 'tile'
@@ -147,7 +164,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} metrics={metrics} />
+      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} memTotalGb={metrics?.mem_total_gb ?? null} />
       <div
         style={{
           flex: 1,
@@ -319,11 +336,7 @@ export default function App() {
               data-active-card-id={draggingCardId ?? ''}
               style={containerStyle}
             >
-              {visibleCardOrder.map(id => (
-                <ErrorBoundary key={id + '_boundary'}>
-                  {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}
-                </ErrorBoundary>
-              ))}
+              {cards}
             </div>
           </SortableContext>
         </DndContext>

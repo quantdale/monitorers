@@ -264,7 +264,7 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
     let expected_on_tick = total_records.div_ceil(4);
     if (on_tick_count as isize - expected_on_tick as isize).unsigned_abs() > 1 {
         failures.push(format!(
-            "on_tick count {on_tick_count} != floor(total/4) {expected_on_tick} ± 1"
+            "on_tick count {on_tick_count} != total/4 (rounded up) {expected_on_tick} ± 1"
         ));
     }
 
@@ -574,5 +574,22 @@ mod tests {
 
         let bad = parse_jsonl(std::io::Cursor::new(b"not json\n"));
         assert!(bad.is_err());
+    }
+
+    // --- percentile (nearest-rank over pre-sorted input) ---
+
+    #[test]
+    fn test_percentile_empty_returns_zero_and_single_passes_through() {
+        assert_eq!(percentile(&[], 0.5), 0);
+        assert_eq!(percentile(&[42], 0.95), 42);
+    }
+
+    #[test]
+    fn test_percentile_bounds_and_median_of_sorted_input() {
+        let sorted = [10_u64, 20, 30, 40, 50];
+        assert_eq!(percentile(&sorted, 0.0), 10);
+        assert_eq!(percentile(&sorted, 0.50), 30);
+        assert_eq!(percentile(&sorted, 0.95), 50);
+        assert_eq!(percentile(&sorted, 1.0), 50);
     }
 }

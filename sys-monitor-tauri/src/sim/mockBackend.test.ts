@@ -33,7 +33,7 @@ describe('MockBackend default parity', () => {
     vi.useRealTimers();
   });
 
-  it('emits 4:1 on_tick ratio snapshots with schema_version 4', () => {
+  it('emits 4:1 on_tick ratio snapshots with schema_version 5', () => {
     vi.useFakeTimers();
     const backend = makeBackend();
     const onTicks: boolean[] = [];
@@ -46,12 +46,12 @@ describe('MockBackend default parity', () => {
     vi.advanceTimersByTime(4 * 250); // 4 simulation seconds
     expect(onTicks).toHaveLength(4);
     expect(onTicks).toEqual([false, false, false, true]);
-    expect([...new Set(versions)]).toEqual([4]);
+    expect([...new Set(versions)]).toEqual([5]);
   });
 
   it('default scenario carries the pre-bridge disk/GPU set', () => {
     const scenario = defaultScenario();
-    expect(scenario.schema_version).toBe(4);
+    expect(scenario.schema_version).toBe(5);
     expect(scenario.speed).toBe(1);
     expect(scenario.disks?.map((d) => d.key)).toEqual(['C:', 'D:']);
     expect(scenario.gpus?.map((g) => [g.name, g.vendor])).toEqual([
@@ -63,7 +63,7 @@ describe('MockBackend default parity', () => {
   it('getHistory returns a 300-point seed matching the pre-bridge shape', async () => {
     const backend = makeBackend();
     const payload = await backend.getHistory();
-    expect(payload.schema_version).toBe(4);
+    expect(payload.schema_version).toBe(5);
     expect(payload.timestamps).toHaveLength(300);
     expect(payload.cpu).toHaveLength(300);
     expect(payload.disks.map((d) => d.key)).toEqual(['C:', 'D:']);

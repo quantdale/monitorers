@@ -131,14 +131,14 @@ When WMI connection attempts are slow or exhausted (all 8 backoff attempts fail)
 - **THEN** CPU, memory, network, and disk polling still produce valid snapshots; only GPU vendor classification and CPU thermal data are absent
 
 ### Requirement: History ring buffers wrap correctly under sustained long-running use
-Each history ring buffer (`cpu_history`, `mem_history`, disk/GPU per-key histories, `timestamps`) SHALL be verified to cap at `HISTORY_LEN` (3600) samples and to drop the oldest sample when a new one is pushed at capacity, without growing unbounded or losing internal consistency between parallel buffers (e.g. `timestamps` and `cpu_history` staying the same length).
+Each history ring buffer (`cpu_history`, `mem_history`, disk/GPU per-key histories, `timestamps`) SHALL be verified to cap at `HISTORY_CAPACITY` (3600, aliased `MAX_HISTORY`) samples and to drop the oldest sample when a new one is pushed at capacity, without growing unbounded or losing internal consistency between parallel buffers (e.g. `timestamps` and `cpu_history` staying the same length).
 
 #### Scenario: Pushing past capacity drops the oldest sample
-- **WHEN** `push_history` is called on a buffer already at `HISTORY_LEN` capacity
-- **THEN** the buffer's length remains at `HISTORY_LEN` and its oldest previous element is no longer present
+- **WHEN** `push_history` is called on a buffer already at `HISTORY_CAPACITY` capacity
+- **THEN** the buffer's length remains at `HISTORY_CAPACITY` and its oldest previous element is no longer present
 
 #### Scenario: Parallel histories stay length-synchronized over many pushes
-- **WHEN** `timestamps` and `cpu_history` both receive a push on every full-poll tick over a long simulated run exceeding `HISTORY_LEN` ticks
+- **WHEN** `timestamps` and `cpu_history` both receive a push on every full-poll tick over a long simulated run exceeding `HISTORY_CAPACITY` ticks
 - **THEN** both buffers have identical length at every point in the run
 
 ### Requirement: Cold-start and empty states render safely before first data arrives

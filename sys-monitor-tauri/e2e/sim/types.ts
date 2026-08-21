@@ -154,6 +154,20 @@ export interface DriverLaunchResult {
   appStderrPath: string | null;
 }
 
+/**
+ * Session handle for the unexpected-reload (HMR) guard a driver arms for the
+ * launched page. See engine/reloadGuard.ts.
+ */
+export interface ReloadGuardSession {
+  /** Rejects with a harness-defect error when an unexpected main-frame
+   *  navigation/reload is detected. Never resolves on its own. */
+  failure: Promise<never>;
+  /** Stops watching (runner teardown); recorded violations stay drainable. */
+  dispose(): void;
+  /** Returns and clears violations recorded but not yet fatalized. */
+  drainViolations(): string[];
+}
+
 export interface SimDriver {
   readonly kind: DriverKind;
   readonly page: import('@playwright/test').Page | null;
@@ -166,6 +180,14 @@ export interface SimDriver {
   setSpeed(factor: number): Promise<void>;
   /** Stops per-run tracing into the given path (mock driver; no-op elsewhere). */
   stopTrace?(tracePath: string): Promise<void>;
+  /**
+   * Arms the unexpected-reload guard for the launched page: a Vite HMR full
+   * reload (or stray navigation) mid-journey must fail fast as a harness
+   * defect naming the cause, not leak foreign console errors into the app
+   * verdict. Optional — the real lane relaunches processes instead of
+   * reloading pages.
+   */
+  guardUnexpectedReload?(): ReloadGuardSession;
   /** Full app relaunch / page reload with persisted bridge state. */
   restartApp(): Promise<void>;
   /** Tears everything down (app process, browser); flushes videos. */

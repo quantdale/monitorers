@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { isTauri } from '../utils';
@@ -102,5 +102,11 @@ export function useHardwareProfile(): HardwareProfileState {
     };
   }, [retryToken]);
 
-  return { profile, loading, error, retry };
+  // Stable result identity: consumers (App passes `profileState` straight
+  // into the memoized HardwareSidebar) re-render on every metrics tick, and
+  // a fresh object literal here would defeat that memo on each one.
+  return useMemo(
+    () => ({ profile, loading, error, retry }),
+    [profile, loading, error, retry],
+  );
 }

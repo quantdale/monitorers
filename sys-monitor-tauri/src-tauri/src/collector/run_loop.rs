@@ -76,15 +76,12 @@ impl WmiBootstrap {
                     let exponent = self.attempts.saturating_sub(1).min(5);
                     let backoff = (Self::BASE_BACKOFF * 2u32.pow(exponent)).min(Self::MAX_BACKOFF);
                     self.next_attempt = Instant::now() + backoff;
-                    if self.attempts == 1 || self.attempts == Self::MAX_ATTEMPTS {
-                        eprintln!(
-                            "[WMI] attempt {}/{} failed: {:?}; next retry in {:?}",
-                            self.attempts,
-                            Self::MAX_ATTEMPTS,
-                            error,
-                            backoff
-                        );
-                    }
+                    // Every failed attempt logs exactly one line (at most
+                    // MAX_ATTEMPTS total): fully silent middle attempts made
+                    // transient WMI outages undiagnosable from stderr alone.
+                    let attempt = self.attempts;
+                    let max_attempts = Self::MAX_ATTEMPTS;
+                    eprintln!("[WMI] attempt {attempt}/{max_attempts} failed: {error:?}; next retry in {backoff:?}");
                 }
             }
         }

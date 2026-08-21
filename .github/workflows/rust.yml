@@ -114,6 +114,7 @@ jobs:
           key: ${{ runner.os }}-tauri-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-tauri-
+            ${{ runner.os }}-cargo-
 
       - name: Install dependencies
         run: npm ci
@@ -161,6 +162,7 @@ jobs:
           key: ${{ runner.os }}-bundle-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-bundle-
+            ${{ runner.os }}-cargo-
 
       - name: Install dependencies
         run: npm ci

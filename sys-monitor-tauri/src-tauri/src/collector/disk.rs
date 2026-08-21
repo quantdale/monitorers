@@ -83,6 +83,28 @@ pub fn pdh_instance_to_drive_letters(instance: &str) -> Vec<String> {
         .collect()
 }
 
+/// Resolve a PDH PhysicalDisk instance name to the drive letters it shares
+/// with the sysinfo disk list, preserving PDH's letter order. Letters unknown
+/// to sysinfo (e.g. a volume hidden from enumeration) are dropped; an instance
+/// with no surviving letters has no sysinfo-visible disk and yields None.
+/// The caller derives the stable disk key as `letters.join(" ")`. Shared by
+/// `physical_disk_list()` and both loops of `poll_disk()` so the instance →
+/// key mapping cannot drift between the sidebar and dashboard paths.
+fn instance_to_known_letters(
+    instance: &str,
+    known: &HashMap<String, DriveLetterInfo>,
+) -> Option<Vec<String>> {
+    let letters: Vec<String> = pdh_instance_to_drive_letters(instance)
+        .into_iter()
+        .filter(|letter| known.contains_key(letter))
+        .collect();
+    if letters.is_empty() {
+        None
+    } else {
+        Some(letters)
+    }
+}
+
 /// Read \PhysicalDisk(*)\% Idle Time values and invert to active-time %.
 /// active% = 100 - idle%  — same value Task Manager's disk graph displays.
 pub fn query_disk_active_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f64> {
@@ -186,9 +208,12 @@ fn pdh_instance_to_drive_index(instance: &str) -> Option<u32> {
 /// display_name_source is the sysinfo Disk::name() for the first drive letter (for fallback).
 pub type PhysicalDiskEntry = (String, sysinfo::DiskKind, String, Option<u32>);
 
-/// Returns one entry per physical disk (same keys and order as poll_disk). Third element is the
-/// sysinfo disk name for the first drive (used as fallback when WMI model is unavailable).
-/// Used by the hardware profile so the sidebar shows the same number of storage cards as the dashboard.
+/// Returns one entry per physical disk, sorted by key so the order matches
+/// `poll_disk`'s deterministically sorted display order (both feed card lists;
+/// HashMap iteration order must never leak into UI ordering). Third element is
+/// the sysinfo disk name for the first drive (used as fallback when WMI model
+/// is unavailable). Used by the hardware profile so the sidebar shows the same
+/// number of storage cards as the dashboard.
 pub fn physical_disk_list(
     disks: &sysinfo::Disks,
     pdh: &crate::state::PdhHandles,
@@ -197,14 +222,9 @@ pub fn physical_disk_list(
 
     let mut result = Vec::new();
     for (instance_name, _pct_active) in query_disk_active_time(pdh) {
-        let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
-            .into_iter()
-            .filter(|letter| known.contains_key(letter))
-            .collect();
-
-        if mapped_letters.is_empty() {
+        let Some(mapped_letters) = instance_to_known_letters(&instance_name, &known) else {
             continue;
-        }
+        };
 
         let disk_key = mapped_letters.join(" ");
         let kind = mapped_letters
@@ -220,6 +240,7 @@ pub fn physical_disk_list(
         let drive_index = pdh_instance_to_drive_index(&instance_name);
         result.push((disk_key, kind, sysinfo_name, drive_index));
     }
+    result.sort_by(|a, b| a.0.cmp(&b.0));
     result
 }
 
@@ -239,14 +260,9 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
     let mut disk_display_order = Vec::new();
 
     for (instance_name, pct_active) in query_disk_active_time(pdh) {
-        let mapped_letters: Vec<String> = pdh_instance_to_drive_letters(&instance_name)
-            .into_iter()
-            .filter(|letter| known.contains_key(letter))
-            .collect();
-
-        if mapped_letters.is_empty() {
+        let Some(mapped_letters) = instance_to_known_letters(&instance_name, &known) else {
             continue;
-        }
+        };
 
         let disk_key = mapped_letters.join(" ");
         if !disk_active.contains_key(&disk_key) {
@@ -266,13 +282,9 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
 
     // Fallback: match response_times by drive letters in case instance names differ.
     for (instance_name, secs) in &response_times {
-        let letters: Vec<String> = pdh_instance_to_drive_letters(instance_name)
-            .into_iter()
-            .filter(|l| known.contains_key(l))
-            .collect();
-        if letters.is_empty() {
+        let Some(letters) = instance_to_known_letters(instance_name, &known) else {
             continue;
-        }
+        };
         let disk_key = letters.join(" ");
         if !disk_avg_response_ms.contains_key(&disk_key) && disk_active.contains_key(&disk_key) {
             disk_avg_response_ms.insert(disk_key.clone(), secs * 1000.0);
@@ -335,5 +347,72 @@ mod tests {
         assert_eq!(pdh_instance_to_drive_index("2 E: F:"), Some(2));
         assert_eq!(pdh_instance_to_drive_index("_Total"), None);
         assert_eq!(pdh_instance_to_drive_index(""), None);
+    }
+
+    // --- instance_to_known_letters (shared instance → disk-key mapping) ---
+
+    fn known_map(entries: &[(&str, sysinfo::DiskKind, &str)]) -> HashMap<String, DriveLetterInfo> {
+        entries
+            .iter()
+            .map(|(letter, kind, name)| {
+                (
+                    letter.to_string(),
+                    DriveLetterInfo {
+                        kind: *kind,
+                        name: name.to_string(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_instance_to_known_letters_single_drive() {
+        let known = known_map(&[("C:", sysinfo::DiskKind::SSD, "Samsung SSD")]);
+        assert_eq!(
+            instance_to_known_letters("0 C:", &known),
+            Some(vec!["C:".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_instance_to_known_letters_multi_drive_preserves_pdh_order() {
+        let known = known_map(&[
+            ("C:", sysinfo::DiskKind::SSD, "a"),
+            ("D:", sysinfo::DiskKind::HDD, "b"),
+        ]);
+        let letters = instance_to_known_letters("0 C: D:", &known).expect("both letters known");
+        assert_eq!(letters, vec!["C:".to_string(), "D:".to_string()]);
+        // The stable disk key is derived from these letters at both call sites.
+        assert_eq!(letters.join(" "), "C: D:");
+    }
+
+    #[test]
+    fn test_instance_to_known_letters_drops_unknown_volumes() {
+        // D: exists in PDH but not in sysinfo's list — it must be filtered out
+        // while the known letter survives, in original order.
+        let known = known_map(&[("D:", sysinfo::DiskKind::HDD, "b")]);
+        assert_eq!(
+            instance_to_known_letters("0 C: D:", &known),
+            Some(vec!["D:".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_instance_to_known_letters_normalizes_case() {
+        let known = known_map(&[("C:", sysinfo::DiskKind::SSD, "a")]);
+        assert_eq!(
+            instance_to_known_letters("0 c:", &known),
+            Some(vec!["C:".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_instance_to_known_letters_none_without_any_known_volume() {
+        let known = known_map(&[("Z:", sysinfo::DiskKind::SSD, "a")]);
+        assert_eq!(instance_to_known_letters("0 C: D:", &known), None);
+        assert_eq!(instance_to_known_letters("_Total", &known), None);
+        assert_eq!(instance_to_known_letters("1", &known), None);
+        assert_eq!(instance_to_known_letters("", &known), None);
     }
 }

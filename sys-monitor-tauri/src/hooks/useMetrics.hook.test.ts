@@ -20,7 +20,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 function emptyHistoryPayload(): HistoryPayload {
   return {
-    schema_version: 4,
+    schema_version: 5,
     timestamps: [],
     cpu: [],
     cpu_name: 'CPU',
@@ -52,7 +52,7 @@ import { useMetrics, type SlicedHistory } from './useMetrics';
 
 function baseSnapshot(onTick: boolean): MetricsSnapshot {
   return {
-    schema_version: 4,
+    schema_version: 5,
     on_tick: onTick,
     cpu: 42,
     cpu_name: 'CPU',
@@ -61,8 +61,8 @@ function baseSnapshot(onTick: boolean): MetricsSnapshot {
     mem_used_gb: 8,
     mem_total_gb: 16,
     disks: [],
-    net_recv_kb: 0,
-    net_sent_kb: 0,
+    net_recv_kib_s: 0,
+    net_sent_kib_s: 0,
     gpus: [],
   };
 }
@@ -158,7 +158,7 @@ describe('useMetrics (Tauri event wiring)', () => {
     act(() => {
       emit('metrics-update', {
         ...baseSnapshot(true),
-        disks: [{ key: 'C:', active: 12, read_mb_s: 1, write_mb_s: 2, avg_response_ms: 3, temp_c: 40 }],
+        disks: [{ key: 'C:', active: 12, read_mb_s: 1, write_mb_s: 2, avg_response_ms: 3 }],
         gpus: [{ key: 'gpu-a', name: 'GeForce RTX 4050', vendor: 'nvidia', util: 33, temp_c: 55 }],
       });
     });
@@ -302,6 +302,26 @@ describe('useMetrics (Tauri event wiring)', () => {
     await act(async () => { historyRequests[1].resolve(newer); await Promise.resolve(); });
     await act(async () => { historyRequests[0].resolve(older); await Promise.resolve(); });
     expect(result().cpu).toEqual([20]);
+    unmount();
+  });
+
+  it('keeps the metrics object referentially stable across unrelated re-renders', async () => {
+    const { result, rerender, unmount } = renderUseMetrics(60);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    const first = result();
+
+    // A re-render with unchanged inputs must not rebuild the sliced payload…
+    rerender(60);
+    expect(result()).toBe(first);
+
+    // …but a new on_tick snapshot must produce a fresh object.
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    expect(result()).not.toBe(first);
+    expect(result().cpu).toEqual([42, 42]);
+
     unmount();
   });
 

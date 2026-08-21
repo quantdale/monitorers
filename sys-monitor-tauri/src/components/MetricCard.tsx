@@ -1,17 +1,32 @@
+import { lazy, Suspense } from 'react';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-} from 'recharts';
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
 import { computeChartPoints } from '../chartPoints';
 import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
+
+// Recharts (with its d3 tree) is the heaviest dependency: load the chart
+// body off the critical path. Titles, values, badges and the data-chart-*
+// metadata attributes stay synchronous so tests and E2E never wait on this
+// chunk to assert card state.
+const MetricChart = lazy(() => import('./MetricChart').then((m) => ({ default: m.MetricChart })));
+
+/** Accessible placeholder while the chart chunk loads; reserves the exact
+ * chart box so nothing shifts when the real chart mounts. #888 on #1a1a1a
+ * keeps the status text above the WCAG AA 4.5:1 bar. */
+function ChartLoading({ height }: { height: number | '100%' }) {
+  return (
+    <div
+      role="status"
+      aria-label="Rendering chart"
+      style={{ width: '100%', height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <span style={{ color: '#888', fontSize: 11, fontFamily: 'monospace' }}>Rendering chart…</span>
+    </div>
+  );
+}
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -153,36 +168,16 @@ export function MetricCard({
         >
           {hasChart && (
             <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: '100%' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 2, left: 0 }}>
-                <YAxis domain={yDomain} hide />
-                <XAxis dataKey="t" hide />
-                <Area
-                  type="monotone"
-                  dataKey="v"
-                  stroke={color}
-                  fill={color}
-                  fillOpacity={hasSecondary ? 0 : 0.2}
-                  strokeWidth={1.5}
-                  isAnimationActive={false}
-                  dot={false}
-                  connectNulls={false}
-                />
-                {hasSecondary && (
-                  <Area
-                    type="monotone"
-                    dataKey="v2"
-                    stroke={secondaryColor!}
-                    fill={secondaryColor!}
-                    fillOpacity={0}
-                    strokeWidth={1.5}
-                    isAnimationActive={false}
-                    dot={false}
-                    connectNulls={false}
-                  />
-                )}
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<ChartLoading height="100%" />}>
+              <MetricChart
+                data={data}
+                yDomain={yDomain}
+                color={color}
+                secondaryColor={secondaryColor}
+                hasSecondary={hasSecondary}
+                showTimeAxis={false}
+              />
+            </Suspense>
             </div>
           )}
         </div>
@@ -260,49 +255,16 @@ export function MetricCard({
       </div>
       {hasChart && (
         <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: 140 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-            <YAxis domain={yDomain} hide />
-            <XAxis
-              dataKey="t"
-              type="number"
-              domain={['dataMin', 'dataMax']}
-              tickFormatter={(ms: number) =>
-                new Date(ms).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
-              }
-              tick={{ fontSize: 10 }}
-              interval="preserveStartEnd"
-            />
-            <Area
-              type="monotone"
-              dataKey="v"
-              stroke={color}
-              fill={color}
-              fillOpacity={hasSecondary ? 0 : 0.15}
-              strokeWidth={1.5}
-              isAnimationActive={false}
-              dot={false}
-              connectNulls={false}
-            />
-            {hasSecondary && (
-              <Area
-                type="monotone"
-                dataKey="v2"
-                stroke={secondaryColor!}
-                fill={secondaryColor!}
-                fillOpacity={0}
-                strokeWidth={1.5}
-                isAnimationActive={false}
-                dot={false}
-                connectNulls={false}
-              />
-            )}
-          </AreaChart>
-        </ResponsiveContainer>
+        <Suspense fallback={<ChartLoading height={140} />}>
+          <MetricChart
+            data={data}
+            yDomain={yDomain}
+            color={color}
+            secondaryColor={secondaryColor}
+            hasSecondary={hasSecondary}
+            showTimeAxis
+          />
+        </Suspense>
         </div>
       )}
     </div>
