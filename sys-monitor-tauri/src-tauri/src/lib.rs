@@ -16,12 +16,17 @@ pub mod sensor;
 pub mod state;
 
 pub use cadence::{check_records, parse_jsonl, CadenceCheck, CadenceRecord};
+pub use collector::supervisor::{
+    lock_status, supervise, CollectorLifecycleState, CollectorStatus, RecoveryPolicy,
+    SafeCollectorStatus, SessionRunner, SessionSignals, LIFECYCLE_SCHEMA_VERSION,
+    SUPERVISOR_POLL_INTERVAL,
+};
 pub use collector::{
     build_history_payload, build_snapshot, clamp_window_secs, collect_pdh, is_full_poll_tick,
-    physical_disk_list, query_disk_models_wmi, run_collector_loop, slice_aligned_history,
-    slice_history, slice_timestamps, timestamp_window_range, DiskHistory, DiskSnapshot, GpuHistory,
-    GpuSnapshot, HistoryPayload, LoopLimit, MetricsSnapshot, TickTiming, WmiBootstrap,
-    SCHEMA_VERSION, TICK_INTERVAL,
+    physical_disk_list, prime_rate_baselines, query_disk_models_wmi, run_collector_loop,
+    slice_aligned_history, slice_history, slice_timestamps, timestamp_window_range, DiskHistory,
+    DiskSnapshot, GpuHistory, GpuSnapshot, HistoryPayload, LoopLimit, LoopOutcome, MetricsSnapshot,
+    TickTiming, WmiBootstrap, SCHEMA_VERSION, TICK_INTERVAL,
 };
 pub use sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 pub use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};

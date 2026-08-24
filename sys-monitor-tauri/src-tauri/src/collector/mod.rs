@@ -4,6 +4,7 @@ mod gpu;
 pub mod nvidia;
 pub mod run_loop;
 pub mod snapshot;
+pub mod supervisor;
 
 pub use cpu::query_cpu_temp_c;
 pub use disk::{physical_disk_list, query_disk_models_wmi};
@@ -11,7 +12,10 @@ pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 pub use nvidia::query_nvidia_gpu_temp;
-pub use run_loop::{run_collector_loop, LoopLimit, TickTiming, WmiBootstrap, TICK_INTERVAL};
+pub use run_loop::{
+    panic_message_of, run_collector_loop, LoopLimit, LoopOutcome, TickTiming, WmiBootstrap,
+    TICK_INTERVAL,
+};
 pub use snapshot::{
     build_history_payload, build_snapshot, clamp_window_secs, is_full_poll_tick,
     slice_aligned_history, slice_history, slice_timestamps, timestamp_window_range, DiskHistory,
@@ -184,6 +188,16 @@ pub fn collect_pdh(collector: &crate::state::CollectorState) -> bool {
         Some(query) => unsafe { PdhCollectQueryData(query) == 0 },
         None => false,
     }
+}
+
+pub fn prime_rate_baselines(collector: &mut crate::state::CollectorState) -> bool {
+    // One immediate collection establishes the two-sample baseline PDH rate
+    // counters need; combined with the first-deadline offset below, the first
+    // committed post-recovery tick formats a genuine ~250ms delta instead of a
+    // fabricated 0% (fresh-query artifact) or a downtime-aggregating spike.
+    let ok = collect_pdh(collector);
+    collector.sysinfo_networks.refresh(false);
+    ok
 }
 
 /// Run all slow I/O using CollectorState — no lock held. Returns RawPoll with

@@ -2,15 +2,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use sys_monitor_tauri::collector::{
-    collect_pdh, physical_disk_list, run_collector_loop, MetricsSnapshot, WmiBootstrap,
+    physical_disk_list, run_collector_loop, LoopOutcome, MetricsSnapshot, WmiBootstrap,
 };
 use sys_monitor_tauri::hardware::{
     classify_gpu, detect, DiskInfo, DiskKind, GpuInfo, HardwareProfile,
 };
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
-use sys_monitor_tauri::{build_history_payload, clamp_window_secs, HistoryPayload};
+use sys_monitor_tauri::{
+    build_history_payload, clamp_window_secs, lock_status, supervise, CollectorLifecycleState,
+    CollectorStatus, HistoryPayload, RecoveryPolicy, SafeCollectorStatus, SessionRunner,
+    SessionSignals,
+};
 use tauri::{Emitter, Manager, RunEvent};
 
 // ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
@@ -31,11 +36,37 @@ fn get_history(state: tauri::State<SafeAppState>, window_secs: u64) -> HistoryPa
 
 // ── TAURI COMMAND — HARDWARE PROFILE ────────────────────────────────────────
 
-/// Returns the hardware profile (CPU, GPUs, disks) for settings/about panel. None until background thread has run detect().
+/// Returns the hardware profile (CPU, GPUs, disks) for settings/about panel. None until a collector session has run detect().
 #[tauri::command]
 fn get_hardware_profile(state: tauri::State<SafeAppState>) -> Option<HardwareProfile> {
     let s = state.lock().unwrap_or_else(|e| e.into_inner());
     s.profile.clone()
+}
+
+// ── TAURI COMMAND — COLLECTOR LIFECYCLE ─────────────────────────────────────
+
+/// Latest supervised-collector lifecycle status. Lets a late-mounting frontend
+/// learn the current state without waiting for the next transition event.
+#[tauri::command]
+fn get_collector_status(status: tauri::State<SafeCollectorStatus>) -> CollectorStatus {
+    lock_status(&status).clone()
+}
+
+/// Manual retry for an exhausted recovery budget. A request is honored only
+/// while supervision is `Failed`; outside that state it is coalesced to a
+/// no-op and the current lifecycle state is returned so the caller can tell.
+#[tauri::command]
+fn retry_collection(
+    retry: tauri::State<'_, Arc<AtomicBool>>,
+    status: tauri::State<SafeCollectorStatus>,
+) -> CollectorLifecycleState {
+    let current = lock_status(&status);
+    if current.state == CollectorLifecycleState::Failed {
+        drop(current);
+        retry.store(true, Ordering::Relaxed);
+        return CollectorLifecycleState::Failed;
+    }
+    current.state
 }
 
 /// Simulation-only override: the app-data directory for the per-run settings
@@ -99,6 +130,206 @@ fn persist_collector_error(app_handle: &tauri::AppHandle, msg: &str) {
             eprintln!("[Collector] could not persist collector-error log: {error}");
         });
     }
+}
+
+// ── SUPERVISED SESSION RUNNER ─────────────────────────────────────────────────
+
+/// Production `SessionRunner`: launches one real collector session (fresh
+/// `CollectorState`, sensor registry, WMI bootstrap) on its own thread and
+/// reports outcomes back to the supervisor. All OS-facing state is constructed
+/// per session and discarded when the session ends, so a replacement session
+/// never inherits potentially poisoned handles or counters.
+struct TauriSessionRunner {
+    app_handle: tauri::AppHandle,
+    cadence_log: bool,
+}
+
+impl SessionRunner for TauriSessionRunner {
+    fn start(
+        &mut self,
+        _generation: u32,
+        signals: SessionSignals,
+    ) -> std::thread::JoinHandle<LoopOutcome> {
+        let app_handle = self.app_handle.clone();
+        let cadence_log = self.cadence_log;
+        let first_emit = signals.first_emit;
+        let stop_flag = signals.stop;
+
+        std::thread::Builder::new()
+            .name("collector-session".to_string())
+            .spawn(move || {
+                // Wrap the entire session body in catch_unwind so a panic during
+                // state construction, profile detection, or loop startup becomes
+                // a supervised Panicked outcome instead of a silently dead
+                // thread with no user-visible indication.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_session_body(&app_handle, &stop_flag, &first_emit, cadence_log)
+                })) {
+                    Ok(outcome) => outcome,
+                    Err(payload) => LoopOutcome::Panicked(
+                        sys_monitor_tauri::collector::panic_message_of(&payload),
+                    ),
+                }
+            })
+            .expect("spawning a collector session thread must not fail")
+    }
+}
+
+/// One supervised collector session: fresh OS-facing state, bootstrap +
+/// hardware-profile enrichment, then the shared tick loop until stop/limit.
+fn run_session_body(
+    app_handle: &tauri::AppHandle,
+    stop_flag: &AtomicBool,
+    first_emit: &AtomicBool,
+    cadence_log: bool,
+) -> LoopOutcome {
+    // Fresh session-owned OS state. CollectorState::new() must run after
+    // Tauri/winit has initialised COM via CoInitializeEx for PDH/sysinfo init;
+    // the WMI connection is opened lazily on this session thread (MTA affinity).
+    let mut collector_state = CollectorState::new();
+
+    // Build a useful degraded profile before WMI is available. Core
+    // PDH/sysinfo collection must not wait behind WMI startup or retry sleeps.
+    let physical = physical_disk_list(&collector_state.sysinfo_disks, &collector_state.pdh);
+    use sysinfo::DiskKind as SysDiskKind;
+    let disk_infos: Option<Vec<DiskInfo>> = if physical.is_empty() {
+        None
+    } else {
+        Some(
+            physical
+                .into_iter()
+                .map(|(disk_key, kind, sysinfo_name, _drive_index)| {
+                    let k = match kind {
+                        SysDiskKind::SSD => DiskKind::Ssd,
+                        SysDiskKind::HDD => DiskKind::Hdd,
+                        _ => DiskKind::Unknown,
+                    };
+                    DiskInfo {
+                        key: disk_key,
+                        name: sysinfo_name,
+                        kind: k,
+                    }
+                })
+                .collect(),
+        )
+    };
+    collector_state.profile = detect(Some(&collector_state.pdh), None, disk_infos.clone());
+    let profile = &collector_state.profile;
+    println!(
+        "[HardwareProfile] CPU: {:?} — {}",
+        profile.cpu_vendor, profile.cpu_name
+    );
+    for gpu in &profile.gpus {
+        println!(
+            "[HardwareProfile] GPU: {} — {:?} {:?}",
+            gpu.name, gpu.vendor, gpu.kind
+        );
+    }
+    for disk in &profile.disks {
+        println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
+    }
+    {
+        let store = app_handle.state::<SafeHistoryStore>();
+        let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
+        s.profile = Some(collector_state.profile.clone());
+    }
+    emit_hardware_profile_ready(app_handle, stop_flag);
+
+    let mut registry = SensorRegistry::new();
+    registry.register(CpuSensorProvider);
+    // Register GPU polling even when startup discovery reports no GPU; this
+    // permits a later hot-plugged adapter to appear without an application
+    // restart. The provider is cheap when PDH exposes no GPU counter and never
+    // holds the shared history lock.
+    registry.register(GpuSensorProvider);
+
+    let store = app_handle.state::<SafeHistoryStore>();
+    // Cadence records start at the first emitted tick, not at app/WMI/profile
+    // bootstrap, so startup enrichment cannot make the wall-clock SLO appear late.
+    let cadence_epoch = std::cell::Cell::new(None::<std::time::Instant>);
+    let last_timing = std::cell::Cell::new(Default::default());
+    let mut wmi_bootstrap = WmiBootstrap::new();
+    run_collector_loop(
+        &mut collector_state,
+        &mut wmi_bootstrap,
+        &mut registry,
+        &store,
+        None, // production: loop until stopped
+        Some(stop_flag),
+        |timing| last_timing.set(timing),
+        |state, wmi| {
+            // WMI enrichment becomes available independently of the core loop.
+            // The connection remains on this session MTA thread for all future
+            // polls.
+            state.profile = detect(Some(&state.pdh), Some(wmi), disk_infos.clone());
+            let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
+            shared.profile = Some(state.profile.clone());
+            drop(shared);
+            emit_hardware_profile_ready(app_handle, stop_flag);
+        },
+        |snap| {
+            // First successful emission marks the session healthy for the
+            // supervisor's lifecycle reporting.
+            first_emit.store(true, Ordering::Relaxed);
+
+            // The collector's grace/prune logic has already determined the
+            // current stable device set in this snapshot. Keep the sidebar on
+            // that same set and notify the frontend only when metadata changes.
+            let profile_changed = {
+                let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(current) = shared.profile.clone() {
+                    let next = reconcile_profile_with_snapshot(&current, snap);
+                    if next != current {
+                        shared.profile = Some(next);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            if profile_changed {
+                emit_hardware_profile_ready(app_handle, stop_flag);
+            }
+            if cadence_log {
+                let epoch = cadence_epoch.get().unwrap_or_else(|| {
+                    let now = std::time::Instant::now();
+                    cadence_epoch.set(Some(now));
+                    now
+                });
+                let rec = sys_monitor_tauri::cadence::CadenceRecord::from_snapshot(
+                    &store,
+                    snap.on_tick,
+                    epoch.elapsed().as_millis() as u64,
+                    last_timing.get(),
+                );
+                eprintln!("{}", rec.to_json_line());
+            }
+            if let Err(error) = app_handle.emit("metrics-update", snap) {
+                static METRICS_EMIT_ERROR: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+                if !stop_flag.load(Ordering::Relaxed) {
+                    METRICS_EMIT_ERROR.get_or_init(|| {
+                        eprintln!("[Collector] metrics-update delivery failed: {error}");
+                    });
+                }
+            }
+        },
+        |msg| {
+            // Legacy terminal-message channel: persisted + emitted so existing
+            // diagnostics keep working alongside the typed status contract.
+            persist_collector_error(app_handle, msg);
+            if let Err(error) = app_handle.emit("collector-error", msg) {
+                static COLLECTOR_ERROR_EMIT_ERROR: std::sync::OnceLock<()> =
+                    std::sync::OnceLock::new();
+                if !stop_flag.load(Ordering::Relaxed) {
+                    COLLECTOR_ERROR_EMIT_ERROR.get_or_init(|| {
+                        eprintln!("[Collector] collector-error delivery failed: {error}");
+                    });
+                }
+            }
+        },
+    )
 }
 
 /// Reconcile the sidebar profile with the stable identities currently present
@@ -168,35 +399,29 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            // CollectorState::new() must run here (after Tauri/winit has initialised
-            // COM via CoInitializeEx) for PDH and sysinfo init.
-            let mut collector_state = CollectorState::new();
-            let cpu_name = collector_state
+            // One temporary state instance extracts the CPU brand for the
+            // shared HistoryStore. Session-owned state is rebuilt fresh by
+            // every supervised session (see TauriSessionRunner).
+            let probe_state = CollectorState::new();
+            let cpu_name = probe_state
                 .system
                 .cpus()
                 .first()
                 .map(|c| c.brand().to_string())
                 .unwrap_or_default();
-            let cpu_name = if cpu_name.is_empty() {
-                "CPU".to_string()
-            } else {
-                cpu_name
-            };
 
             let history_store = HistoryStore::new(&cpu_name);
             app.manage(SafeHistoryStore::new(history_store));
 
-            let mut registry = SensorRegistry::new();
-            registry.register(CpuSensorProvider);
-            // Register GPU polling even when startup discovery reports no GPU;
-            // this permits a later hot-plugged adapter to appear without an
-            // application restart. The provider is cheap when PDH exposes no
-            // GPU counter and never holds the shared history lock.
-            registry.register(GpuSensorProvider);
+            let policy = RecoveryPolicy::production();
+            app.manage(SafeCollectorStatus::new(CollectorStatus::initial(
+                policy.max_attempts,
+            )));
 
-            let app_handle = app.handle().clone();
-            let stop_flag = std::sync::Arc::new(AtomicBool::new(false));
-            app.manage(stop_flag.clone());
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            app.manage(Arc::clone(&stop_flag));
+            let retry_request = Arc::new(AtomicBool::new(false));
+            app.manage(Arc::clone(&retry_request));
 
             // Layer-2 dev tap (SYSMON_CADENCE_LOG=1): also stream one JSONL
             // cadence record per emit to stderr so the assembled app's cadence
@@ -206,182 +431,67 @@ fn main() {
             // docs/cadence-verification.md (5.1).
             let cadence_log = std::env::var("SYSMON_CADENCE_LOG").is_ok();
 
-            std::thread::spawn(move || {
-                let stop_flag = stop_flag;
-                // Wrap the entire background-thread body in catch_unwind so a
-                // panic during WMI init, profile detection, or loop startup
-                // surfaces as a collector-error instead of silently killing the
-                // thread with no user-visible indication.
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    // Build a useful degraded profile before WMI is available.
-                    // Core PDH/sysinfo collection must not wait behind WMI
-                    // startup or retry sleeps.
-                    let _ = collect_pdh(&collector_state);
-                    let physical =
-                        physical_disk_list(&collector_state.sysinfo_disks, &collector_state.pdh);
-                    use sysinfo::DiskKind as SysDiskKind;
-                    let disk_infos: Option<Vec<DiskInfo>> = if physical.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            physical
-                                .into_iter()
-                                .map(|(disk_key, kind, sysinfo_name, _drive_index)| {
-                                    let k = match kind {
-                                        SysDiskKind::SSD => DiskKind::Ssd,
-                                        SysDiskKind::HDD => DiskKind::Hdd,
-                                        _ => DiskKind::Unknown,
-                                    };
-                                    DiskInfo {
-                                        key: disk_key,
-                                        name: sysinfo_name,
-                                        kind: k,
-                                    }
-                                })
-                                .collect(),
-                        )
+            // Supervised lifecycle: owns exactly one live session, replaces
+            // panicked sessions within the bounded budget, reports every
+            // transition through the typed status contract.
+            let supervisor_handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("collector-supervisor".to_string())
+                .spawn(move || {
+                    let mut runner = TauriSessionRunner {
+                        app_handle: supervisor_handle.clone(),
+                        cadence_log,
                     };
-                    collector_state.profile =
-                        detect(Some(&collector_state.pdh), None, disk_infos.clone());
-                    let profile = &collector_state.profile;
-                    println!(
-                        "[HardwareProfile] CPU: {:?} — {}",
-                        profile.cpu_vendor, profile.cpu_name
-                    );
-                    for gpu in &profile.gpus {
-                        println!(
-                            "[HardwareProfile] GPU: {} — {:?} {:?}",
-                            gpu.name, gpu.vendor, gpu.kind
-                        );
-                    }
-                    for disk in &profile.disks {
-                        println!("[HardwareProfile] Disk: {} — {:?}", disk.name, disk.kind);
-                    }
-                    {
-                        let store = app_handle.state::<SafeHistoryStore>();
-                        let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-                        s.profile = Some(collector_state.profile.clone());
-                    }
-                    emit_hardware_profile_ready(&app_handle, &stop_flag);
-
-                    // The store handle is resolved once before the loop; the loop
-                    // itself is sink-agnostic and lives in the library
-                    // (sys_monitor_tauri::collector::run_loop), so the Tauri app and
-                    // the headless cadence probe share the exact same code path.
-                    let store = app_handle.state::<SafeHistoryStore>();
-                    // Cadence records start at the first emitted tick, not at
-                    // app/WMI/profile bootstrap, so startup enrichment cannot
-                    // make the wall-clock SLO appear late.
-                    let cadence_epoch = std::cell::Cell::new(None::<std::time::Instant>);
-                    let last_timing = std::cell::Cell::new(Default::default());
-                    let mut wmi_bootstrap = WmiBootstrap::new();
-                    run_collector_loop(
-                        &mut collector_state,
-                        &mut wmi_bootstrap,
-                        &mut registry,
-                        &store,
-                        None, // production: loop forever
-                        Some(&*stop_flag),
-                        |timing| last_timing.set(timing),
-                        |state, wmi| {
-                            // WMI enrichment becomes available independently
-                            // of the core loop. The connection remains on this
-                            // collector MTA thread for all future polls.
-                            state.profile = detect(Some(&state.pdh), Some(wmi), disk_infos.clone());
-                            let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
-                            shared.profile = Some(state.profile.clone());
-                            drop(shared);
-                            emit_hardware_profile_ready(&app_handle, &stop_flag);
-                        },
-                        |snap| {
-                            // The collector's grace/prune logic has already
-                            // determined the current stable device set in this
-                            // snapshot. Keep the sidebar on that same set and
-                            // notify the frontend only when metadata changes.
-                            let profile_changed = {
-                                let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
-                                if let Some(current) = shared.profile.clone() {
-                                    let next = reconcile_profile_with_snapshot(&current, snap);
-                                    if next != current {
-                                        shared.profile = Some(next);
-                                        true
-                                    } else {
-                                        false
+                    let status_store = supervisor_handle.state::<SafeCollectorStatus>();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        supervise(
+                            &mut runner,
+                            Arc::clone(&stop_flag),
+                            Arc::clone(&retry_request),
+                            policy,
+                            |status| {
+                                {
+                                    let mut guard = lock_status(&status_store);
+                                    *guard = status.clone();
+                                }
+                                if let Err(error) =
+                                    supervisor_handle.emit("collector-status", status)
+                                {
+                                    static STATUS_EMIT_ERROR: std::sync::OnceLock<()> =
+                                        std::sync::OnceLock::new();
+                                    if !stop_flag.load(Ordering::Relaxed) {
+                                        STATUS_EMIT_ERROR.get_or_init(|| {
+                                            eprintln!(
+                                                "[Supervisor] collector-status delivery failed: {error}"
+                                            );
+                                        });
                                     }
-                                } else {
-                                    false
                                 }
-                            };
-                            if profile_changed {
-                                emit_hardware_profile_ready(&app_handle, &stop_flag);
-                            }
-                            if cadence_log {
-                                let epoch = cadence_epoch.get().unwrap_or_else(|| {
-                                    let now = std::time::Instant::now();
-                                    cadence_epoch.set(Some(now));
-                                    now
-                                });
-                                let rec = sys_monitor_tauri::cadence::CadenceRecord::from_snapshot(
-                                    &store,
-                                    snap.on_tick,
-                                    epoch.elapsed().as_millis() as u64,
-                                    last_timing.get(),
-                                );
-                                eprintln!("{}", rec.to_json_line());
-                            }
-                            if let Err(error) = app_handle.emit("metrics-update", snap) {
-                                static METRICS_EMIT_ERROR: std::sync::OnceLock<()> =
-                                    std::sync::OnceLock::new();
-                                if !stop_flag.load(Ordering::Relaxed) {
-                                    METRICS_EMIT_ERROR.get_or_init(|| {
-                                        eprintln!(
-                                            "[Collector] metrics-update delivery failed: {error}"
-                                        );
-                                    });
-                                }
-                            }
-                        },
-                        |msg| {
-                            persist_collector_error(&app_handle, msg);
-                            if let Err(error) = app_handle.emit("collector-error", msg) {
-                                static COLLECTOR_ERROR_EMIT_ERROR: std::sync::OnceLock<()> =
-                                    std::sync::OnceLock::new();
-                                if !stop_flag.load(Ordering::Relaxed) {
-                                    COLLECTOR_ERROR_EMIT_ERROR.get_or_init(|| {
-                                        eprintln!(
-                                            "[Collector] collector-error delivery failed: {error}"
-                                        );
-                                    });
-                                }
-                            }
-                        },
-                    );
-                }));
-
-                if let Err(e) = result {
-                    eprintln!("[Collector] background thread panicked: {:?}", e);
-                    // Best-effort: emit a collector-error so the frontend knows.
-                    let app_handle_for_error = app_handle.clone();
-                    persist_collector_error(
-                        &app_handle_for_error,
-                        "metrics collection stopped — restart the app",
-                    );
-                    if !stop_flag.load(Ordering::Relaxed) {
-                        if let Err(emit_error) = app_handle_for_error.emit(
+                            },
+                        );
+                    }));
+                    // Insurance: the supervisor itself must never die silently.
+                    if result.is_err() {
+                        eprintln!("[Supervisor] supervisor thread panicked");
+                        persist_collector_error(
+                            &supervisor_handle,
+                            "metrics collection stopped — restart the app",
+                        );
+                        let _ = supervisor_handle.emit(
                             "collector-error",
                             "metrics collection stopped — restart the app",
-                        ) {
-                            eprintln!("[Collector] failed to deliver panic error: {emit_error}");
-                        }
+                        );
                     }
-                }
-            });
+                })
+                .expect("spawning the supervisor thread must not fail");
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_history,
             get_hardware_profile,
+            get_collector_status,
+            retry_collection,
             sim_store_override
         ])
         .build(tauri::generate_context!())
@@ -392,7 +502,7 @@ fn main() {
 
     app.run(move |app_handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            if let Some(stop) = app_handle.try_state::<std::sync::Arc<AtomicBool>>() {
+            if let Some(stop) = app_handle.try_state::<Arc<AtomicBool>>() {
                 stop.store(true, Ordering::Relaxed);
             }
         }
@@ -403,34 +513,6 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    // Kept (asserts the exact error payload string — distinct from the
-    // run_collector_loop panic test in collector/run_loop.rs, which asserts
-    // emit/error counts on the real loop). The previous
-    // test_catch_unwind_catches_synthetic_panic (tests stdlib) and
-    // test_tick_loop_panic_emits_exactly_one_error_and_stops (a hand-rolled
-    // reimplementation of the loop) were deleted as tautological/duplicative.
-
-    #[test]
-    fn test_catch_unwind_error_payload_emitted() {
-        use std::sync::mpsc::channel;
-
-        let (tx, rx) = channel::<String>();
-        let emit_error = |payload: &str| tx.send(payload.to_string()).ok();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            panic!("background thread panicked");
-        }));
-
-        if result.is_err() {
-            emit_error("metrics collection stopped — restart the app");
-        }
-
-        assert_eq!(
-            rx.recv().expect("error payload must be emitted"),
-            "metrics collection stopped — restart the app"
-        );
-    }
-
     #[test]
     fn test_profile_reconciliation_follows_committed_stable_device_set() {
         use super::{
@@ -456,7 +538,7 @@ mod tests {
             }],
         };
         let snapshot = MetricsSnapshot {
-            schema_version: 4,
+            schema_version: 5,
             on_tick: true,
             cpu: 10.0,
             cpu_name: "CPU".to_string(),
@@ -488,5 +570,24 @@ mod tests {
         assert_eq!(next.gpus[0].kind, GpuKind::Discrete);
         assert_eq!(next.disks[0].key, "disk-new");
         assert_eq!(next.disks[0].kind, DiskKind::Unknown);
+    }
+
+    // Retry coalescing is a pure decision over the lifecycle state: honor the
+    // request only in Failed, otherwise report the current state untouched.
+    #[test]
+    fn test_retry_coalescing_decision_is_failed_only() {
+        use super::CollectorLifecycleState;
+        fn should_signal(state: CollectorLifecycleState) -> bool {
+            state == CollectorLifecycleState::Failed
+        }
+        assert!(should_signal(CollectorLifecycleState::Failed));
+        for other in [
+            CollectorLifecycleState::Starting,
+            CollectorLifecycleState::Healthy,
+            CollectorLifecycleState::Recovering,
+            CollectorLifecycleState::Stopping,
+        ] {
+            assert!(!should_signal(other));
+        }
     }
 }
