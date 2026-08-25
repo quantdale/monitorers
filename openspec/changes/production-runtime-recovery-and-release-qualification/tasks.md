@@ -55,9 +55,9 @@
 
 ## 9. Hosted CI
 
-- [ ] 9.1 Push branch; open PR.
-- [ ] 9.2 Watch hosted runs; fix failures; capture run IDs/job outcomes/artifacts as evidence below.
-- [ ] 9.3 Dispatch release-qualification workflow when permissions permit; attach MSI/NSIS qualification evidence.
+- [x] 9.1 Push branch; open PR.
+- [x] 9.2 Watch hosted runs; fix failures; capture run IDs/job outcomes/artifacts as evidence below.
+- [x] 9.3 Dispatch release-qualification workflow when permissions permit; attach MSI/NSIS qualification evidence.
 
 ## Evidence
 
@@ -66,4 +66,7 @@ Local (2026-08-25, this machine):
 - `verify:e2e`: 12 passed. `verify:sim`: matrix green, 16 journey runs in ~5.4 min. `verify:packaged`: PASS (see 8.5). `verify:tauri`: exit 0. Installers built locally and hashed via manifest script (2 artifacts, version-filtered).
 
 Hosted CI:
-- BLOCKED at session time: `git push` fails with `Failed to connect to github.com port 443` (network egress from the development machine to github.com is unavailable; first observed on the initial `git fetch` before any code was written). Retries continue; hosted run IDs/job outcomes will be appended here once push succeeds.
+- PR **#28** open (`agent/monitorers-comprehensive-remediation` → `main`).
+- All PR lanes green at head `aa36e2f`: E2E Verification Harness ✓ (run 32867729073), Simulation ✓ incl. shipped-config lint (run 32867729164), Rust and release ✓ (run 32867729506).
+- Release qualification (tag `v0.1.4-rc1` lane, the designed trigger while the file is not yet on the default branch): **run 32867950233 success** at `aa36e2f` — Build installers ✓, Qualify MSI ✓ (silent install, real-IPC smoke over CDP against the installed binary, clean removal), Qualify NSIS ✓, artifact-integrity manifest ✓ with qualification result `passed`.
+- Qualify failures on earlier candidates were diagnosed as environment regressions and fixed harness-side: WebView2 Runtime ≥150 ignores `WEBVIEW2_*` env vars on elevated hosts (hosted Windows runners run elevated) — fixed via the HKLM `AdditionalBrowserArguments` policy channel written before spawn (`22961a3`, then a spawn-order race fixed in `aa36e2f`); manifest job expected a flat msi//nsis layout that download-artifact does not produce — fixed with a recursive scan. Full narrative in evidence.md.

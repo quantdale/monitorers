@@ -92,7 +92,30 @@
 - Hosted runs at intermediate head `201f7fd`: E2E ✓ success (run 32841068357), Rust-and-release ✓ success (run 32841068350), Simulation ✗ failure (run 32841068418).
 - Simulation failure root cause: the NEW shipped-config fault-surface lint used double-backslash regexes in its PowerShell single-quoted strings (`^\\[features\\]`), so `-notmatch` threw "Cargo.toml missing [features]" on clean sources. Diagnosed from the failed job log; fixed in `ca2cf98`; **Simulation — config lint PASS (11 s)** on HEAD.
 - Hosted runs at HEAD: E2E ✓ pass; Frontend ✓ pass; Snyk ✓ pass; Rust/Simulation/executable lanes in progress at report time (watcher running).
-- Installer qualification triggered via the workflow's designed tag lane (workflow_dispatch requires the file on the default branch): annotated tag **`v0.1.4-rc1`** pushed at campaign HEAD → release-qualification run **32842750871** in progress.
+- Installer qualification triggered via the workflow's designed tag lane (workflow_dispatch requires the file on the default branch): annotated tag **`v0.1.4-rc1`** pushed at campaign HEAD → release-qualification runs per candidate below.
+
+### Qualify-lane failure at Runtime 150+ runners (root-caused & fixed)
+
+- Symptom (runs 32845135279 → 32859315308): both MSI and NSIS qualify jobs failed identically at "Smoke-test the installed executable" — app process alive, window titled "System Monitor", six `msedgewebview2.exe` processes, Evergreen runtime **151.0.4129.86** registered, but the requested `--remote-debugging-port` never listened (CDP timeout). Local dev machine (non-elevated) passed the same driver.
+- Root cause: WebView2 Runtime **150** added security hardening for elevated host processes — `WEBVIEW2_*` environment variables (including `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`) and HKCU policy are intentionally ignored; only HKLM policy and API-passed arguments survive elevation (Microsoft Learn: *Develop secure WebView2 apps → For an elevated host app*; WebView2Feedback #5640/#5645). GitHub-hosted Windows runners execute steps **elevated**, so the env-var channel silently dropped the debug switches.
+- Fix (commit `22961a3`):
+  - `RealAppDriver` mirrors its debug switches into `HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments` (value name `*`) before spawn — the Microsoft-sanctioned channel for elevated hosts — best-effort (access-denied on standard-integrity dev machines falls back to the working env-var channel), removed again in `close()`.
+  - Qualify teardown is now unconditional (launch failures also kill the spawned app, remove the policy value, delete the work dir).
+  - Failure diagnostics dump actual `msedgewebview2.exe` command lines so switch delivery is directly attributable.
+- Separate defect found in the same runs: `installer-manifest.mjs` expected `msi/`+`nsis/` directly under `--bundle`, but download-artifact nests uploads under the artifact name (`bundle-artifacts/windows-installers/msi/…`), failing the manifest job even on artifacts being present; collector now walks recursively (version-token filter retained).
+- Retriggered: tag `v0.1.4-rc1` force-moved to `22961a3`; release-qualification run **32864438234**.
+
+### Run 32864438234 results → spawn-order race + uninstall parsing
+
+- NSIS qualify: **smoke test PASSED** (real IPC, live data, isolated settings, clean exit) — the elevated-host policy channel works end to end. The job then failed in "Uninstall silently and assert removal" with a PowerShell **ParserError**: `QuietUninstallString` is a quoted path, and interpolating it via `"${{ … }}"` into the script body produced invalid syntax.
+- MSI qualify: CDP now came up (`--remote-debugging-port` visible in the browser-process command line) but Playwright's attach failed with "Target page, context or browser has been closed", with the host app and webview tree gone at diagnostic time and a clean app stderr — a WebView2 **browser-process restart over a flag change**: the HKLM value was written AFTER spawn, so on this runner it landed after the loader had already created its environment, and runtime ≥150 restarted the browser over the changed overrides, tearing down the fresh debug server. Whether the write wins the race explains why one lane passed while the other died.
+- Fixes (commit `aa36e2f`): write the policy value BEFORE spawn; record how the spawned app process ended and print it in failure diagnostics; parse the NSIS uninstall command from env-var-passed outputs (verbatim, quote-aware split, `/S` ensured, direct `Start-Process`) instead of string interpolation.
+
+### Final qualification evidence (2026-08-25)
+
+- Tag `v0.1.4-rc1` force-moved to `aa36e2f`; release-qualification run **32867950233: success** — Build installers ✓ · Qualify MSI ✓ (silent install → real-IPC smoke over CDP against the installed binary → clean removal, no orphans) · Qualify NSIS ✓ (incl. user-data retention assertion) · Release manifest ✓ generated and gated on qualification result `passed`, artifact uploaded.
+- PR lanes at `aa36e2f`: E2E Verification Harness ✓ (32867729073), Simulation ✓ incl. shipped-config lint (32867729164), Rust and release ✓ (32867729506).
+- Remaining annotations are non-blocking warnings only (download-artifact SHA pin targets Node 20 runtime; `artifact-name` input accepted by that pinned version).
 
 ## Commits (this campaign)
 
