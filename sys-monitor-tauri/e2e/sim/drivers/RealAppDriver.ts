@@ -265,6 +265,11 @@ export class RealAppDriver implements SimDriver {
     return this.realSettingsPath;
   }
 
+  /** Path of the current run's captured app stderr (diagnostics on failure). */
+  get appStderrPathValue(): string | null {
+    return this.appStderrPath;
+  }
+
   private async initRun(runId: string, outDir: string): Promise<void> {
     const root = this.options.workRoot ?? tmpdir();
     // Reuse an existing work dir on restart so settings.json persists across

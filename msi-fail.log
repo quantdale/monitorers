@@ -1,0 +1,337 @@
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	﻿2026-08-25T13:19:35.1148094Z Current runner version: '2.336.0'
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1173749Z ##[group]Runner Image Provisioner
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1174559Z Hosted Compute Agent
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1175109Z Version: 20260729.566
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1175731Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1176413Z Build Date: 2026-07-29T19:17:02Z
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1177051Z Worker ID: {9ee89df8-e192-4975-af02-ed8127eb61d0}
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1177775Z Azure Region: westus3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1178292Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1180019Z ##[group]Operating System
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1180677Z Microsoft Windows Server 2025
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1181278Z 10.0.26100
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1181780Z Datacenter
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1182266Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1182788Z ##[group]Runner Image
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1183594Z Image: windows-2025-vs2026
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1184499Z Version: 20260818.207.1
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1185864Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260818.207/images/windows/Windows2025-VS2026-Readme.md
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1187520Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260818.207
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1188486Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1189574Z ##[group]GITHUB_TOKEN Permissions
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1191606Z Contents: read
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1192208Z Metadata: read
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1192746Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1194874Z Secret source: Actions
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1195946Z Prepare workflow directory
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1664016Z Prepare all required actions
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.1711453Z Getting action download info
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.4490707Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.5736547Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:35.7297278Z Download action repository 'actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.4099499Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.6545476Z Complete job name: Qualify — MSI install/run/uninstall
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8011271Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8012964Z with:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8013790Z   repository: quantdale/monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8021598Z   token: ***
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8022406Z   ssh-strict: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8023218Z   ssh-user: git
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8024042Z   persist-credentials: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8024965Z   clean: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8025789Z   sparse-checkout-cone-mode: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8026711Z   fetch-depth: 1
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8027500Z   fetch-tags: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8028338Z   show-progress: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8029172Z   lfs: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8029947Z   submodules: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8030778Z   set-safe-directory: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8031702Z   allow-unsafe-pr-checkout: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8032891Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8033673Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.8034528Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.9497601Z Syncing repository: quantdale/monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.9500192Z ##[group]Getting Git version info
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:36.9501347Z Working directory is 'D:\a\monitorers\monitorers'
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.0567009Z [command]"C:\Program Files\Git\bin\git.exe" version
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4262663Z git version 2.55.0.windows.4
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4310944Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4327181Z Temporarily overriding HOME='D:\a\_temp\1ab5478f-94c0-4b06-848e-d6cce932e5fb' before making global git config changes
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4329310Z Adding repository directory to the temporary git global config as a safe directory
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4338588Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\monitorers\monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4904982Z Deleting the contents of 'D:\a\monitorers\monitorers'
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4910272Z ##[group]Determining repository object format
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4912205Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4913544Z ##[group]Initializing the repository
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.4919898Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\monitorers\monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.5769130Z Initialized empty Git repository in D:/a/monitorers/monitorers/.git/
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.5816592Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/quantdale/monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6363458Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6364830Z ##[group]Disabling automatic garbage collection
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6372207Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6649259Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6651780Z ##[group]Setting up auth
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6653291Z Removing SSH command configuration
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6661325Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:37.6944131Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.1181656Z Removing HTTP extra header
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.1195785Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.1479077Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.6797105Z Removing includeIf entries pointing to credentials config files
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.6807604Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:39.7092408Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.2179878Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.2470746Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/monitorers/monitorers/.git.path D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.2756694Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.3125026Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.3412798Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.3688748Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.3689158Z ##[group]Fetching the repository
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:40.3700064Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/tags/v0.1.4-rc3:refs/tags/v0.1.4-rc3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9290845Z From https://github.com/quantdale/monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9291870Z  * [new tag]         v0.1.4-rc3 -> v0.1.4-rc3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9346612Z [command]"C:\Program Files\Git\bin\git.exe" tag --list v0.1.4-rc3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9659948Z v0.1.4-rc3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9698845Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/tags/v0.1.4-rc3^{commit}
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9957553Z 9ceab2d7fb63838a74765ef5f47480ef451427dc
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9991282Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9991655Z ##[group]Determining the checkout info
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:42.9992868Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.0002014Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.0437897Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.0748535Z ##[group]Checking out the ref
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.0758187Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/tags/v0.1.4-rc3
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2353602Z Note: switching to 'refs/tags/v0.1.4-rc3'.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2353978Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2354729Z You are in 'detached HEAD' state. You can look around, make experimental
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2355740Z changes and commit them, and you can discard any commits you make in this
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2356454Z state without impacting any branches by switching back to a branch.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2356767Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2357021Z If you want to create a new branch to retain commits you create, you may
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2357498Z do so (now or later) by using -c with the switch command. Example:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2357868Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2357990Z   git switch -c <new-branch-name>
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358173Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358279Z Or undo this operation with:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358447Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358535Z   git switch -
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358655Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2358886Z Turn off this advice by setting config variable advice.detachedHead to false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2359228Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2359752Z HEAD is now at 9ceab2d fix(release): single-binary app crate — probe becomes a cargo example
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2524694Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.2951231Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3218673Z 9ceab2d7fb63838a74765ef5f47480ef451427dc
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3726913Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3727336Z with:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3727512Z   node-version: 24
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3727704Z   cache: npm
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3727964Z   cache-dependency-path: sys-monitor-tauri/package-lock.json
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3728291Z   check-latest: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3730970Z   token: ***
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3731174Z   package-manager-cache: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3731386Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3731541Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.3731731Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.5346322Z Found in cache @ C:\hostedtoolcache\windows\node\24.19.0\x64
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:43.5353013Z ##[group]Environment details
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:48.8001896Z node: v24.19.0
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:48.8002370Z npm: 11.17.0
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:48.8002657Z yarn: 1.22.22
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:48.8003353Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:48.8746132Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\24.19.0\x64\npm.cmd config get cache"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:49.3589442Z C:\npm\cache
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:49.7930750Z Cache hit for: node-cache-Windows-x64-npm-1dd08b5bd844413d43d8fde82786285ac788ea922accdf81fa48d341229349d5
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:51.0611876Z Received 47632636 of 51826940 (91.9%), 44.7 MBs/sec
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:51.4785918Z Received 51826940 of 51826940 (100.0%), 34.5 MBs/sec
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:51.4788883Z Cache Size: ~49 MB (51826940 B)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:51.4823916Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/bbe79197-4fa2-415d-8c2b-c95b7df8f83a/cache.tzst -P -C D:/a/monitorers/monitorers --force-local --use-compress-program "zstd -d"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:52.8849638Z Cache restored successfully
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:52.8899444Z Cache restored from key: node-cache-Windows-x64-npm-1dd08b5bd844413d43d8fde82786285ac788ea922accdf81fa48d341229349d5
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:52.9249013Z ##[group]Run npm ci
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:52.9249328Z [36;1mnpm ci[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:53.1001610Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:53.1002059Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:53.1002298Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:53.1002566Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:19:56.9851413Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0072930Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0073781Z added 225 packages, and audited 226 packages in 11s
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0074267Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0075938Z 38 packages are looking for funding
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0077373Z   run `npm fund` for details
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0090664Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0090940Z found 0 vulnerabilities
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0109103Z npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0110367Z npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0111355Z npm warn allow-scripts
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:05.0112840Z npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2865088Z ##[warning]Unexpected input(s) 'artifact-name', valid inputs are ['name', 'path', 'pattern', 'merge-multiple', 'github-token', 'repository', 'run-id']
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2882032Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2883406Z ##[group]Run actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2883782Z with:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2883976Z   artifact-name: windows-installers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2884234Z   path: sys-monitor-tauri/installers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2884496Z   merge-multiple: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2884724Z   repository: quantdale/monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2884954Z   run-id: 32851072468
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2885131Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2885327Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.2885525Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.5361809Z (node:8696) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.5363828Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.7720799Z Found 1 artifact(s)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.7722124Z No input name or pattern filtered specified, downloading all artifacts
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.7724352Z An extra directory with the artifact name will be created for each download
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.7725361Z Preparing to download the following artifacts:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:06.7726240Z - windows-installers (ID: 9564602464, Size: 5216184)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.0058197Z Redirecting to blob download url: https://productionresultssa13.blob.core.windows.net/actions-results/82311041-4115-4385-9da8-b24fa9ccf1a2/workflow-job-run-f6611721-b7f4-507c-acc8-a3f1f667ab45/artifacts/96d01dc735864186c40fc87dd0661f7825335e7d744e02d1cd13ebe0cb0792f9.zip
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.0060001Z Starting download of artifact to: D:\a\monitorers\monitorers\sys-monitor-tauri\installers\windows-installers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.2826594Z (node:8696) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9425832Z Artifact download completed successfully.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9426913Z Total of 1 artifact(s) downloaded
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9435700Z Download artifact has finished successfully
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9731326Z ##[group]Run $msi = (Get-ChildItem -Recurse -Filter *.msi installers | Select-Object -First 1).FullName
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9732136Z [36;1m$msi = (Get-ChildItem -Recurse -Filter *.msi installers | Select-Object -First 1).FullName[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9732872Z [36;1mif (-not $msi) { throw "downloaded MSI not found" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9733192Z [36;1mWrite-Host "installing $msi"[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9733774Z [36;1m$p = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart","/l*v","$env:RUNNER_TEMP\msi-install.log" -Wait -PassThru[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9734503Z [36;1mif ($p.ExitCode -ne 0) { throw "msiexec install failed with exit code $($p.ExitCode)" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9734914Z [36;1m[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9735218Z [36;1m$expectedVersion = (Get-Content package.json | ConvertFrom-Json).version[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9735766Z [36;1m$key = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' |[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9736478Z [36;1m  Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'System Monitor' } |[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9737015Z [36;1m  Select-Object -First 1[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9737385Z [36;1mif (-not $key) { throw "installed product not found in uninstall registry" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9737812Z [36;1m$props = Get-ItemProperty $key.PSPath[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9738312Z [36;1mWrite-Host "registered: $($props.DisplayName) $($props.DisplayVersion) at $($props.InstallLocation)"[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9738854Z [36;1mif ($props.DisplayVersion -ne $expectedVersion) {[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9739338Z [36;1m  throw "installed version $($props.DisplayVersion) != package version $expectedVersion"[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9739752Z [36;1m}[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9740060Z [36;1m# Locate the application binary structurally: the largest non-uninstaller[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9740568Z [36;1m# executable under the registered install location. Verifying its file[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9741059Z [36;1m# ProductVersion against the release version catches metadata drift at[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9741499Z [36;1m# the actual installed artifact, not just registry text.[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9741832Z [36;1m$dir = $props.InstallLocation[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9742315Z [36;1mif (-not $dir -or -not (Test-Path $dir)) { throw "InstallLocation not usable: '$($props.InstallLocation)'" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9742956Z [36;1mGet-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9743444Z [36;1m$appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9743838Z [36;1m  Where-Object { $_.Name -notmatch 'uninstall' } |[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9744222Z [36;1m  Sort-Object Length -Descending | Select-Object -First 1[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9744651Z [36;1mif (-not $appExe) { throw "installed executable missing under $dir" }[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9745022Z [36;1m$exe = $appExe.FullName[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9745579Z [36;1m$binaryVersion = $appExe.VersionInfo.ProductVersion[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9746113Z [36;1mWrite-Host "installed binary: $exe (ProductVersion $binaryVersion)"[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9746570Z [36;1mif ($binaryVersion -notlike "*$expectedVersion*") {[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9747034Z [36;1m  throw "binary ProductVersion $binaryVersion != package version $expectedVersion"[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9747438Z [36;1m}[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9747758Z [36;1m"productCode=$($key.PSChildName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9748232Z [36;1m"exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9847901Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9848247Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9848424Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:07.9848637Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:08.3156915Z installing D:\a\monitorers\monitorers\sys-monitor-tauri\installers\windows-installers\msi\System Monitor_0.1.4_x64_en-US.msi
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.1092540Z registered: System Monitor 0.1.4 at C:\Program Files\System Monitor\
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.1170241Z   installed: sys-monitor-tauri.exe
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.1176719Z   installed: Uninstall System Monitor.lnk
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.1400107Z installed binary: C:\Program Files\System Monitor\sys-monitor-tauri.exe (ProductVersion 0.1.4)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2297480Z ##[group]Run npm run verify:packaged
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2297847Z [36;1mnpm run verify:packaged[0m
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2413195Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2413543Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2413721Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2414042Z   SIM_APP_EXE: C:\Program Files\System Monitor\sys-monitor-tauri.exe
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.2414375Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.9285027Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.9285652Z > sys-monitor-tauri@0.1.4 verify:packaged
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.9286425Z > playwright test --config e2e/qualify.playwright.config.ts
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:10.9286868Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:11.8743409Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:11.8743969Z Running 1 test using 1 worker
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:11.8744840Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:20:12.4556798Z [qualify] launching built app: C:\Program Files\System Monitor\sys-monitor-tauri.exe
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.5805392Z   x  1 e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC (1.0m)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6284048Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6290709Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6303375Z   1) e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC ────────────────
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6306608Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6316099Z     ClassifiedSimulationError: RealAppDriver: CDP endpoint http://127.0.0.1:61658/json/version did not come up within 60000ms (TypeError: fetch failed)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6318513Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6322897Z        at drivers\RealAppDriver.ts:98
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6326822Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6331238Z        96 |     await new Promise((r) => setTimeout(r, 500));
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6331985Z        97 |   }
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6332596Z     >  98 |   throw new ClassifiedSimulationError(
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6333291Z           |         ^
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6334430Z        99 |     `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms` + (lastErr ? ` (${String(lastErr)})` : ''),
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6346350Z       100 |     'harness-defect',
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6353067Z       101 |     'cdp',
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6354527Z         at waitForCdp (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:98:9)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6356142Z         at waitForCdpOrProcess (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:144:5)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6358660Z         at RealAppDriver.launch (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:317:5)
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6373968Z         at D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\qualify.spec.ts:63:22
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6447225Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6450229Z     Error Context: test-results\qualify-packaged-app-qualifies-end-to-end-over-real-IPC\error-context.md
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6464588Z 
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6465062Z   1 failed
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.6467222Z     e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC ─────────────────
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7182015Z ##[error]Process completed with exit code 1.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7436147Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7436615Z with:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7436820Z   name: msi-qualification-logs
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7437080Z   path: D:\a\_temp/msi-install.log
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7437337Z   if-no-files-found: ignore
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7437561Z   compression-level: 6
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7437763Z   overwrite: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7437964Z   include-hidden-files: false
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7438195Z   archive: true
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7438366Z env:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7438542Z   CARGO_TERM_COLOR: always
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.7438757Z ##[endgroup]
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.9240129Z With the provided path, there will be 1 file uploaded
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.9246157Z Artifact name is valid!
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:12.9247670Z Root directory input is valid!
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.2908342Z Uploading artifact: msi-qualification-logs.zip
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.2954091Z Beginning upload of artifact content to blob storage
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.5609325Z Uploaded bytes 11554
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.6260327Z Finished uploading artifact content to blob storage!
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.6261878Z SHA256 digest of uploaded artifact is 9f263953b856b2f91f0de689012f668f6d68a5e043e76a5f0be76e0fd10897f8
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.6263429Z Finalizing artifact upload
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.9762076Z Artifact msi-qualification-logs successfully finalized. Artifact ID 9564932456
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.9764039Z Artifact msi-qualification-logs has been successfully uploaded! Final size is 11554 bytes. Artifact ID is 9564932456
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:13.9771710Z Artifact download URL: https://github.com/quantdale/monitorers/actions/runs/32851072468/artifacts/9564932456
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.0106212Z Post job cleanup.
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2008065Z [command]"C:\Program Files\Git\bin\git.exe" version
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2278177Z git version 2.55.0.windows.4
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2345689Z Temporarily overriding HOME='D:\a\_temp\cccac5e7-d9f4-491e-89df-e7e4039937d8' before making global git config changes
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2347250Z Adding repository directory to the temporary git global config as a safe directory
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2356129Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\monitorers\monitorers
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2651091Z Removing SSH command configuration
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2662032Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.2970169Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.8465401Z Removing HTTP extra header
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.8475384Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:14.8768288Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3665678Z Removing includeIf entries pointing to credentials config files
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3680326Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3941733Z includeif.gitdir:D:/a/monitorers/monitorers/.git.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3942608Z includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3943384Z includeif.gitdir:/github/workspace/.git.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3944138Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.3983665Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/monitorers/monitorers/.git.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.4233354Z D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.4274891Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/monitorers/monitorers/.git.path D\:\\a\\_temp\\git\-credentials\-e4de66c0\-77e9\-4dee\-9861\-cf2c8e2c2397\.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.4612352Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.4868468Z D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.4912000Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-e4de66c0\-77e9\-4dee\-9861\-cf2c8e2c2397\.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.5208814Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.5459668Z /github/runner_temp/git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.5499535Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-e4de66c0\-77e9\-4dee\-9861\-cf2c8e2c2397\.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.5793887Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.6031937Z /github/runner_temp/git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.6070611Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-e4de66c0\-77e9\-4dee\-9861\-cf2c8e2c2397\.config
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:15.6355990Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:16.1410811Z Removing credentials config 'D:\a\_temp\git-credentials-e4de66c0-77e9-4dee-9861-cf2c8e2c2397.config'
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:16.1613585Z Cleaning up orphan processes
+Qualify — MSI install/run/uninstall	UNKNOWN STEP	2026-08-25T13:21:16.1987118Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

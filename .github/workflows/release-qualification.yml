@@ -190,13 +190,14 @@ jobs:
           if ($orphan) { throw "orphaned application processes remain: $($orphan.Id -join ',')" }
           Write-Host "MSI qualification: clean removal confirmed"
 
-      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      - name: Upload install log on failure
+      - name: Upload qualification diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: msi-qualification-logs
-          path: ${{ runner.temp }}/msi-install.log
+          path: |
+            ${{ runner.temp }}/msi-install.log
+            sys-monitor-tauri/test-results/**
           if-no-files-found: ignore
 
   qualify-nsis:
@@ -257,17 +258,26 @@ jobs:
           if (-not $key) { throw "installed product not found in uninstall registry" }
           $props = Get-ItemProperty $key.PSPath
           Write-Host "registered: $($props.DisplayName) $($props.DisplayVersion)"
+          # Dump every registered value: Tauri's NSIS key layout varies by
+          # installMode/version and this is the cheapest place to see it.
+          foreach ($p in $key.Property) { Write-Host "  registry: $p = $($props.$p)" }
           if ($props.DisplayVersion -ne $expectedVersion) {
             throw "installed version $($props.DisplayVersion) != package version $expectedVersion"
           }
-          # Structural binary discovery (same rationale as the MSI job): prefer
-          # the registered InstallLocation, falling back to the directory that
-          # owns the registered uninstaller.
-          $dir = $props.InstallLocation
-          if (-not $dir -or -not (Test-Path $dir)) {
-            $dir = Split-Path $props.UninstallString -Parent
+          # Structural binary discovery: prefer InstallLocation, then the
+          # directory owning the registered uninstaller, then Tauri's per-user
+          # default (%LOCALAPPDATA%\<productName>).
+          $dir = $null
+          foreach ($candidate in @(
+            $props.InstallLocation,
+            ($(if ($props.UninstallString) { Split-Path ($props.UninstallString.Trim('"')) -Parent })),
+            ($(if ($props.QuietUninstallString) { Split-Path ($props.QuietUninstallString.Trim('"')) -Parent })),
+            (Join-Path $env:LOCALAPPDATA 'System Monitor')
+          )) {
+            if ($candidate -and (Test-Path $candidate)) { $dir = $candidate; break }
           }
-          if (-not $dir -or -not (Test-Path $dir)) { throw "could not resolve install directory from registry" }
+          if (-not $dir) { throw "could not resolve install directory from registry" }
+          Write-Host "install dir: $dir"
           Get-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }
           $appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |
             Where-Object { $_.Name -notmatch 'uninstall' } |
@@ -318,6 +328,14 @@ jobs:
           # (settings.json under %APPDATA%\com.quantdale.systemmonitor).
           # Retention is asserted as retention, never as failure.
           Write-Host "NSIS qualification: clean removal confirmed (user data intentionally retained)"
+
+      - name: Upload qualification diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nsis-qualification-logs
+          path: sys-monitor-tauri/test-results/**
+          if-no-files-found: ignore
 
   release-manifest:
     name: Release — artifact integrity manifest

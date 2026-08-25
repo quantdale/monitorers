@@ -60,11 +60,34 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
   });
   let launched = false;
   try {
-    const { page } = await driver.launch(
-      `qualify-${Date.now()}`,
-      { version: 1 },
-      testInfo.outputPath()
-    );
+    let page;
+    try {
+      ({ page } = await driver.launch(
+        `qualify-${Date.now()}`,
+        { version: 1 },
+        testInfo.outputPath()
+      ));
+    } catch (launchError) {
+      // Hosted-runner diagnosis aid: dump the app's stderr and the live
+      // process table so a silent WebView2/CDP failure is attributable.
+      try {
+        const { execFileSync } = await import('node:child_process');
+        console.log(
+          '[qualify] tasklist:',
+          execFileSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+            .split(/\r?\n/)
+            .filter((l) => /sys-monitor|msedgewebview2/i.test(l))
+            .join('\n')
+        );
+      } catch { /* diagnostics are best-effort */ }
+      const stderrPath = driver.appStderrPathValue ?? join(testInfo.outputPath(), 'app-stderr.log');
+      if (existsSync(stderrPath)) {
+        console.log(`[qualify] app stderr (${stderrPath}):\n`, readFileSync(stderrPath, 'utf8').slice(0, 4_000));
+      } else {
+        console.log(`[qualify] no app stderr captured at ${stderrPath}`);
+      }
+      throw launchError;
+    }
     launched = true;
 
     // ── 1. Real frontend is up ──
