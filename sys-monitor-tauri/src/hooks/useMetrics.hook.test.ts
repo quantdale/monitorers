@@ -9,6 +9,8 @@ import type { HistoryPayload, MetricsSnapshot } from '../types/metrics';
 // it would run against a live backend — without a real Tauri runtime.
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
 let deferredHistory = false;
+let retryInvocations = 0;
+let retryResult: string | null = null;
 const historyRequests: Array<{ resolve: (payload: HistoryPayload) => void; reject: (error: Error) => void }> = [];
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -37,7 +39,12 @@ let historyInvokeError: Error | null = null;
 let historySchemaVersion: number | null = null;
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(() => {
+  invoke: vi.fn((command: string) => {
+    if (command === 'retry_collection') {
+      retryInvocations += 1;
+      if (retryResult !== null) return Promise.resolve(retryResult);
+      return Promise.resolve('failed');
+    }
     if (deferredHistory) {
       return new Promise<HistoryPayload>((resolve, reject) => historyRequests.push({ resolve, reject }));
     }
@@ -49,6 +56,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import { useMetrics, type SlicedHistory } from './useMetrics';
+import type { CollectorStatus } from '../types/metrics';
 
 function baseSnapshot(onTick: boolean): MetricsSnapshot {
   return {
@@ -73,9 +81,24 @@ function emit(eventName: string, payload: unknown) {
   cb({ payload });
 }
 
+function status(state: CollectorStatus['state'], overrides: Partial<CollectorStatus> = {}): CollectorStatus {
+  return {
+    schema_version: 1,
+    state,
+    generation: 1,
+    attempt: 0,
+    max_attempts: 3,
+    reason: null,
+    timestamp_ms: Date.now(),
+    ...overrides,
+  };
+}
+
 interface RenderResult {
   result: () => SlicedHistory;
   historyLoadError: () => string | null;
+  lifecycle: () => CollectorStatus | null;
+  retryMetrics: () => Promise<CollectorStatus['state'] | null>;
   unmount: () => void;
   rerender: (windowSecs: number) => void;
 }
@@ -101,6 +124,8 @@ function renderUseMetrics(windowSecs: number): RenderResult {
       return hookValue.metrics;
     },
     historyLoadError: () => hookValue?.historyLoadError ?? null,
+    lifecycle: () => hookValue?.lifecycle ?? null,
+    retryMetrics: () => (hookValue ? hookValue.retryMetrics() : Promise.resolve(null)),
     unmount: () => act(() => root.unmount()),
     rerender: (w: number) => act(() => root.render(React.createElement(TestComponent, { w }))),
   };
@@ -113,6 +138,8 @@ describe('useMetrics (Tauri event wiring)', () => {
     historyInvokeError = null;
     historySchemaVersion = null;
     deferredHistory = false;
+    retryInvocations = 0;
+    retryResult = null;
     historyRequests.length = 0;
   });
 
@@ -208,9 +235,10 @@ describe('useMetrics (Tauri event wiring)', () => {
     unmount();
   });
 
-  // --- 5.2: collectorError never auto-clears ---
+  // --- 5.2 (updated for supervision): collectorError survives unrelated live
+  // events and clears only on actual recovery proof (a healthy status) ---
 
-  it('collectorError stays set for the lifetime of the hook once received, even after further metrics-update events', async () => {
+  it('collectorError stays set across metrics-update events and clears when a healthy status arrives', async () => {
     const { result, unmount } = renderUseMetrics(60);
     await act(async () => {
       await Promise.resolve();
@@ -223,16 +251,143 @@ describe('useMetrics (Tauri event wiring)', () => {
     });
     expect(result().collectorError).toBe('metrics collection stopped — restart the app');
 
-    // Further live snapshots must not clear it.
+    // Further live snapshots must not clear it — only recovery proof does.
     act(() => {
       emit('metrics-update', baseSnapshot(true));
     });
-    expect(result().collectorError).toBe('metrics collection stopped — restart the app');
-
     act(() => {
       emit('metrics-update', baseSnapshot(false));
     });
     expect(result().collectorError).toBe('metrics collection stopped — restart the app');
+
+    // A recovering status alone must not clear it either...
+    act(() => {
+      emit('collector-status', status('recovering', { generation: 2, attempt: 1, reason: 'tick panicked' }));
+    });
+    expect(result().collectorError).toBe('metrics collection stopped — restart the app');
+    expect(result().collectorState).toBe('recovering');
+
+    // ...but a healthy status is actual recovery proof.
+    act(() => {
+      emit('collector-status', status('healthy', { generation: 3 }));
+    });
+    expect(result().collectorError).toBeNull();
+    expect(result().collectorState).toBe('healthy');
+
+    unmount();
+  });
+
+  // --- supervised lifecycle transitions ---
+
+  it('tracks healthy → recovering → healthy with last-known metrics retained', async () => {
+    const { result, lifecycle, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => emit('collector-status', status('starting', { generation: 1 })));
+    act(() => emit('collector-status', status('healthy', { generation: 1 })));
+    expect(lifecycle()?.state).toBe('healthy');
+
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    const beforeFailure = result().cpu.length;
+
+    act(() => emit('collector-status', status('recovering', { generation: 2, attempt: 1, reason: 'synthetic panic' })));
+    expect(lifecycle()?.attempt).toBe(1);
+    expect(lifecycle()?.reason).toBe('synthetic panic');
+    expect(result().collectorState).toBe('recovering');
+    // Last-known history is untouched during recovery (no zeros, no blanks).
+    expect(result().cpu.length).toBe(beforeFailure);
+    expect(result().cpu.every((v) => v === 42)).toBe(true);
+
+    // Replacement session becomes healthy; metrics resume appending.
+    act(() => emit('collector-status', status('healthy', { generation: 2 })));
+    expect(result().collectorState).toBe('healthy');
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    expect(result().cpu.length).toBe(beforeFailure + 1);
+
+    unmount();
+  });
+
+  it('tracks healthy → recovering → failed and exposes the failure reason', async () => {
+    const { result, lifecycle, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => emit('collector-status', status('recovering', { generation: 2, attempt: 1, reason: 'crash one' })));
+    act(() => emit('collector-status', status('failed', { generation: 4, attempt: 4, reason: 'budget exhausted' })));
+    expect(lifecycle()?.state).toBe('failed');
+    expect(lifecycle()?.reason).toBe('budget exhausted');
+    expect(result().collectorState).toBe('failed');
+    unmount();
+  });
+
+  it('manual retry invokes retry_collection once and reports the backend answer', async () => {
+    const { retryMetrics, lifecycle, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => emit('collector-status', status('failed', { generation: 4, attempt: 4, reason: 'exhausted' })));
+    let answered: string | null = null;
+    await act(async () => {
+      retryResult = 'failed';
+      answered = await retryMetrics();
+    });
+    expect(retryInvocations).toBe(1);
+    expect(answered).toBe('failed');
+
+    // Backend accepted the retry and transitioned.
+    await act(async () => {
+      retryResult = 'starting';
+      answered = await retryMetrics();
+    });
+    expect(retryInvocations).toBe(2);
+    expect(answered).toBe('starting');
+
+    act(() => emit('collector-status', status('starting', { generation: 5, attempt: 0 })));
+    act(() => emit('collector-status', status('healthy', { generation: 5 })));
+    expect(lifecycle()?.state).toBe('healthy');
+    unmount();
+  });
+
+  it('rejects an incompatible lifecycle payload without mutating lifecycle state and recovers on a valid one', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { lifecycle, historyLoadError, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => emit('collector-status', status('healthy')));
+    expect(lifecycle()?.state).toBe('healthy');
+
+    act(() => emit('collector-status', { ...status('recovering'), schema_version: 99 }));
+    // Fail closed: state unchanged, actionable mismatch surfaced.
+    expect(lifecycle()?.state).toBe('healthy');
+    expect(historyLoadError()).toMatch(/lifecycle schema mismatch/i);
+    expect(errorSpy).toHaveBeenCalled();
+
+    // The listener remains attached: a compatible payload recovers cleanly.
+    act(() => emit('collector-status', status('recovering', { generation: 2, attempt: 1, reason: 'ok again' })));
+    expect(lifecycle()?.state).toBe('recovering');
+    expect(historyLoadError()).toBeNull();
+
+    errorSpy.mockRestore();
+    unmount();
+  });
+
+  it('history appends exactly once per full tick across a collector generation change', async () => {
+    const { result, unmount } = renderUseMetrics(3600);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => emit('metrics-update', baseSnapshot(true)));   // gen1 full tick
+    act(() => emit('metrics-update', baseSnapshot(false)));  // gen1 live tick
+    expect(result().cpu.length).toBe(1);
+
+    // Generation boundary: old session dies, replacement starts emitting.
+    act(() => emit('collector-status', status('recovering', { generation: 2, attempt: 1, reason: 'panic' })));
+    act(() => emit('collector-status', status('healthy', { generation: 2 })));
+    act(() => emit('metrics-update', baseSnapshot(true)));   // gen2 first full tick
+    act(() => emit('metrics-update', baseSnapshot(false)));  // gen2 live tick
+    act(() => emit('metrics-update', baseSnapshot(true)));   // gen2 second full tick
+
+    expect(result().cpu.length).toBe(3); // exactly one append per full tick, no duplicates
+    expect(result().timestamps).toHaveLength(3);
+    const ts = result().timestamps;
+    expect(ts.every((t, i) => i === 0 || t >= ts[i - 1])).toBe(true);
 
     unmount();
   });

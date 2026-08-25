@@ -43,6 +43,37 @@ jobs:
           fi
           echo "OK: no remote-debugging flag in shipped configuration"
 
+      # The supervised-recovery campaign proves recovery behavior through
+      # test-only seams (#[cfg(test)] synthetic providers). This lint pins that
+      # contract: no cargo feature beyond the documented set (a future "fault"
+      # feature would be an unreviewed production surface), and no env-var or
+      # function seam capable of crashing/perturbing the collector in non-test
+      # backend sources.
+      - name: No collector fault-injection surface in shipped build
+        shell: pwsh
+        run: |
+          $cargo = Get-Content sys-monitor-tauri/src-tauri/Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^\\[features\\]\s*$') { throw "Cargo.toml missing [features] table" }
+          $after = ($cargo -split '(?m)^\\[features\\]\s*$', 2)[1]
+          $table = (($after -split '(?m)^\\[', 2)[0])
+          $names = ($table | Select-String '(?m)^([A-Za-z0-9_-]+)\\s*=' -AllMatches).Matches |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $expected = @('custom-protocol','default','nvapi','nvml') | Sort-Object
+          $diff = Compare-Object $names $expected
+          if ($diff) {
+            $diff | ForEach-Object { Write-Host "unexpected/missing feature: $($_.InputObject)" }
+            throw "cargo features diverge from the documented shipped set"
+          }
+          Write-Host "OK: cargo features are exactly the documented set ($($names -join ', '))"
+
+          $hits = Get-ChildItem sys-monitor-tauri/src-tauri/src -Recurse -Filter *.rs |
+            Select-String -Pattern 'SYSMON_(CRASH|FAULT|PANIC)|inject_fault|fault_injection|crash_collector'
+          if ($hits) {
+            $hits | ForEach-Object { Write-Host "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            throw "collector fault-injection surface found in non-test backend sources"
+          }
+          Write-Host "OK: no collector fault-injection surface in shipped backend"
+
   simulation-mock:
     name: Simulation — mock lane
     runs-on: windows-latest

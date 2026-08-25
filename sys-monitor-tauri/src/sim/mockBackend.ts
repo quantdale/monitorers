@@ -31,7 +31,13 @@
  * produces the same snapshot sequence regardless of wall clock.
  */
 
-import type { HistoryPayload, MetricsSnapshot, NvidiaTelemetry } from '../types/metrics';
+import type {
+  CollectorLifecycleState,
+  CollectorStatus,
+  HistoryPayload,
+  MetricsSnapshot,
+  NvidiaTelemetry,
+} from '../types/metrics';
 
 export type GpuVendor = 'nvidia' | 'intel' | 'amd' | 'unknown';
 
@@ -52,6 +58,10 @@ export interface SimGpuSpec {
 
 export type SimFault =
   | { kind: 'collector-error'; message: string }
+  /** Session-panic simulation with bounded automatic recovery. */
+  | { kind: 'collector-crash'; reason?: string; recoverAfterMs?: number }
+  /** Repeated failures exhaust the budget; stays failed until retryCollection(). */
+  | { kind: 'collector-crash-permanent'; reason?: string; attempts?: number; stageMs?: number }
   | { kind: 'disk-remove'; key: string }
   | { kind: 'disk-add'; key: string }
   | { kind: 'gpu-remove'; name?: string; key?: string }
@@ -232,6 +242,17 @@ export function clearSimScenario(runId: string): void {
 
 const HISTORICAL_DENSITY = 1000; // ms per history point in mock seeds
 
+export const LIFECYCLE_SCHEMA_VERSION = 1;
+
+/** Default wall-clock stage duration for synthesized recovery sequences. */
+const RECOVERY_STAGE_MS = 500;
+
+/**
+ * Mirrors the production supervisor's lifecycle constants for journey realism:
+ * three automatic attempts per streak (matching RecoveryPolicy::production).
+ */
+const SIM_MAX_ATTEMPTS = 3;
+
 export class MockBackend {
   readonly runId: string;
   readonly scenario: SimScenario;
@@ -243,6 +264,19 @@ export class MockBackend {
   private timer: ReturnType<typeof setInterval> | null = null;
   private snapListeners = new Set<(snap: MetricsSnapshot) => void>();
   private errorListeners = new Set<(message: string) => void>();
+  private statusListeners = new Set<(status: CollectorStatus) => void>();
+  /** Supervised-lifecycle mirror for journey realism (browser mode only). */
+  private lifecycle: CollectorStatus = {
+    schema_version: LIFECYCLE_SCHEMA_VERSION,
+    state: 'starting',
+    generation: 0,
+    attempt: 0,
+    max_attempts: SIM_MAX_ATTEMPTS,
+    reason: null,
+    timestamp_ms: Date.now(),
+  };
+  private generation = 0;
+  private crashTimeouts: ReturnType<typeof setTimeout>[] = [];
 
   private disks: SimDiskSpec[];
   private gpus: SimGpuSpec[];
@@ -290,6 +324,19 @@ export class MockBackend {
     if (this.halted || this.timer !== null) return;
     const period = timerPeriodMs(this.speed);
     this.timer = setInterval(() => this.advance(), period);
+    // First live emission marks the synthesized session healthy, mirroring
+    // the supervisor's first-emit transition.
+    this.generation += 1;
+    this.emitStatus({ ...this.lifecycle, state: 'starting', generation: this.generation });
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'healthy',
+      generation: this.generation,
+      attempt: 0,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason: null,
+      timestamp_ms: Date.now(),
+    });
   }
 
   stop(): void {
@@ -315,6 +362,137 @@ export class MockBackend {
     this.errorListeners.delete(listener);
   }
 
+  onCollectorStatus(listener: (status: CollectorStatus) => void): void {
+    this.statusListeners.add(listener);
+  }
+
+  offCollectorStatus(listener: (status: CollectorStatus) => void): void {
+    this.statusListeners.delete(listener);
+  }
+
+  /** Latest synthesized lifecycle status (`get_collector_status` analog). */
+  getStatus(): CollectorStatus {
+    return { ...this.lifecycle };
+  }
+
+  /**
+   * Manual-retry analog of the `retry_collection` command. Honored only while
+   * the synthesized supervisor is `failed`; otherwise a coalesced no-op.
+   * Returns the lifecycle state observed at call time, mirroring the backend
+   * command contract.
+   */
+  retryCollection(): CollectorLifecycleState {
+    const observed = this.lifecycle.state;
+    if (observed !== 'failed') return observed;
+    this.clearCrashTimeouts();
+    this.halted = false;
+    this.start();
+    return observed;
+  }
+
+  private emitStatus(status: CollectorStatus): void {
+    this.lifecycle = status;
+    for (const listener of this.statusListeners) {
+      listener(status);
+    }
+  }
+
+  private clearCrashTimeouts(): void {
+    for (const timeout of this.crashTimeouts.splice(0)) clearTimeout(timeout);
+  }
+
+  /**
+   * Synthesizes a session panic with bounded automatic recovery: emissions
+   * stop, status walks recovering → healthy, then ticks resume truthfully
+   * (the gap between remains a real gap — no fabricated samples).
+   */
+  private simulateCrashRecovery(reason: string, recoverAfterMs: number): void {
+    if (this.lifecycle.state === 'recovering' || this.lifecycle.state === 'failed') return;
+    this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'recovering',
+      generation: this.generation,
+      attempt: 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason,
+      timestamp_ms: Date.now(),
+    });
+    this.crashTimeouts.push(
+      setTimeout(() => {
+        this.halted = false;
+        this.emitStatus({
+          schema_version: LIFECYCLE_SCHEMA_VERSION,
+          state: 'healthy',
+          generation: this.generation,
+          attempt: 0,
+          max_attempts: SIM_MAX_ATTEMPTS,
+          reason: null,
+          timestamp_ms: Date.now(),
+        });
+        this.start();
+      }, recoverAfterMs)
+    );
+  }
+
+  /**
+   * Synthesizes repeated failures exhausting the recovery budget: staged
+   * recovering statuses then a persistent failed state. Only retryCollection()
+   * (or a new run) restores emission afterwards.
+   */
+  private simulateCrashExhaustion(reason: string, attempts: number, stageMs: number): void {
+    if (this.lifecycle.state === 'recovering' || this.lifecycle.state === 'failed') return;
+    this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'recovering',
+      generation: this.generation,
+      attempt: 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason,
+      timestamp_ms: Date.now(),
+    });
+    for (let i = 2; i <= attempts; i += 1) {
+      this.crashTimeouts.push(
+        setTimeout(() => {
+          this.generation += 1;
+          this.emitStatus({
+            schema_version: LIFECYCLE_SCHEMA_VERSION,
+            state: 'recovering',
+            generation: this.generation,
+            attempt: i,
+            max_attempts: SIM_MAX_ATTEMPTS,
+            reason,
+            timestamp_ms: Date.now(),
+          });
+        }, stageMs * (i - 1))
+      );
+    }
+    this.crashTimeouts.push(
+      setTimeout(
+        () => {
+          this.halted = true;
+          this.generation += 1;
+          this.emitStatus({
+            schema_version: LIFECYCLE_SCHEMA_VERSION,
+            state: 'failed',
+            generation: this.generation,
+            attempt: attempts + 1,
+            max_attempts: SIM_MAX_ATTEMPTS,
+            reason,
+            timestamp_ms: Date.now(),
+          });
+          for (const listener of [...this.errorListeners]) {
+            listener(`metrics collection failed after ${attempts} recovery attempts — ${reason}`);
+          }
+        },
+        stageMs * attempts
+      )
+    );
+  }
+
   /**
    * `get_history` analog. Honors the configured history fault (fail/slow);
    * the default resolves with a fresh 300-point sine seed, matching the
@@ -337,6 +515,19 @@ export class MockBackend {
     switch (fault.kind) {
       case 'collector-error':
         this.haltWithError(fault.message);
+        break;
+      case 'collector-crash':
+        this.simulateCrashRecovery(
+          fault.reason ?? 'synthetic session panic',
+          fault.recoverAfterMs ?? RECOVERY_STAGE_MS * 2
+        );
+        break;
+      case 'collector-crash-permanent':
+        this.simulateCrashExhaustion(
+          fault.reason ?? 'synthetic repeated session panics',
+          fault.attempts ?? SIM_MAX_ATTEMPTS,
+          fault.stageMs ?? RECOVERY_STAGE_MS
+        );
         break;
       case 'disk-remove':
         this.disks = this.disks.filter((d) => d.key !== fault.key);
@@ -560,8 +751,21 @@ export class MockBackend {
   }
 
   private haltWithError(message: string): void {
-    this.halted = true;
+    // Legacy permanent-halt path: mirror the supervised contract by reporting
+    // a terminal failed status (retryable via retryCollection) alongside the
+    // historical collector-error listener notification.
     this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'failed',
+      generation: this.generation,
+      attempt: SIM_MAX_ATTEMPTS + 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason: message,
+      timestamp_ms: Date.now(),
+    });
+    this.halted = true;
     for (const listener of this.errorListeners) {
       listener(message);
     }

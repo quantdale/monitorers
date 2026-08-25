@@ -60,7 +60,15 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const hardwareProfileState = useHardwareProfile();
-  const { metrics, historyLoadError } = useMetrics(windowSecs);
+  const { metrics, historyLoadError, lifecycle, retryMetrics } = useMetrics(windowSecs);
+  const collectorState = lifecycle?.state ?? metrics?.collectorState ?? null;
+  const [retryPending, setRetryPending] = useState(false);
+
+  function handleRetryMetrics() {
+    if (retryPending) return;
+    setRetryPending(true);
+    void retryMetrics().finally(() => setRetryPending(false));
+  }
   useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -182,7 +190,25 @@ export default function App() {
             color: '#fff',
           }}
         >
-      {metrics?.collectorError && (
+      {collectorState === 'recovering' && (
+        <div
+          data-testid="collector-recovering-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            background: 'rgba(243, 156, 18, 0.12)',
+            border: '1px solid rgba(243, 156, 18, 0.7)',
+            borderRadius: 4,
+            color: '#ffeaa7',
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 14,
+          }}
+        >
+          Metrics collection interrupted. Recovering…
+        </div>
+      )}
+      {(collectorState === 'failed' || metrics?.collectorError) && collectorState !== 'recovering' && (
         <div
           data-testid="collector-error-banner"
           role="alert"
@@ -196,9 +222,38 @@ export default function App() {
             marginBottom: 12,
             fontSize: 14,
             fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
           }}
         >
-          {metrics.collectorError}
+          <span>
+            {metrics?.collectorError ??
+              lifecycle?.reason ??
+              'Metrics collection failed.'}
+          </span>
+          {collectorState === 'failed' && (
+            <button
+              type="button"
+              data-testid="retry-metrics-button"
+              onClick={handleRetryMetrics}
+              disabled={retryPending}
+              aria-label={retryPending ? 'Retrying metrics collection' : 'Retry metrics collection'}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 4,
+                border: '1px solid rgba(231, 76, 60, 0.9)',
+                background: '#1e1e1e',
+                color: '#ffd6d3',
+                cursor: retryPending ? 'wait' : 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Retry metrics
+            </button>
+          )}
         </div>
       )}
       {saveError && (

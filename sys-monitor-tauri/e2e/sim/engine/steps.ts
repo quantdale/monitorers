@@ -144,6 +144,9 @@ export async function waitForState(ctx: SimContext, state: JourneyState, timeout
       case 'collector-error-banner':
         await page.locator('[data-testid="collector-error-banner"]').waitFor({ state: 'visible', timeout: timeoutMs });
         break;
+      case 'collector-recovering-banner':
+        await page.locator('[data-testid="collector-recovering-banner"]').waitFor({ state: 'visible', timeout: timeoutMs });
+        break;
       case 'history-error-inline':
         await page.getByText(/Couldn't refresh metrics history/).waitFor({ state: 'visible', timeout: timeoutMs });
         break;

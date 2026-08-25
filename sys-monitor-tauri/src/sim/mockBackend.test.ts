@@ -155,17 +155,74 @@ describe('simulation speed validation', () => {
 });
 
 describe('MockBackend fault injection', () => {
-  it('collector-error halts emission and notifies', () => {
+  it('collector-error halts emission, notifies, and reports terminal failed status', () => {
     const backend = makeBackend();
     const errorMessages: string[] = [];
+    const statuses: string[] = [];
     backend.onCollectorError((m) => errorMessages.push(m));
+    backend.onCollectorStatus((s) => statuses.push(s.state));
     backend.start();
     backend.injectFault({ kind: 'collector-error', message: 'boom' });
     expect(errorMessages).toEqual(['boom']);
     expect(backend.isHalted).toBe(true);
+    expect(statuses.at(-1)).toBe('failed');
+    expect(backend.getStatus().reason).toBe('boom');
     // Halting stops the timer; starting again is a no-op.
     backend.start();
     expect(backend.isHalted).toBe(true);
+  });
+
+  it('collector-crash walks recovering → healthy and resumes emission', () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    const statuses: string[] = [];
+    const attempts: number[] = [];
+    let emissionsAfterRecovery = 0;
+    backend.onCollectorStatus((s) => {
+      statuses.push(s.state);
+      attempts.push(s.attempt);
+    });
+    backend.start();
+    vi.advanceTimersByTime(250);
+
+    backend.injectFault({ kind: 'collector-crash', reason: 'synthetic panic', recoverAfterMs: 1_000 });
+    expect(statuses.at(-1)).toBe('recovering');
+    expect(attempts.at(-1)).toBe(1);
+
+    vi.advanceTimersByTime(1_000);
+    expect(statuses.at(-1)).toBe('healthy');
+    // Ticks resume after recovery.
+    backend.onSnapshot(() => {
+      emissionsAfterRecovery += 1;
+    });
+    vi.advanceTimersByTime(250);
+    expect(emissionsAfterRecovery).toBeGreaterThan(0);
+    vi.useRealTimers();
+  });
+
+  it('collector-crash-permanent exhausts the budget into a persistent failed state until retryCollection', () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    const statuses: string[] = [];
+    backend.onCollectorStatus((s) => statuses.push(s.state));
+    backend.start();
+
+    backend.injectFault({ kind: 'collector-crash-permanent', reason: 'repeat', attempts: 3, stageMs: 500 });
+    vi.advanceTimersByTime(3 * 500 + 500);
+    expect(statuses.filter((s) => s === 'recovering')).toHaveLength(3);
+    expect(statuses.at(-1)).toBe('failed');
+    expect(backend.getStatus().attempt).toBe(4); // max_attempts + 1
+    expect(backend.isHalted).toBe(true);
+
+    // retryCollection outside failed would be a no-op; from failed it restores.
+    vi.advanceTimersByTime(2_000);
+    expect(statuses.at(-1)).toBe('failed'); // no automatic restart while failed
+
+    expect(backend.retryCollection()).toBe('failed'); // mirrors the command contract
+    expect(statuses.at(-1)).toBe('healthy');
+    vi.advanceTimersByTime(250); // ticks resumed
+    expect(backend.isHalted).toBe(false);
+    vi.useRealTimers();
   });
 
   it('schema-version fault changes the schema_version of emitted snapshots', () => {

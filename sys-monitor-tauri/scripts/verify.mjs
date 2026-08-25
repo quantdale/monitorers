@@ -78,6 +78,17 @@ function tauri() {
   run('Tauri release executable', process.execPath, [tauriCli, 'build', '--no-bundle'], appRoot);
 }
 
+function packaged() {
+  if (process.platform !== 'win32') {
+    throw new Error('Packaged-app qualification requires Windows.');
+  }
+  // Canonical packaged-runtime qualification: build the real executable,
+  // then launch and assert it through the WebView2/CDP driver. Dispatch/tag
+  // policy lane — expensive by design.
+  tauri();
+  runNpm('packaged-app qualification', ['run', 'verify:packaged'], appRoot);
+}
+
 const mode = process.argv[2];
 switch (mode) {
   case 'frontend':
@@ -98,6 +109,9 @@ switch (mode) {
   case 'tauri':
     tauri();
     break;
+  case 'packaged':
+    packaged();
+    break;
   case 'fast':
     frontend();
     rust();
@@ -110,5 +124,5 @@ switch (mode) {
     tauri();
     break;
   default:
-    throw new Error('usage: node scripts/verify.mjs <frontend|rust|version|e2e|sim|tauri|fast|full>');
+    throw new Error('usage: node scripts/verify.mjs <frontend|rust|version|e2e|sim|tauri|packaged|fast|full>');
 }

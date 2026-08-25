@@ -1,5 +1,34 @@
 export type MetricValue = number | null;
 
+/**
+ * Mirrors `CollectorLifecycleState` (src-tauri/src/collector/supervisor.rs).
+ * Serde serializes the Rust enum as snake_case via `rename_all`.
+ */
+export type CollectorLifecycleState =
+  | 'starting'
+  | 'healthy'
+  | 'recovering'
+  | 'failed'
+  | 'stopping';
+
+/**
+ * Mirrors `CollectorStatus` (src-tauri/src/collector/supervisor.rs) — the typed
+ * lifecycle contract delivered via the `collector-status` event and the
+ * `get_collector_status` command. Keep in sync by hand; its schema version is
+ * independent of the metrics snapshot version.
+ */
+export interface CollectorStatus {
+  schema_version: number;
+  state: CollectorLifecycleState;
+  /** Monotonically increasing supervised-session counter (starts at 1). */
+  generation: number;
+  /** Consecutive failed sessions in the current streak (0 while healthy). */
+  attempt: number;
+  max_attempts: number;
+  reason: string | null;
+  timestamp_ms: number;
+}
+
 export interface NvidiaTelemetry {
   temp_c?: number | null;
   power_w?: number | null;

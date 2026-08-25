@@ -23,11 +23,27 @@ export interface ConsoleCapture {
  * process kill mid-write can never leave a truncated artifact behind (CI
  * uploads these files; a half-written run.jsonl breaks the reproduce
  * contract it exists to serve).
+ *
+ * The rename is retried a bounded number of times: Windows can transiently
+ * lock freshly written files (Defender/indexer scans), which surfaced as an
+ * EPERM on `renameSync` and failed an otherwise-passing journey. Same
+ * bounded-retry pattern the RealAppDriver uses for work-dir cleanup.
  */
 export function writeAtomic(path: string, data: string): void {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, data, 'utf8');
-  renameSync(tmp, path);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      renameSync(tmp, path);
+      return;
+    } catch (error) {
+      lastError = error;
+      // Blocking sleep (sync context): bounded backoff before the next rename.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 export function writeJsonl(runDir: string, lines: JsonLog[]): string {

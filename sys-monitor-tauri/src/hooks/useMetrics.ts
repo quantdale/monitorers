@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  CollectorLifecycleState,
+  CollectorStatus,
   DiskHistory,
   GpuHistory,
   HistoryPayload,
@@ -26,6 +28,15 @@ export const EXPECTED_SCHEMA_VERSION = 5;
 export const SCHEMA_MISMATCH_MESSAGE =
   'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
 
+/**
+ * Lifecycle contract version — mirrors `LIFECYCLE_SCHEMA_VERSION`
+ * (src-tauri/src/collector/supervisor.rs). Independent of EXPECTED_SCHEMA_VERSION.
+ */
+export const EXPECTED_LIFECYCLE_SCHEMA_VERSION = 1;
+
+export const LIFECYCLE_SCHEMA_MISMATCH_MESSAGE =
+  'Frontend/backend collector lifecycle schema mismatch. Rebuild the application so both sides use the same version.';
+
 export class SchemaMismatchError extends Error {
   readonly code = 'IPC_SCHEMA_MISMATCH';
   readonly expected: number;
@@ -47,6 +58,34 @@ export class SchemaMismatchError extends Error {
 export function assertSchemaVersion(actual: unknown, payloadName: string): void {
   if (actual !== EXPECTED_SCHEMA_VERSION) {
     const error = new SchemaMismatchError(actual, payloadName);
+    console.error(`[IPC] ${error.message}`);
+    throw error;
+  }
+}
+
+export class LifecycleSchemaMismatchError extends Error {
+  readonly code = 'IPC_LIFECYCLE_SCHEMA_MISMATCH';
+  readonly expected: number;
+  readonly actual: unknown;
+
+  constructor(actual: unknown) {
+    super(
+      `${LIFECYCLE_SCHEMA_MISMATCH_MESSAGE} Expected collector-status schema ${EXPECTED_LIFECYCLE_SCHEMA_VERSION}, received ${String(actual)}.`
+    );
+    this.name = 'LifecycleSchemaMismatchError';
+    this.expected = EXPECTED_LIFECYCLE_SCHEMA_VERSION;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Validate and reject incompatible lifecycle payloads before any lifecycle
+ * state is touched. The listener stays attached so a compatible rebuild can
+ * recover without restarting the hook (same discipline as metric payloads).
+ */
+export function assertLifecycleSchemaVersion(status: CollectorStatus): void {
+  if (status?.schema_version !== EXPECTED_LIFECYCLE_SCHEMA_VERSION) {
+    const error = new LifecycleSchemaMismatchError(status?.schema_version);
     console.error(`[IPC] ${error.message}`);
     throw error;
   }
@@ -228,6 +267,8 @@ export interface SlicedHistory {
   net_sent: number[];
   gpus: SlicedGpuHistory[];
   collectorError: string | null;
+  /** Supervised-collector lifecycle state (null until first status arrives). */
+  collectorState: CollectorLifecycleState | null;
 }
 
 /** Append a validated full-tick snapshot to a history payload. */
@@ -328,6 +369,14 @@ export interface UseMetricsResult {
   metrics: SlicedHistory | null;
   /** Includes actionable schema mismatch text when an incompatible payload is rejected. */
   historyLoadError: string | null;
+  /** Latest supervised-lifecycle status (null until one arrives). */
+  lifecycle: CollectorStatus | null;
+  /**
+   * Manual retry for an exhausted recovery budget. Resolves to the resulting
+   * lifecycle state ('failed' means the request was coalesced/ignored), or
+   * null when no backend was reachable.
+   */
+  retryMetrics: () => Promise<CollectorLifecycleState | null>;
 }
 
 export function useMetrics(windowSeconds: number): UseMetricsResult {
@@ -335,14 +384,37 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const [memGb, setMemGb] = useState({ used: 0, total: 0 });
   const [collectorError, setCollectorError] = useState<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<CollectorStatus | null>(null);
   const [latestCpu, setLatestCpu] = useState(0);
   const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
   const historyRef = useRef<HistoryPayload | null>(null);
   const historyRequestError = useRef<string | null>(null);
   const liveSchemaError = useRef<string | null>(null);
+  const lifecycleSchemaError = useRef<string | null>(null);
   const requestGeneration = useRef(0);
   const liveSequence = useRef(0);
   const liveEvents = useRef<LiveEvent[]>([]);
+
+  // Single composition point for the actionable error surface: a live metric
+  // schema fault outranks a lifecycle contract fault, which outranks a failed
+  // history request. Each clears only through its own recovery proof.
+  const syncLoadError = () =>
+    setHistoryLoadError(
+      liveSchemaError.current ?? lifecycleSchemaError.current ?? historyRequestError.current
+    );
+
+  /** Manual retry for an exhausted recovery budget (backend coalesces outside failed). */
+  const retryMetrics = useCallback(async (): Promise<CollectorLifecycleState | null> => {
+    if (isTauri()) {
+      try {
+        return await invoke<CollectorLifecycleState>('retry_collection');
+      } catch (error) {
+        console.warn('[useMetrics] retry_collection failed:', error);
+        return null;
+      }
+    }
+    return getSimBackend().retryCollection();
+  }, []);
 
   useEffect(() => {
     const generation = ++requestGeneration.current;
@@ -362,12 +434,12 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         setHistory(next);
         historyRequestError.current = null;
         liveSchemaError.current = null;
-        setHistoryLoadError(null);
+        syncLoadError();
         // The accepted payload now includes every event recorded so far.
         liveEvents.current = liveEvents.current.filter((event) => event.sequence > liveSequence.current);
       } catch (error) {
         historyRequestError.current = error instanceof SchemaMismatchError ? error.message : String(error);
-        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+        syncLoadError();
       }
     };
 
@@ -375,7 +447,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       if (cancelled || generation !== requestGeneration.current) return;
       console.warn('[useMetrics] get_history failed:', error);
       historyRequestError.current = error instanceof Error ? error.message : String(error);
-      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      syncLoadError();
     };
 
     if (isTauri()) {
@@ -401,7 +473,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         // payload. The listener remains attached so a compatible rebuild can
         // recover without restarting the hook.
         liveSchemaError.current = error instanceof SchemaMismatchError ? error.message : String(error);
-        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+        syncLoadError();
         return;
       }
 
@@ -412,7 +484,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       // history response succeeds or a full tick seeds an empty history.
       liveSchemaError.current = null;
       if (snap.on_tick && historyRef.current === null) historyRequestError.current = null;
-      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      syncLoadError();
       const sequence = ++liveSequence.current;
       liveEvents.current = [
         ...liveEvents.current.slice(-MAX_HISTORY),
@@ -430,6 +502,29 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       });
     };
 
+    const handleCollectorStatus = (status: CollectorStatus) => {
+      try {
+        assertLifecycleSchemaVersion(status);
+      } catch (error) {
+        // Fail closed on incompatible lifecycle payloads without touching any
+        // lifecycle state; the listener stays attached for a compatible rebuild.
+        lifecycleSchemaError.current =
+          error instanceof LifecycleSchemaMismatchError ? error.message : String(error);
+        syncLoadError();
+        return;
+      }
+      // A valid status proves the lifecycle contract recovered from any earlier
+      // mismatch on this channel.
+      lifecycleSchemaError.current = null;
+      syncLoadError();
+      setLifecycle(status);
+      if (status.state === 'healthy') {
+        // Actual recovery proof: transient failure/recovery UI clears here and
+        // only here (never on unrelated metrics-update events).
+        setCollectorError(null);
+      }
+    };
+
     const handleCollectorError = (message: string) => setCollectorError(message);
 
     if (isTauri()) {
@@ -439,20 +534,26 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       const unlistenErrorPromise = listen<string>('collector-error', (event) => {
         handleCollectorError(event.payload);
       });
+      const unlistenStatusPromise = listen<CollectorStatus>('collector-status', (event) => {
+        handleCollectorStatus(event.payload);
+      });
       return () => {
         unlistenMetricsPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenErrorPromise.then((unlisten) => unlisten()).catch(() => undefined);
+        unlistenStatusPromise.then((unlisten) => unlisten()).catch(() => undefined);
       };
     }
 
     const backend = getSimBackend();
     backend.onSnapshot(handleSnapshot);
     backend.onCollectorError(handleCollectorError);
+    backend.onCollectorStatus(handleCollectorStatus);
     backend.start();
     return () => {
       backend.stop();
       backend.offSnapshot(handleSnapshot);
       backend.offCollectorError(handleCollectorError);
+      backend.offCollectorStatus(handleCollectorStatus);
     };
   }, []);
 
@@ -486,8 +587,9 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         latest: latestGpu[gpu.key] ?? [...gpu.values].reverse().find((value) => value != null) ?? 0,
       })),
       collectorError,
+      collectorState: lifecycle?.state ?? null,
     };
-  }, [history, memGb, latestCpu, latestGpu, collectorError, windowSeconds]);
+  }, [history, memGb, latestCpu, latestGpu, collectorError, lifecycle, windowSeconds]);
 
-  return { metrics, historyLoadError };
+  return { metrics, historyLoadError, lifecycle, retryMetrics };
 }

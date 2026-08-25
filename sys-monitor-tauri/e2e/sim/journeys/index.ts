@@ -121,32 +121,114 @@ const longWatchCadence: Journey = {
   },
 };
 
-// ── 4. Fault response (mock lane; scripted faults) ───────────────────────────
+// ── 4. Fault response: budget exhaustion + manual retry (mock lane) ──────────
 
 const faultResponse: Journey = {
-  id: 'fault-response',
-  title: 'Fault response: collector error + disk ghost/restore',
+  id: 'fault-retry-exhaustion',
+  title: 'Fault response: exhausted recovery budget, manual retry restores',
+  supportedDrivers: ['mock'],
+  personaIds: ['sentinel'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'exhaustion journey requires a page');
+      return;
+    }
+
+    const cpuValue = async () => {
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
+    };
+
+    // Repeated failures exhaust the budget: interruption is reported
+    // immediately, then the persistent alert appears with the failure message
+    // and an accessible Retry control.
+    await S.injectFault(ctx, { kind: 'collector-crash-permanent', reason: 'repeated synthetic panics' });
+    await S.waitForState(ctx, 'collector-error-banner');
+    // Sample the held value only after the failed state is on screen: ticks
+    // may legitimately render during fault-injection latency.
+    const held = await cpuValue();
+    const bannerText = await page.locator('[data-testid="collector-error-banner"]').innerText();
+    ctx.assert('failure-message-visible', /recovery attempts/i.test(bannerText), `alert names the failure: ${bannerText.slice(0, 60)}`);
+    const retry = page.getByRole('button', { name: /retry metrics/i });
+    await retry.waitFor({ state: 'visible', timeout: 5_000 });
+    ctx.assert('retry-button-accessible', await retry.isEnabled(), 'Retry metrics button is present and enabled');
+
+    // Last-known values stay visible (no zeros) while failed.
+    const duringFailure = await cpuValue();
+    ctx.assert('values-retained-while-failed', held.length > 0 && held === duringFailure, `cpu value held (${held.slice(0, 40)})`);
+
+    // No automatic restart happens while failed.
+    await new Promise((r) => setTimeout(r, 1_500));
+    ctx.assert('no-auto-restart', (await page.locator('[data-testid="collector-error-banner"]').count()) === 1, 'failed state persists without automatic restart');
+
+    // Manual retry: one click leaves Failed and live collection resumes.
+    await retry.click();
+    const cleared = await S.pollUntil(
+      async () => (await page.locator('[data-testid="collector-error-banner"]').count()) === 0,
+      (gone) => gone,
+      10_000
+    );
+    ctx.assert('retry-clears-failure', cleared, 'failure UI cleared after manual retry');
+    const resumed = await S.pollUntil(cpuValue, (v) => v !== held, 15_000);
+    ctx.assert('values-resume-after-retry', resumed !== held, `cpu value resumed (${resumed.slice(0, 40)})`);
+  },
+};
+
+// ── 4b. Automatic recovery: interruption is transient, app stays usable ──────
+
+const collectorRecovery: Journey = {
+  id: 'collector-recovery',
+  title: 'Automatic recovery: interruption shows recovering UI, then clears itself',
   supportedDrivers: ['mock'],
   personaIds: ['sentinel', 'customizer'],
   async run(ctx) {
     await S.waitForState(ctx, 'live');
-    await ctx.dwell();
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'recovery journey requires a page');
+      return;
+    }
 
-    // 4a. Collector error → banner appears, never clears, values freeze.
-    await S.injectFault(ctx, { kind: 'collector-error', message: 'metrics collection stopped — restart the app' });
-    await S.waitForState(ctx, 'collector-error-banner');
-    const errText = await ctx.driver.page?.locator('[data-testid="collector-error-banner"]').innerText();
-    ctx.assert('banner-text', (errText ?? '').includes('restart the app'), 'banner text matches');
-    // Values freeze: cpu value stops changing after the error.
-    const val = async () => {
-      const page = ctx.driver.page;
-      if (!page) return '';
-      return (await page.locator('[data-testid="metric-card-cpu"]').innerText()).replace(/\s+/g, ' ');
+    const cpuValue = async () => {
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
     };
-    const v1 = await val();
-    await new Promise((r) => setTimeout(r, 1200));
-    const v2 = await val();
-    ctx.assert('values-frozen', v1 === v2, `cpu value held (${v1.slice(0, 40)})`);
+
+    // Session panic: emissions stop, recovering status drives the polite banner.
+    await S.injectFault(ctx, { kind: 'collector-crash', reason: 'journey synthetic panic', recoverAfterMs: 2_500 });
+    await S.waitForState(ctx, 'collector-recovering-banner');
+    // Sample the retained value only once recovery is visibly underway; ticks
+    // may legitimately render during fault-injection latency.
+    const beforeInterruption = await cpuValue();
+    await S.waitForState(ctx, 'collector-recovering-banner');
+    const recoveringText = await page.locator('[data-testid="collector-recovering-banner"]').innerText();
+    ctx.assert('recovering-message', /recovering/i.test(recoveringText), `transient announcement shown: ${recoveringText.slice(0, 50)}`);
+
+    // Dashboard keeps last-known values during recovery — no zeros, no blanks.
+    const duringRecovery = await cpuValue();
+    ctx.assert('last-known-retained', beforeInterruption.length > 0 && beforeInterruption === duringRecovery, `cpu value retained (${beforeInterruption.slice(0, 40)})`);
+    ctx.assert('cards-still-present', (await page.locator('[data-testid^="metric-card-"]').count()) >= 3, 'dashboard stays rendered during recovery');
+
+    // Automatic restoration: banner clears by itself; no restart, no user action.
+    const autoCleared = await S.pollUntil(
+      async () => (await page.locator('[data-testid="collector-recovering-banner"]').count()) === 0,
+      (gone) => gone,
+      12_000
+    );
+    ctx.assert('auto-clear-on-recovery', autoCleared, 'recovering banner cleared automatically after restoration');
+
+    // Live values resume moving after the gap.
+    const resumed = await S.pollUntil(cpuValue, (v) => v !== beforeInterruption, 15_000);
+    ctx.assert('values-resume-after-recovery', resumed !== beforeInterruption, `cpu value resumed (${resumed.slice(0, 40)})`);
+
+    // The app remains fully usable afterwards: a settings interaction lands and
+    // persists through the normal path.
+    await S.setWindow(ctx, 300);
+    await S.waitForPersistedSettings(ctx, (s) => s.windowSecs === 300);
+    const persisted = await S.persistedSettings(ctx);
+    ctx.assert('usable-after-recovery', persisted.windowSecs === 300, `post-recovery settings interaction persisted (windowSecs=${String(persisted.windowSecs)})`);
   },
 };
 
@@ -420,6 +502,7 @@ export const JOURNEYS: Journey[] = [
   customizationRoundtrip,
   longWatchCadence,
   faultResponse,
+  collectorRecovery,
   diskGhostCycle,
   gpuHotplugGap,
   schemaMismatch,

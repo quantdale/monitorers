@@ -83,7 +83,8 @@ export type JourneyState =
   | 'history-error-fatal'
   | 'all-hidden'
   | 'live'
-  | 'collector-error-banner';
+  | 'collector-error-banner'
+  | 'collector-recovering-banner';
 
 export interface Journey {
   id: string;

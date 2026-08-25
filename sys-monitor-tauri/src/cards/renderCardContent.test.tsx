@@ -1,10 +1,16 @@
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { DndContext } from '@dnd-kit/core';
 import { renderCardContent } from './renderCardContent';
 import type { SlicedHistory } from '../hooks/useMetrics';
+
+// These tests mount real Recharts trees under jsdom; on a heavily loaded
+// machine (parallel cargo/vite builds) a full mount can exceed Vitest's 5s
+// default. This extends only the wall-clock allowance — assertions are
+// unchanged and still fail on genuinely broken rendering.
+vi.setConfig({ testTimeout: 20_000 });
 
 function sliced(overrides: Partial<SlicedHistory> = {}): SlicedHistory {
   return {
@@ -21,6 +27,7 @@ function sliced(overrides: Partial<SlicedHistory> = {}): SlicedHistory {
     net_sent: [0, 500],
     gpus: [],
     collectorError: null,
+    collectorState: null,
     ...overrides,
   };
 }
