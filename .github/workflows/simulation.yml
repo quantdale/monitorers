@@ -53,10 +53,10 @@ jobs:
         shell: pwsh
         run: |
           $cargo = Get-Content sys-monitor-tauri/src-tauri/Cargo.toml -Raw
-          if ($cargo -notmatch '(?m)^\\[features\\]\s*$') { throw "Cargo.toml missing [features] table" }
-          $after = ($cargo -split '(?m)^\\[features\\]\s*$', 2)[1]
-          $table = (($after -split '(?m)^\\[', 2)[0])
-          $names = ($table | Select-String '(?m)^([A-Za-z0-9_-]+)\\s*=' -AllMatches).Matches |
+          if ($cargo -notmatch '(?m)^\[features\]\s*$') { throw "Cargo.toml missing [features] table" }
+          $after = ($cargo -split '(?m)^\[features\]\s*$', 2)[1]
+          $table = (($after -split '(?m)^\[', 2)[0])
+          $names = ($table | Select-String '(?m)^([A-Za-z0-9_-]+)\s*=' -AllMatches).Matches |
             ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
           $expected = @('custom-protocol','default','nvapi','nvml') | Sort-Object
           $diff = Compare-Object $names $expected
