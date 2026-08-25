@@ -73,6 +73,11 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
       // window title, so a silent CDP failure is attributable.
       try {
         const { execFileSync } = await import('node:child_process');
+        if (driver.appExitInfo) {
+          console.log(`[qualify] ${driver.appExitInfo}`);
+        } else {
+          console.log('[qualify] app process still alive at failure time');
+        }
         console.log(
           '[qualify] tasklist:',
           execFileSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' })

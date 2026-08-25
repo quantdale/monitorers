@@ -299,14 +299,33 @@ jobs:
         run: npm run verify:packaged
 
       - name: Uninstall silently and assert removal
+        env:
+          # Interpolating registry strings into the script body breaks parsing
+          # when the uninstall command contains embedded quotes (Tauri NSIS
+          # writes QuietUninstallString as a quoted path); env vars arrive
+          # verbatim and are parsed explicitly below.
+          SYSMON_UNINSTALL_CMD: ${{ steps.install.outputs.uninstall }}
+          SYSMON_INSTALLED_EXE: ${{ steps.install.outputs.exe }}
+          SYSMON_REGKEY: ${{ steps.install.outputs.key }}
         shell: pwsh
         run: |
-          $exe = "${{ steps.install.outputs.exe }}"
-          $keyPath = "${{ steps.install.outputs.key }}"
-          $quiet = "${{ steps.install.outputs.uninstall }}"
-          if (-not $quiet.Contains('/S')) { $quiet = "$quiet /S" }
-          # QuietUninstallString carries quoting; run through cmd for fidelity.
-          $p = Start-Process cmd.exe -ArgumentList "/c",$quiet -Wait -PassThru
+          $exe = $env:SYSMON_INSTALLED_EXE
+          $keyPath = $env:SYSMON_REGKEY
+          $raw = $env:SYSMON_UNINSTALL_CMD.Trim()
+          if ($raw.StartsWith('"')) {
+            $endIdx = $raw.IndexOf('"', 1)
+            if ($endIdx -lt 0) { throw "uninstall command not parseable: $raw" }
+            $uninstExe = $raw.Substring(1, $endIdx - 1)
+            $rest = $raw.Substring($endIdx + 1).Trim()
+          } else {
+            $parts = $raw.Split(' ', 2)
+            $uninstExe = $parts[0]
+            $rest = if ($parts.Length -gt 1) { $parts[1] } else { '' }
+          }
+          if (-not (Test-Path $uninstExe)) { throw "uninstaller not found: $uninstExe" }
+          if ($rest -notmatch '/S') { $rest = "$rest /S".Trim() }
+          Write-Host "uninstalling: \"$uninstExe\" $rest"
+          $p = Start-Process -FilePath $uninstExe -ArgumentList $rest -Wait -PassThru
           if ($p.ExitCode -ne 0) { Write-Host "uninstaller exit code $($p.ExitCode); verifying state directly" }
           Start-Sleep -Seconds 3
           if (Test-Path $exe) {

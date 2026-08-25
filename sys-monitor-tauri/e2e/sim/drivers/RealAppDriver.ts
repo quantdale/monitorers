@@ -255,6 +255,7 @@ export class RealAppDriver implements SimDriver {
   private port: number | null = null;
   private appStderrPath: string | null = null;
   private hklmArgsValueWritten = false;
+  private lastExitInfo: string | null = null;
   private realSettingsPath: string | null = null;
   private realSettingsBefore: FileState | null = null;
   private ownsWorkDir = false;
@@ -318,6 +319,11 @@ export class RealAppDriver implements SimDriver {
   async launch(runId: string, _scenario: SimScenario, outDir?: string): Promise<DriverLaunchResult> {
     this.runId = runId;
     await this.initRun(runId, outDir ?? process.cwd());
+    // The elevated-host policy channel MUST be written before spawn: if the
+    // value lands after the WebView2 loader has already created its
+    // environment, runtime ≥150 restarts the browser process over the flag
+    // change and tears down the just-established debug server.
+    this.applyHklmArgsFallback();
     const stderrFd = this.appStderrPath ? openSync(this.appStderrPath, 'w') : undefined;
     try {
       this.proc = spawn(this.appExe, [], { env: this.env, stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'] });
@@ -330,7 +336,7 @@ export class RealAppDriver implements SimDriver {
       );
     }
     if (stderrFd !== undefined) closeSync(stderrFd);
-    this.applyHklmArgsFallback();
+    this.trackAppExit();
 
     const cdpUrl = `http://127.0.0.1:${this.port}/json/version`;
     await waitForCdpOrProcess(
@@ -394,6 +400,20 @@ export class RealAppDriver implements SimDriver {
       // errors over it either.
     }
     this.hklmArgsValueWritten = false;
+  }
+
+  /** How the spawned app process ended so far, for failure diagnostics. */
+  get appExitInfo(): string | null {
+    return this.lastExitInfo;
+  }
+
+  private trackAppExit(): void {
+    const proc = this.proc;
+    if (!proc) return;
+    const record = (code: number | null, signal: NodeJS.Signals | null): void => {
+      this.lastExitInfo = `app process exited (code=${String(code)}, signal=${String(signal)})`;
+    };
+    proc.on('exit', record);
   }
 
   async injectFault(_fault: SimFault): Promise<boolean> {
