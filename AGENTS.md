@@ -22,6 +22,7 @@ npm run e2e              # Playwright against the Vite mock harness (auto-starts
 npm run sim              # user-simulation mock lane (journeys × personas, engine + artifacts)
 npm run sim:real         # user-simulation packaged lane — drives the BUILT app via CDP (needs app built)
 npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.json)
+npm run verify:packaged  # packaged-app qualification: build exe, drive it via CDP (real IPC/settings/data), assert clean teardown
 ```
 
 Simulation run knobs (`SIM_LANE`, `SIM_JOURNEYS`, `SIM_PERSONAS`, `SIM_SEED`, `SIM_SPEED`,
@@ -47,7 +48,7 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 - Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo audit`
 - Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
 - Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is a required PR/push gate in `.github/workflows/simulation.yml`
-- CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane on workflow_dispatch, shipped-config lint).
+- CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane + shipped-config fault-surface lint on dispatch); `.github/workflows/release-qualification.yml` (dispatch/tag only: MSI/NSIS install/run/uninstall qualification + hashed release manifest).
 
 ## Backend invariants (do not violate)
 
@@ -57,16 +58,18 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 - PDH handles are opened once in `CollectorState::new()` and never recreated (recreating resets rate-counter baselines — first reading is always 0%). One `PdhCollectQueryData` per tick.
 - `WMIConnection` is `!Send`: created on the background MTA thread (exponential backoff, base 1s, max 30s, 8 attempts), never leaves it.
 - Never push directly to a history `VecDeque` — always `push_history()` (`MAX_HISTORY = 3600`).
-- Every tick body runs in `catch_unwind`; on panic it emits `collector-error` and the thread stops permanently (no auto-restart).
+- Every tick body runs in `catch_unwind`; a caught panic ends the SESSION with `LoopOutcome::Panicked` and the supervisor (`collector/supervisor.rs`) replaces it: bounded automatic recovery (3 attempts/streak, staged backoff 500ms→8s, healthy ≥30s resets the streak), then persistent `failed` with manual retry via the `retry_collection` command. Shutdown wins from every state; at most one session ever emits.
+- Fresh sessions rebuild ALL OS-facing state (PDH/sysinfo/NVML/WMI bootstrap/registry) on their own thread and prime rate baselines before a first deadline one tick out — post-recovery first commits are real ~250ms deltas, never fabricated 0% or downtime spikes.
 - Nvidia code is feature-gated `#[cfg(feature = "nvml")]` (primary) / `#[cfg(feature = "nvapi")]` (fallback). Every `unsafe` block needs `// SAFETY:`.
 - IPC payload structs derive `Serialize` only — never `Deserialize`.
 
 ## IPC contract (Tauri v2) — easy to get wrong
 
 - Rust params are `snake_case` (`window_secs`); JS **must pass camelCase** (`{ windowSecs }`). Mismatch fails silently — history stays `null`, UI hangs on "Collecting metrics…".
-- `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-error` (string).
+- `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-status` (typed `CollectorStatus`), `collector-error` (legacy string, still fired per panic for diagnostics).
 - Detect Tauri v2 runtime with `window.__TAURI_INTERNALS__`, **not** `window.__TAURI__`.
-- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **5**. Bump both together when the payload shape changes.
+- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **5**. The lifecycle contract has its own version: `LIFECYCLE_SCHEMA_VERSION` (Rust `collector/supervisor.rs`) must equal `EXPECTED_LIFECYCLE_SCHEMA_VERSION` (TS) — currently **1**. Bump each pair together when its payload shape changes.
+- Commands: `get_history`, `get_hardware_profile`, `get_collector_status`, `retry_collection` (honored only while `failed`; coalesced no-op otherwise), `sim_store_override` (simulation-only).
 
 ## Frontend conventions
 

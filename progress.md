@@ -2,10 +2,9 @@
 
 ## Current Goal
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TS frontend) in
-`sys-monitor-tauri/`, kept in a spec-driven flow (`openspec/`). Current phase: post-hardening
-reconciliation — documentation, OpenSpec specs, and CI configuration aligned with the
-implemented source after the reliability-hardening waves that landed through
-`2026-08-13-comprehensive-reliability-hardening`.
+`sys-monitor-tauri/`, kept in a spec-driven flow (`openspec/`). Current phase:
+production-runtime-recovery-and-release-qualification — supervised collector recovery,
+typed lifecycle IPC, packaged-app qualification, and MSI/NSIS install qualification.
 
 ## Agent Rules
 - Do not ask questions unless truly blocked.
@@ -16,53 +15,47 @@ implemented source after the reliability-hardening waves that landed through
 - Run tests, lint, or build when available.
 - Do not run destructive commands, force pushes, production deploys, or database resets.
 
-## Status snapshot (verified 2026-08-21, after hardening pass)
-- Authoritative quick reference: root `AGENTS.md`. `CLAUDE.md` and `.cursorrules` were
-  re-reconciled against source on 2026-08-21 (schema version 5, modular backend layout,
-  plugin-store persistence, default features `["nvapi", "nvml"]`, canonical `verify:*` gates).
-- Verified gate status (frontend): `npx tsc --noEmit` clean; Vitest 209/209 passing;
-  `npm run build` OK (split chunks: app ~57 kB + vendor-react/charts/dnd, charts lazy-loaded);
-  `npm run sim:typecheck` clean. Rust: fmt/clippy clean both feature lanes, 180 lib tests
-  passing (plus probe/main suites); one ignored real-hardware cadence test.
-- E2E mock harness: 12 Playwright tests in 6 files (`npx playwright test --list`,
-  `e2e/playwright.config.ts`). Earlier docs saying "9 tests" were stale and are corrected.
-- Canonical gates live in `sys-monitor-tauri/scripts/verify.mjs`: clippy runs
-  `--all-targets --all-features -- -D warnings`; Rust tests run under five feature
-  combinations; `verify:fast` = frontend+rust, wired to husky `pre-push`.
-- Backend layout: `src-tauri/src/{main.rs thin shell, lib.rs facade, cadence.rs, error_log.rs,
-  hardware.rs, pdh.rs, sensor.rs, state.rs, bin/cadence_probe.rs, collector/{mod,cpu,disk,gpu,
-  nvidia,run_loop,snapshot}.rs}`. IPC commands: `get_history`, `get_hardware_profile`,
-  `sim_store_override` (simulation-only). Fatal collector errors persist to a size-capped
-  `collector-error.log` in the app-data dir (`error_log.rs`).
+## Status snapshot (2026-08-25, after the recovery campaign)
+- Authoritative quick reference: root `AGENTS.md`. Supervisor lifecycle, recovery
+  policy, status contract (`LIFECYCLE_SCHEMA_VERSION = 1`), retry semantics, and the
+  qualification lanes are documented there; `CLAUDE.md` / `.cursorrules` were
+  reconciled against source on 2026-08-25.
+- Collector: supervised sessions (`src-tauri/src/collector/supervisor.rs`). A panic
+  ends one session; bounded automatic recovery replaces it (3 attempts/streak,
+  staged backoff 500ms→8s, healthy ≥30s resets); exhausted budget → persistent
+  `failed` with manual `retry_collection`. Fresh sessions rebuild all OS-facing
+  state and prime rate baselines (no fabricated post-recovery zeros/spikes).
+  History survives sessions; downtime remains a truthful timestamp gap.
+- Verified locally during the campaign: Rust fmt/clippy clean, 198 tests green;
+  Vitest 216/216; Playwright E2E 12/12; mock sim matrix 16/16 journey runs green
+  (~5.4 min) including new `collector-recovery` and `fault-retry-exhaustion`;
+  `sim:typecheck`, `verify:version`, `openspec validate --strict` clean.
+- Fixed en route: `MetricCard` list view had lost its `metric-card-*` testid
+  (d24d6a1 regression that hung `layout-persistence`); artifact writer now retries
+  transient Windows rename locks.
+- Release boundary: `npm run verify:packaged` drives the built exe via CDP (real
+  IPC, isolated real settings store, orphan-process assertions);
+  `.github/workflows/release-qualification.yml` (dispatch/tag) builds MSI+NSIS,
+  qualifies install/run/uninstall per format on clean runners, uploads a hashed
+  release manifest. Installers remain unsigned (no certificate).
 
 ## Active TODO
 - [ ] None in progress.
 
 ## Completed
-- [x] Reconciled `CLAUDE.md` and `.cursorrules` against source (drift corrections listed in
-      the 2026-08-21 reconciliation report).
-- [x] Replaced this template skeleton with a truthful status snapshot.
-- [x] Spot-checked all 15 `openspec/specs/*/spec.md` capabilities against code; fixed
-      contradicting text, noted aspirational requirements in the report.
-- [x] Annotated `AUDIT_REPORT.md` with a remediation-status header (2026-08-21).
-- [x] Hardening pass 2026-08-21: backend determinism/dedup/error-context fixes + tests;
-      frontend drag-reorder guard, render memoization, bundle split + lazy charts; sim
-      platform atomic artifacts, bounded teardown, semantic polling, new journeys; IPC
-      schema v5 (`net_*_kib_s` rename, dead disk `temp_c` removed).
+- [x] 2026-08-21 hardening pass reconciliation (see git history).
+- [x] 2026-08-25 supervised collector recovery + lifecycle contract + recovery UX.
+- [x] 2026-08-25 packaged qualification lane + MSI/NSIS release-qualification CI.
 
 ## Backlog Ideas
-- [x] ~~Normalize mixed CRLF/LF line endings in root `CLAUDE.md` / `.cursorrules`~~ —
-      investigated 2026-08-21: repo blobs are already LF-normalized; working-tree CRLF comes
-      from `core.autocrlf=true` at checkout. Not an issue; no change needed.
-- [ ] CI efficiency: `rust.yml` compiles `cargo-audit` from source on every Windows Rust job
-      (`cargo install cargo-audit --version 0.22.1 --locked`); a prebuilt-binary action would
-      cut minutes per run. Needs a deliberate PR, not a drive-by edit.
-- [ ] `.cursorrules` §6 still documents only the co-located Rust/Vitest layers; consider a
-      pointer to the simulation platform docs (`e2e/sim/`) once specs settle.
-- [x] Internal Rust names `RawPoll.net_recv_kb_s/net_sent_kb_s` renamed to `*_kib_s`
-      (2026-08-21) — same misnomer cleanup as the schema v5 IPC keys.
-- [ ] Real-lane sim journey for sidebar-order persistence across true relaunch (needs built
-      exe; `dragSidebarCard` step is now drivable).
+- [ ] CI efficiency: `rust.yml` compiles `cargo-audit` from source every Windows
+      Rust job; a prebuilt-binary action would cut minutes. Needs a deliberate PR.
+- [ ] `.cursorrules` §6 could gain a pointer to the simulation platform docs once
+      specs settle further.
+- [ ] Real-lane sim journey for sidebar-order persistence across true relaunch
+      (needs built exe).
+- [ ] Dual identical-GPU runtime mapping still physically unvalidated (needs
+      qualifying hardware); deterministic fixtures cover identity logic.
 
 ## Blocked
 - None.

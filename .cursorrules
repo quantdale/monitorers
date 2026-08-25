@@ -171,7 +171,7 @@ monitorers/
 - Poll loop (250ms live / intended 1Hz history):
   1. `collector::poll()` — all slow Win32 I/O, **no lock held** → produces `RawPoll`
   2. Lock → `collector::commit()` (pure memory writes, microseconds) → `build_snapshot()` → Unlock
-  3. `app_handle.emit("metrics-update", snapshot)` — NOT emit_all (removed in Tauri v2)
+  3. `app_handle.emit("metrics-update", snapshot)` — NOT emit_all (removed in Tauri v2). The loop runs inside a supervised session (`collector/supervisor.rs`): a panic ends the session with `LoopOutcome::Panicked` and bounded automatic recovery replaces it (3 attempts/streak, staged backoff, healthy-reset); `failed` exposes a manual `retry_collection` command.
 
 **Violating this by holding the lock during PDH/WMI calls will cause UI jank.**
 

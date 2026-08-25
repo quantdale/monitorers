@@ -59,7 +59,7 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - **PDH handles are opened once** in `CollectorState::new()` and never recreated — recreating resets rate-counter baselines (first reading is always 0%, by design). A single `PdhCollectQueryData` per tick snapshots GPU and disk counters atomically.
 - **WMI/COM thread affinity**: winit initializes COM as STA on the main thread, so `WMIConnection::new()` runs on the spawned MTA background thread (with exponential-backoff retry: base 1s, max 30s, 8 attempts) and **never leaves it**. Core metrics start while WMI enrichment retries in the background.
 - Hardware profile detection starts with PDH/sysinfo fallbacks and emits `hardware-profile-ready`; later stable hardware-set changes emit an updated profile.
-- **Panic recovery**: each tick body runs inside `std::panic::catch_unwind`. On a caught panic the loop emits `app_handle.emit("collector-error", "metrics collection stopped — restart the app")` and **breaks** — the collector thread stops permanently (no auto-restart), so metrics freeze until the app is relaunched.
+- **Supervised recovery**: each tick body runs inside `std::panic::catch_unwind`; a caught panic ends that SESSION with `LoopOutcome::Panicked` and `collector/supervisor.rs` replaces it — bounded automatic recovery (3 attempts per streak, staged backoff 500ms→8s, a healthy period ≥30s resets the streak) and a persistent `failed` state with manual retry via the `retry_collection` command. Every session rebuilds fresh OS-facing state (PDH/sysinfo/NVML/WMI bootstrap/registry) on its own thread and primes rate baselines before its first deadline, so post-recovery commits are real ~250ms deltas. Shutdown wins from every state.
 
 ## Frontend architecture (`src/`)
 
@@ -71,7 +71,7 @@ The whole backend is one background thread doing a polling loop. Understanding t
 
 ### IPC contract (Tauri v2) — easy to get wrong
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
-- Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), and `collector-error` (a `string` message) when the collector thread panics and halts.
+- Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), `collector-error` (legacy `string` message, still fired per panic for diagnostics), and `collector-status` (typed `CollectorStatus` lifecycle contract with its own `LIFECYCLE_SCHEMA_VERSION`, also served by the `get_collector_status` command; `retry_collection` is honored only while `failed`).
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
 - **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `5`.** Bump both together when payload shape changes.
 

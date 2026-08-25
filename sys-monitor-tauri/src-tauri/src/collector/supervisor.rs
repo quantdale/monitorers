@@ -538,6 +538,21 @@ mod tests {
         }
     }
 
+    /// Escalation/retry-budget tests must not depend on scheduler timing: a
+    /// loaded host can stretch the scripted sessions' millisecond "healthy"
+    /// windows past `healthy_reset_after`, which would legitimately reset the
+    /// streak mid-test. A horizon no test run can outlive keeps the budget
+    /// arithmetic deterministic; the reset behavior itself has its own
+    /// dedicated test below.
+    fn escalation_policy() -> RecoveryPolicy {
+        RecoveryPolicy {
+            max_attempts: 2,
+            base_backoff: Duration::from_millis(2),
+            max_backoff: Duration::from_millis(4),
+            healthy_reset_after: Duration::from_secs(3_600),
+        }
+    }
+
     /// Observation handles for a supervision run started on its own thread.
     type SupervisionLog = Arc<Mutex<Vec<(u32, CollectorLifecycleState, u32)>>>;
 
@@ -682,7 +697,7 @@ mod tests {
                 Script::Panicked("crash three".into()),
                 Script::RunUntilStopped, // started by the manual retry
             ],
-            fast_policy(),
+            escalation_policy(),
         );
         assert!(wait_for(
             &sup.log,
@@ -757,7 +772,7 @@ mod tests {
                 Script::Panicked("b".into()),
                 Script::Panicked("c".into()),
             ],
-            fast_policy(),
+            escalation_policy(),
         );
         assert!(wait_for(
             &sup.log,
@@ -849,7 +864,7 @@ mod tests {
         ]);
         let stop_inner = Arc::clone(&stop);
         let retry_inner = Arc::clone(&retry);
-        let policy = fast_policy();
+        let policy = escalation_policy();
         std::thread::spawn(move || {
             supervise(&mut runner, stop_inner, retry_inner, policy, |status| {
                 if status.state == FAILED {
