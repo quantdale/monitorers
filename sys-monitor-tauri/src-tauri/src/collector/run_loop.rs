@@ -170,7 +170,8 @@ pub fn monotonic_timestamp_ms(wall_origin_ms: u64, epoch: Instant, now: Instant)
 /// where every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O and a
 /// history commit) and the other 3 are registry-only (CPU + GPU scalar refresh,
 /// no history write). A caught panic delivers exactly one message to `on_error`
-/// and stops the loop (no auto-restart, by design).
+/// and ends the loop with `LoopOutcome::Panicked`, which the supervisor uses to
+/// replace the session.
 ///
 /// `limit: Some(LoopLimit::Ticks(n))` returns after `n` iterations;
 /// `Some(LoopLimit::Duration(d))` uses monotonic elapsed time; `None` loops
@@ -389,8 +390,9 @@ mod tests {
     }
 
     // Drives the REAL run_collector_loop with a provider that panics on its 2nd
-    // poll. Assertions: exactly one on_error delivery, and no further emits
-    // after the panicking tick — the loop stops permanently (no auto-restart).
+    // poll. Assertions: exactly one on_error delivery, no further emits after
+    // the panicking tick, and the outcome surfaces as LoopOutcome::Panicked for
+    // supervision.
     #[test]
     fn test_run_collector_loop_panicking_provider_emits_one_error_and_stops() {
         use crate::sensor::SensorProvider;
