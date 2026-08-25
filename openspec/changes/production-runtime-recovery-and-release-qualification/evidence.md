@@ -76,7 +76,11 @@
 
 ## Hosted validation
 
-(pending connectivity — populated incrementally)
+- PR opened: **quantdale/monitorers#28** (`agent/monitorers-comprehensive-remediation` → `main`).
+- Hosted runs at intermediate head `201f7fd`: E2E ✓ success (run 32841068357), Rust-and-release ✓ success (run 32841068350), Simulation ✗ failure (run 32841068418).
+- Simulation failure root cause: the NEW shipped-config fault-surface lint used double-backslash regexes in its PowerShell single-quoted strings (`^\\[features\\]`), so `-notmatch` threw "Cargo.toml missing [features]" on clean sources. Diagnosed from the failed job log; fixed in `ca2cf98`; **Simulation — config lint PASS (11 s)** on HEAD.
+- Hosted runs at HEAD: E2E ✓ pass; Frontend ✓ pass; Snyk ✓ pass; Rust/Simulation/executable lanes in progress at report time (watcher running).
+- Installer qualification triggered via the workflow's designed tag lane (workflow_dispatch requires the file on the default branch): annotated tag **`v0.1.4-rc1`** pushed at campaign HEAD → release-qualification run **32842750871** in progress.
 
 ## Commits (this campaign)
 
