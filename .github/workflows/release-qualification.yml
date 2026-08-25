@@ -150,8 +150,23 @@ jobs:
           if ($props.DisplayVersion -ne $expectedVersion) {
             throw "installed version $($props.DisplayVersion) != package version $expectedVersion"
           }
-          $exe = Join-Path $props.InstallLocation 'sys-monitor-tauri.exe'
-          if (-not (Test-Path $exe)) { throw "installed executable missing: $exe" }
+          # Locate the application binary structurally: the largest non-uninstaller
+          # executable under the registered install location. Verifying its file
+          # ProductVersion against the release version catches metadata drift at
+          # the actual installed artifact, not just registry text.
+          $dir = $props.InstallLocation
+          if (-not $dir -or -not (Test-Path $dir)) { throw "InstallLocation not usable: '$($props.InstallLocation)'" }
+          Get-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }
+          $appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -notmatch 'uninstall' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $appExe) { throw "installed executable missing under $dir" }
+          $exe = $appExe.FullName
+          $binaryVersion = $appExe.VersionInfo.ProductVersion
+          Write-Host "installed binary: $exe (ProductVersion $binaryVersion)"
+          if ($binaryVersion -notlike "*$expectedVersion*") {
+            throw "binary ProductVersion $binaryVersion != package version $expectedVersion"
+          }
           "productCode=$($key.PSChildName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
@@ -245,15 +260,25 @@ jobs:
           if ($props.DisplayVersion -ne $expectedVersion) {
             throw "installed version $($props.DisplayVersion) != package version $expectedVersion"
           }
-          # Prefer the registered uninstall location; fall back to the
-          # InstallLocation property when present.
+          # Structural binary discovery (same rationale as the MSI job): prefer
+          # the registered InstallLocation, falling back to the directory that
+          # owns the registered uninstaller.
           $dir = $props.InstallLocation
-          if (-not $dir) {
-            $dir = Split-Path $props.UninstallString -Parent 2>$null
-            if (-not $dir) { throw "could not resolve install directory from registry" }
+          if (-not $dir -or -not (Test-Path $dir)) {
+            $dir = Split-Path $props.UninstallString -Parent
           }
-          $exe = Join-Path $dir 'sys-monitor-tauri.exe'
-          if (-not (Test-Path $exe)) { throw "installed executable missing: $exe" }
+          if (-not $dir -or -not (Test-Path $dir)) { throw "could not resolve install directory from registry" }
+          Get-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }
+          $appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -notmatch 'uninstall' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $appExe) { throw "installed executable missing under $dir" }
+          $exe = $appExe.FullName
+          $binaryVersion = $appExe.VersionInfo.ProductVersion
+          Write-Host "installed binary: $exe (ProductVersion $binaryVersion)"
+          if ($binaryVersion -notlike "*$expectedVersion*") {
+            throw "binary ProductVersion $binaryVersion != package version $expectedVersion"
+          }
           "key=$($key.PSPath)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "uninstall=$($props.QuietUninstallString ?? $props.UninstallString)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append

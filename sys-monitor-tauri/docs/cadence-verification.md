@@ -19,11 +19,11 @@ All commands run from `sys-monitor-tauri/src-tauri/`.
 
 1. **Build the probe**
    ```
-   cargo build --bin cadence_probe
+   cargo build --example cadence_probe
    ```
 2. **Run the probe** (default 90s; real `--secs` runs must be at least 60s)
    ```
-   cargo run --bin cadence_probe -- --secs 90 > cadence.jsonl 2> cadence.err
+   cargo run --example cadence_probe -- --secs 90 > cadence.jsonl 2> cadence.err
    ```
    The probe streams one JSONL record per emitted snapshot to stdout and
    mirrors production's MTA/COM threading. WMI enrichment retries in the
@@ -31,11 +31,11 @@ All commands run from `sys-monitor-tauri/src-tauri/`.
    available only as an explicit diagnostic mode and is not a cadence PASS.
 3. **Run the checker**
    ```
-   cargo run --bin cadence_probe -- --check cadence.jsonl
+   cargo run --example cadence_probe -- --check cadence.jsonl
    ```
    or, to probe + check in one command:
    ```
-   cargo run --bin cadence_probe -- --secs 90 --check -
+   cargo run --example cadence_probe -- --secs 90 --check -
    ```
 4. **Read the verdict.** The checker prints `PASS` or `FAIL` plus a metrics
    table containing event/full-tick p50/p95/max intervals, observation length,
@@ -74,7 +74,7 @@ SYSMON_CADENCE_LOG=1 npm run tauri dev 2> app-cadence.err
 Select-String -Path app-cadence.err -Pattern '^\{"elapsed_ms"' |
   ForEach-Object { $_.Line } > app-cadence.jsonl
 # then check with the same checker:
-cargo run --bin cadence_probe -- --check app-cadence.jsonl
+cargo run --example cadence_probe -- --check app-cadence.jsonl
 ```
 
 Mark this step as optional corroboration, not required for PASS.

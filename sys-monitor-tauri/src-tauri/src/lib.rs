@@ -2,7 +2,7 @@
 //!
 //! Splits the collection logic out of the historical `main.rs` monolith so that
 //! both the Tauri app binary (`main.rs`) and the headless cadence probe
-//! (`src/bin/cadence_probe.rs`) can share the real collector loop
+//! (`examples/cadence_probe.rs`) can share the real collector loop
 //! (`run_collector_loop`) and the snapshot/payload types without a live Tauri
 //! `AppHandle`. The bin target stays a thin Tauri shell; everything
 //! collection-related lives in this library crate.

@@ -129,7 +129,7 @@ The backend is Windows-only; frontend tests and builds can run elsewhere.
 |------|-------------|
 | `src/` | React frontend (App, components, hooks, types) |
 | `src-tauri/` | Rust backend (Tauri app, collector, state, main) |
-| `src-tauri/src/` | Rust source (`main.rs`, `lib.rs`, `state.rs`, `cadence.rs`, `sensor.rs`, `hardware.rs`, `pdh.rs`, `collector/`, `bin/cadence_probe.rs`) |
+| `src-tauri/src/` | Rust source (`main.rs`, `lib.rs`, `state.rs`, `cadence.rs`, `sensor.rs`, `hardware.rs`, `pdh.rs`, `collector/`) |
 | `dist/` | Built frontend (after `npm run build`) |
 | `src-tauri/target/release/` | Built binary and bundle after `npm run tauri build` |
 

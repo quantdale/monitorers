@@ -1,5 +1,5 @@
 // ── CADENCE VERIFICATION RECORDS & CHECKER ────────────────────────────────────
-// Shared by the headless probe (src/bin/cadence_probe.rs), the optional
+// Shared by the headless probe (examples/cadence_probe.rs), the optional
 // production dev tap (main.rs, SYSMON_CADENCE_LOG), and the #[ignore]d
 // real-hardware integration test (tests/cadence_hardware.rs).
 //

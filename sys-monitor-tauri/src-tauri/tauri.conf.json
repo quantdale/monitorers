@@ -3,6 +3,7 @@
   "productName": "System Monitor",
   "version": "0.1.4",
   "identifier": "com.quantdale.systemmonitor",
+  "mainBinaryName": "sys-monitor-tauri",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5180",

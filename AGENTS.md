@@ -6,7 +6,7 @@ Windows-only real-time system monitor: Rust/Tauri v2 backend (Win32 PDH/WMI/NVML
 
 - `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both were re-reconciled against source on 2026-08-21; if they ever appear to disagree again, trust the source and fix the docs. Previously-stale claims, now corrected in all three files:
   - Schema version is **4** (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
-  - The backend is not a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `src/bin/cadence_probe.rs`.
+  - The backend is not a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `examples/cadence_probe.rs`.
   - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store`.
   - Cargo default features are `["nvapi", "nvml"]`.
 
@@ -40,7 +40,8 @@ cargo test collector::disk   # one module
 cargo fmt -- --check      # CI-enforced; run `cargo fmt` first if it fails
 cargo clippy --all-targets --all-features -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
 cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (>=60s)
-cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
+cargo build --example cadence_probe               # probe lives as an example target (single-bin app crate)
+cargo run --example cadence_probe -- --secs 90    # headless probe for the above
 ```
 
 ## CI gate (never commit failing; CI runs the same checks)
