@@ -58,7 +58,6 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     appExe,
     workRoot: process.env.QUALIFY_WORK_ROOT || undefined,
   });
-  let launched = false;
   try {
     let page;
     try {
@@ -80,6 +79,18 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
             .split(/\r?\n/)
             .filter((l) => /sys-monitor|msedgewebview2/i.test(l))
             .join('\n')
+        );
+        console.log(
+          '[qualify] webview2 cmdlines:',
+          execFileSync(
+            'powershell.exe',
+            [
+              '-NoProfile',
+              '-c',
+              "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | Select-Object -ExpandProperty CommandLine",
+            ],
+            { encoding: 'utf8' },
+          ),
         );
         console.log(
           '[qualify] webview2 runtime:',
@@ -108,7 +119,6 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
       }
       throw launchError;
     }
-    launched = true;
 
     // ── 1. Real frontend is up ──
     await expect(
@@ -166,12 +176,14 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
 
     // ── 5. Clean exit; no orphaned processes; real store untouched ──
     await driver.close();
-    launched = false;
     await assertNoOrphanProcesses();
     await driver.selfTest();
 
     console.log('[qualify] PASS: real IPC, live data, isolated settings, clean exit');
   } finally {
-    if (launched) await driver.close().catch(() => undefined);
+    // Idempotent even after an explicit close above, and crucially runs on
+    // launch failure too: kills the spawned app, removes the elevated-host
+    // HKLM args value, and deletes the per-run work dir.
+    await driver.close().catch(() => undefined);
   }
 });

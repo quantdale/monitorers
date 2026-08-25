@@ -83,26 +83,33 @@ function installerTypeFor(fileName) {
 function collectInstallers(bundleDir, version) {
   const found = [];
   const versionToken = `_${version}_`;
-  for (const kind of ['msi', 'nsis']) {
-    const dir = join(bundleDir, kind);
+  // Walk recursively: CI artifact downloads nest upload paths under the
+  // artifact name (e.g. bundle-artifacts/windows-installers/msi/...), so a
+  // fixed msi/ + nsis/ layout cannot be assumed.
+  const stack = [bundleDir];
+  while (stack.length > 0) {
+    const dir = stack.pop();
     let entries;
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      // Format not built in this run (e.g. MSI-only job): skip silently.
       continue;
     }
-    for (const fileName of entries) {
-      const type = installerTypeFor(fileName);
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      const type = installerTypeFor(entry.name);
       if (!type) continue;
       // Only the CURRENT release version's artifacts belong in a release
       // manifest. Developer bundle directories accumulate installers from
       // older versions; hashing those would produce misleading evidence.
-      if (!fileName.includes(versionToken)) continue;
-      const path = join(dir, fileName);
+      if (!entry.name.includes(versionToken)) continue;
       const size = statSync(path).size;
       if (size <= 0) throw new Error(`installer is empty: ${path}`);
-      found.push({ path, fileName, type, sizeBytes: size });
+      found.push({ path, fileName: entry.name, type, sizeBytes: size });
     }
   }
   return found;
@@ -113,7 +120,7 @@ const applicationVersion = JSON.parse(readFileSync(join(appRoot, 'package.json')
 const installers = collectInstallers(args.bundle, applicationVersion);
 if (installers.length === 0) {
   throw new Error(
-    `no ${applicationVersion} MSI/NSIS installers found under ${args.bundle} (expected msi/ and nsis/ subdirectories)`
+    `no ${applicationVersion} MSI/NSIS installers found under ${args.bundle} (searched recursively for *.msi and *.exe)`
   );
 }
 

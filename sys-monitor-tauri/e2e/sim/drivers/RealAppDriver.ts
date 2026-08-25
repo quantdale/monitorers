@@ -21,7 +21,7 @@
  *  - `restartApp()` relaunches the process with the SAME temp app-data dir so
  *    settings persistence round-trips across a true relaunch.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import {
   closeSync,
   existsSync,
@@ -41,6 +41,18 @@ import type { SimFault, SimScenario } from '../../../src/sim/mockBackend';
 import { ClassifiedSimulationError } from '../errors';
 
 export const APP_IDENTIFIER = 'com.quantdale.systemmonitor';
+
+/**
+ * WebView2 Runtime ≥150 ignores `WEBVIEW2_*` environment variables when the
+ * host app process runs elevated (High IL) — a documented security hardening
+ * (MicrosoftEdge/WebView2Feedback #5640/#5645; GitHub-hosted Windows runners
+ * run elevated). The SAME flags delivered through the machine-wide
+ * AdditionalBrowserArguments policy ARE honored by elevated hosts, so the
+ * driver mirrors its debug switches there whenever it has permission and
+ * removes the value again on close. On standard-integrity hosts the write is
+ * expected to fail with access-denied — there the environment variable works.
+ */
+const WV2_ARGS_POLICY_KEY = 'HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments';
 
 export interface RealDriverOptions {
   /** Path to the built app exe. Defaults to SIM_APP_EXE or the release exe. */
@@ -242,6 +254,7 @@ export class RealAppDriver implements SimDriver {
   private env: Record<string, string> = {};
   private port: number | null = null;
   private appStderrPath: string | null = null;
+  private hklmArgsValueWritten = false;
   private realSettingsPath: string | null = null;
   private realSettingsBefore: FileState | null = null;
   private ownsWorkDir = false;
@@ -317,6 +330,7 @@ export class RealAppDriver implements SimDriver {
       );
     }
     if (stderrFd !== undefined) closeSync(stderrFd);
+    this.applyHklmArgsFallback();
 
     const cdpUrl = `http://127.0.0.1:${this.port}/json/version`;
     await waitForCdpOrProcess(
@@ -346,6 +360,40 @@ export class RealAppDriver implements SimDriver {
     await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
     await validateAppPage(page);
     return { page, appStderrPath: this.appStderrPath };
+  }
+
+  /**
+   * Elevated-host channel for the debug switches (see WV2_ARGS_POLICY_KEY).
+   * Best-effort: access denied on non-admin hosts is fine because there the
+   * WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable is honored. The value name
+   * `*` applies to every WebView2 host on the machine, which is acceptable for
+   * an ephemeral runner and bounded here by removal in close().
+   */
+  private applyHklmArgsFallback(): void {
+    if (process.platform !== 'win32') return;
+    const args = this.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+    if (!args) return;
+    try {
+      execFileSync(
+        'reg.exe',
+        ['add', WV2_ARGS_POLICY_KEY, '/v', '*', '/t', 'REG_SZ', '/d', args, '/f'],
+        { stdio: 'pipe' },
+      );
+      this.hklmArgsValueWritten = true;
+    } catch {
+      this.hklmArgsValueWritten = false;
+    }
+  }
+
+  private removeHklmArgsFallback(): void {
+    if (!this.hklmArgsValueWritten) return;
+    try {
+      execFileSync('reg.exe', ['delete', WV2_ARGS_POLICY_KEY, '/v', '*', '/f'], { stdio: 'pipe' });
+    } catch {
+      // Ephemeral runners make a failed cleanup harmless; never mask close()
+      // errors over it either.
+    }
+    this.hklmArgsValueWritten = false;
   }
 
   async injectFault(_fault: SimFault): Promise<boolean> {
@@ -431,6 +479,7 @@ export class RealAppDriver implements SimDriver {
         this.workDir = null;
         this.ownsWorkDir = false;
       }
+      this.removeHklmArgsFallback();
     } catch (error) {
       closeError = closeError
         ? new Error(`${String(closeError)}; work directory cleanup failed: ${String(error)}`)
