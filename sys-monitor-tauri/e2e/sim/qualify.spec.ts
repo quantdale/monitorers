@@ -63,7 +63,7 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     const { page } = await driver.launch(
       `qualify-${Date.now()}`,
       { version: 1 },
-      testInfo.outputDir()
+      testInfo.outputPath()
     );
     launched = true;
 

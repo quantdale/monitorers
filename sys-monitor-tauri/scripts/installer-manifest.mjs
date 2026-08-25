@@ -51,7 +51,7 @@ function parseArgs(argv) {
 
 function sha256File(path) {
   const hash = createHash('sha256');
-  const fd = openSync(path, 'rb');
+  const fd = openSync(path, 'r');
   try {
     const size = statSync(path).size;
     const buffer = Buffer.alloc(1024 * 1024);
@@ -80,8 +80,9 @@ function installerTypeFor(fileName) {
   return null;
 }
 
-function collectInstallers(bundleDir) {
+function collectInstallers(bundleDir, version) {
   const found = [];
+  const versionToken = `_${version}_`;
   for (const kind of ['msi', 'nsis']) {
     const dir = join(bundleDir, kind);
     let entries;
@@ -94,6 +95,10 @@ function collectInstallers(bundleDir) {
     for (const fileName of entries) {
       const type = installerTypeFor(fileName);
       if (!type) continue;
+      // Only the CURRENT release version's artifacts belong in a release
+      // manifest. Developer bundle directories accumulate installers from
+      // older versions; hashing those would produce misleading evidence.
+      if (!fileName.includes(versionToken)) continue;
       const path = join(dir, fileName);
       const size = statSync(path).size;
       if (size <= 0) throw new Error(`installer is empty: ${path}`);
@@ -104,14 +109,17 @@ function collectInstallers(bundleDir) {
 }
 
 const args = parseArgs(process.argv);
-const installers = collectInstallers(args.bundle);
+const applicationVersion = JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')).version;
+const installers = collectInstallers(args.bundle, applicationVersion);
 if (installers.length === 0) {
-  throw new Error(`no MSI/NSIS installers found under ${args.bundle} (expected msi/ and nsis/ subdirectories)`);
+  throw new Error(
+    `no ${applicationVersion} MSI/NSIS installers found under ${args.bundle} (expected msi/ and nsis/ subdirectories)`
+  );
 }
 
 const manifest = {
   schema_version: 1,
-  applicationVersion: JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')).version,
+  applicationVersion,
   commitSha: gitCommitSha(),
   builtAtIso: new Date().toISOString(),
   signing: {
