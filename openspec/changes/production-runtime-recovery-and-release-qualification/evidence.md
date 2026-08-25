@@ -45,11 +45,23 @@
    (scheduler stretch past `healthy_reset_after` legitimately reset the streak mid-test).
    Caught by repeated full-suite runs (1 failure / 12); hardened with a
    non-resetting `escalation_policy()`; 20/20 clean reruns of the affected lane.
-3. **Harness robustness**: atomic artifact writer gained a bounded rename retry
+3. **Tauri CLI corrupts multi-bin crates during bundling** — found by hosted installer
+   qualification, invisible to build-only CI. With two bin targets (`sys-monitor-tauri`
+   + `cadence_probe`), the Tauri CLI renames each produced binary onto
+   `mainBinaryName`, so the 1.1 MB probe clobbered the 9.3 MB app: the MSI File table
+   contained **only `cadence_probe.exe`** (843 KB installer) and installed machines had
+   no application executable at all (hosted run 32842750871:
+   "installed executable missing"). Fixed by moving the probe to an example target
+   (`examples/cadence_probe.rs`) and pinning `mainBinaryName`; local MSI now lists
+   `sys-monitor-tauri.exe` at 9,317,888 bytes inside a 3.3 MB installer.
+4. **Harness robustness**: atomic artifact writer gained a bounded rename retry
    (transient Defender EPERM failed an otherwise-passing matrix run); RealAppDriver
    cleanup retry ladder extended (~7.75 s) so WebView2 handle release cannot fail an
    otherwise-passing packaged qualification; sim matrix timeout raised to a documented
    900 s for the grown selection.
+5. **Hosted-lint regex escaping**: PowerShell single-quoted strings need single
+   backslashes; the first shipped-config lint used `\\[` and failed clean sources
+   (run 32841068418); fixed and proven passing hosted (config lint PASS at HEAD).
 
 ## Fault-injection containment proof
 

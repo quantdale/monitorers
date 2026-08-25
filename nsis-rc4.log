@@ -1,0 +1,384 @@
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	﻿2026-08-25T13:50:48.7164073Z Current runner version: '2.336.0'
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7186905Z ##[group]Runner Image Provisioner
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7188095Z Hosted Compute Agent
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7188596Z Version: 20260729.566
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7189067Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7189588Z Build Date: 2026-07-29T19:17:02Z
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7190042Z Worker ID: {22806ce5-d273-4f2c-9473-6b09c7a91b3d}
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7190591Z Azure Region: centralus
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7191058Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7192140Z ##[group]Operating System
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7192604Z Microsoft Windows Server 2025
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7193006Z 10.0.26100
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7193385Z Datacenter
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7193777Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7194460Z ##[group]Runner Image
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7194874Z Image: windows-2025-vs2026
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7195278Z Version: 20260818.207.1
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7196514Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260818.207/images/windows/Windows2025-VS2026-Readme.md
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7197654Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260818.207
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7198328Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7199229Z ##[group]GITHUB_TOKEN Permissions
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7201663Z Contents: read
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7202079Z Metadata: read
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7202473Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7204263Z Secret source: Actions
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7205073Z Prepare workflow directory
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7567027Z Prepare all required actions
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.7605065Z Getting action download info
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:48.9843948Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:49.1864616Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:49.5867494Z Download action repository 'actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:49.9736865Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:50.4727271Z Complete job name: Qualify — NSIS install/run/uninstall
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0612627Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0614161Z with:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0614775Z   repository: quantdale/monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0619118Z   token: ***
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0619805Z   ssh-strict: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0620620Z   ssh-user: git
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0621330Z   persist-credentials: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0621965Z   clean: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0622587Z   sparse-checkout-cone-mode: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0623274Z   fetch-depth: 1
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0623829Z   fetch-tags: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0624509Z   show-progress: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0625097Z   lfs: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0625634Z   submodules: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0626244Z   set-safe-directory: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0626910Z   allow-unsafe-pr-checkout: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0627892Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0628474Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.0629083Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.3168747Z Syncing repository: quantdale/monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.3171264Z ##[group]Getting Git version info
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.3172119Z Working directory is 'D:\a\monitorers\monitorers'
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:51.5058305Z [command]"C:\Program Files\Git\bin\git.exe" version
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:53.9578178Z git version 2.55.0.windows.4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:53.9618674Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:53.9637610Z Temporarily overriding HOME='D:\a\_temp\6b3c080e-aeb9-4151-857a-97d7f72aba77' before making global git config changes
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:53.9638620Z Adding repository directory to the temporary git global config as a safe directory
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:53.9646843Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\monitorers\monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:54.2783204Z Deleting the contents of 'D:\a\monitorers\monitorers'
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:54.2787822Z ##[group]Determining repository object format
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:54.2789754Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:54.2790505Z ##[group]Initializing the repository
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:54.2798274Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\monitorers\monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.0744581Z Initialized empty Git repository in D:/a/monitorers/monitorers/.git/
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.0790233Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/quantdale/monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.3982742Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.3983443Z ##[group]Disabling automatic garbage collection
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.3984155Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.4216322Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.4216979Z ##[group]Setting up auth
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.4217523Z Removing SSH command configuration
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.4225786Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:50:55.4451170Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.3245688Z Removing HTTP extra header
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.3257680Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.3506532Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.8180864Z Removing includeIf entries pointing to credentials config files
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.8192962Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:02.8424661Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.2484135Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.2721773Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/monitorers/monitorers/.git.path D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.2949761Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.3251699Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.3478883Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.3700021Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.3700583Z ##[group]Fetching the repository
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:03.3712751Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/tags/v0.1.4-rc4:refs/tags/v0.1.4-rc4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:07.8463481Z From https://github.com/quantdale/monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:07.8464227Z  * [new tag]         v0.1.4-rc4 -> v0.1.4-rc4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:07.8516817Z [command]"C:\Program Files\Git\bin\git.exe" tag --list v0.1.4-rc4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:07.9626189Z v0.1.4-rc4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:07.9668154Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/tags/v0.1.4-rc4^{commit}
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.1224104Z d3a992acda0dfe09d8221d7dff39f692e137d6fd
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.1258807Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.1259354Z ##[group]Determining the checkout info
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.1260092Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.1268194Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.3364729Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.3603353Z ##[group]Checking out the ref
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.3610082Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/tags/v0.1.4-rc4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7506515Z Note: switching to 'refs/tags/v0.1.4-rc4'.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7506807Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7507070Z You are in 'detached HEAD' state. You can look around, make experimental
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7507506Z changes and commit them, and you can discard any commits you make in this
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7507930Z state without impacting any branches by switching back to a branch.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7508191Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7508338Z If you want to create a new branch to retain commits you create, you may
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7508723Z do so (now or later) by using -c with the switch command. Example:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7508950Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509106Z   git switch -c <new-branch-name>
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509245Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509374Z Or undo this operation with:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509506Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509605Z   git switch -
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509713Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7509935Z Turn off this advice by setting config variable advice.detachedHead to false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7510196Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:08.7518048Z HEAD is now at d3a992a fix(ci)+chore(qualify): NSIS dir resolution + CDP failure diagnostics
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.0087863Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.1169091Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.1397826Z d3a992acda0dfe09d8221d7dff39f692e137d6fd
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2300608Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2301350Z with:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2301611Z   node-version: 24
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2301905Z   cache: npm
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2302223Z   cache-dependency-path: sys-monitor-tauri/package-lock.json
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2302570Z   check-latest: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2304677Z   token: ***
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2304949Z   package-manager-cache: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2305245Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2305481Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.2305724Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.7587265Z Found in cache @ C:\hostedtoolcache\windows\node\24.19.0\x64
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:09.7593410Z ##[group]Environment details
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:46.1693930Z node: v24.19.0
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:46.1695065Z npm: 11.17.0
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:46.1695375Z yarn: 1.22.22
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:46.1696082Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:46.2230130Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\24.19.0\x64\npm.cmd config get cache"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:48.7272961Z C:\npm\cache
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:49.2031028Z Cache hit for: node-cache-Windows-x64-npm-1dd08b5bd844413d43d8fde82786285ac788ea922accdf81fa48d341229349d5
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:50.0882471Z Received 51826940 of 51826940 (100.0%), 67.1 MBs/sec
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:50.0883002Z Cache Size: ~49 MB (51826940 B)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:50.0884113Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/bd560cc9-cb12-4d0f-8aaa-d5d1bde4db4b/cache.tzst -P -C D:/a/monitorers/monitorers --force-local --use-compress-program "zstd -d"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.4240974Z Cache restored successfully
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.4296487Z Cache restored from key: node-cache-Windows-x64-npm-1dd08b5bd844413d43d8fde82786285ac788ea922accdf81fa48d341229349d5
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.4619889Z ##[group]Run npm ci
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.4620399Z [36;1mnpm ci[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.9923737Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.9924264Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.9924604Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:51:55.9924932Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:02.2819144Z npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7808121Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7809388Z added 225 packages, and audited 226 packages in 11s
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7809719Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7809929Z 38 packages are looking for funding
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7810315Z   run `npm fund` for details
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7819925Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7820149Z found 0 vulnerabilities
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7832041Z npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7833149Z npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7833603Z npm warn allow-scripts
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:07.7834693Z npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3056124Z ##[warning]Unexpected input(s) 'artifact-name', valid inputs are ['name', 'path', 'pattern', 'merge-multiple', 'github-token', 'repository', 'run-id']
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3072716Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3073842Z ##[group]Run actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3074207Z with:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3074436Z   artifact-name: windows-installers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3074740Z   path: sys-monitor-tauri/installers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3075001Z   merge-multiple: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3075248Z   repository: quantdale/monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3075503Z   run-id: 32854438774
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3075717Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3076022Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.3076276Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.4721156Z (node:3132) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.4722085Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.6635243Z Found 1 artifact(s)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.6636634Z No input name or pattern filtered specified, downloading all artifacts
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.6637358Z An extra directory with the artifact name will be created for each download
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.6637947Z Preparing to download the following artifacts:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.6638453Z - windows-installers (ID: 9565956585, Size: 5214668)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.8819848Z Redirecting to blob download url: https://productionresultssa4.blob.core.windows.net/actions-results/0d95cd45-a8be-4b62-bbff-5577f6c33e1d/workflow-job-run-08bb68e0-846e-5368-a589-b2f865c1a14e/artifacts/96d01dc735864186c40fc87dd0661f7825335e7d744e02d1cd13ebe0cb0792f9.zip
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:13.8821161Z Starting download of artifact to: D:\a\monitorers\monitorers\sys-monitor-tauri\installers\windows-installers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.0327038Z (node:3132) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.2979565Z Artifact download completed successfully.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.2980339Z Total of 1 artifact(s) downloaded
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.2988706Z Download artifact has finished successfully
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3268079Z ##[group]Run $setup = (Get-ChildItem -Recurse -Filter *-setup.exe installers | Select-Object -First 1).FullName
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3268961Z [36;1m$setup = (Get-ChildItem -Recurse -Filter *-setup.exe installers | Select-Object -First 1).FullName[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3269641Z [36;1mif (-not $setup) { throw "downloaded NSIS setup not found" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3270035Z [36;1mWrite-Host "installing $setup"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3270609Z [36;1m# NSIS silent install: /S. Default Tauri installMode is currentUser,[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3270995Z [36;1m# so registration lives under HKCU.[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3271370Z [36;1m$p = Start-Process $setup -ArgumentList "/S" -Wait -PassThru[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3271837Z [36;1mif ($p.ExitCode -ne 0) { throw "NSIS install failed with exit code $($p.ExitCode)" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3272231Z [36;1m[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3272675Z [36;1m$expectedVersion = (Get-Content package.json | ConvertFrom-Json).version[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3273056Z [36;1m$keys = @([0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3273411Z [36;1m  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3273817Z [36;1m  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3274141Z [36;1m)[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3274352Z [36;1m$key = $keys | ForEach-Object {[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3274727Z [36;1m  Get-ChildItem $_ -ErrorAction SilentlyContinue |[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3275263Z [36;1m    Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'System Monitor' } |[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3275736Z [36;1m    Select-Object -First 1[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3276000Z [36;1m} | Select-Object -First 1[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3276372Z [36;1mif (-not $key) { throw "installed product not found in uninstall registry" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3276767Z [36;1m$props = Get-ItemProperty $key.PSPath[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3277151Z [36;1mWrite-Host "registered: $($props.DisplayName) $($props.DisplayVersion)"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3277615Z [36;1m# Dump every registered value: Tauri's NSIS key layout varies by[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3278019Z [36;1m# installMode/version and this is the cheapest place to see it.[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3278436Z [36;1mforeach ($p in $key.Property) { Write-Host "  registry: $p = $($props.$p)" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3278898Z [36;1mif ($props.DisplayVersion -ne $expectedVersion) {[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3279311Z [36;1m  throw "installed version $($props.DisplayVersion) != package version $expectedVersion"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3279825Z [36;1m}[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3280178Z [36;1m# Structural binary discovery: prefer InstallLocation, then the[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3280594Z [36;1m# directory owning the registered uninstaller, then Tauri's per-user[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3280970Z [36;1m# default (%LOCALAPPDATA%\<productName>).[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3281239Z [36;1m$dir = $null[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3281543Z [36;1mforeach ($candidate in @([0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3281812Z [36;1m  $props.InstallLocation,[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3282216Z [36;1m  ($(if ($props.UninstallString) { Split-Path ($props.UninstallString.Trim('"')) -Parent })),[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3282764Z [36;1m  ($(if ($props.QuietUninstallString) { Split-Path ($props.QuietUninstallString.Trim('"')) -Parent })),[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3283257Z [36;1m  (Join-Path $env:LOCALAPPDATA 'System Monitor')[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3283558Z [36;1m)) {[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3283860Z [36;1m  if ($candidate -and (Test-Path $candidate)) { $dir = $candidate; break }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3284236Z [36;1m}[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3284530Z [36;1mif (-not $dir) { throw "could not resolve install directory from registry" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3284880Z [36;1mWrite-Host "install dir: $dir"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3285274Z [36;1mGet-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3287134Z [36;1m$appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3287598Z [36;1m  Where-Object { $_.Name -notmatch 'uninstall' } |[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3287957Z [36;1m  Sort-Object Length -Descending | Select-Object -First 1[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3288744Z [36;1mif (-not $appExe) { throw "installed executable missing under $dir" }[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3289090Z [36;1m$exe = $appExe.FullName[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3289397Z [36;1m$binaryVersion = $appExe.VersionInfo.ProductVersion[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3289804Z [36;1mWrite-Host "installed binary: $exe (ProductVersion $binaryVersion)"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3290240Z [36;1mif ($binaryVersion -notlike "*$expectedVersion*") {[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3290895Z [36;1m  throw "binary ProductVersion $binaryVersion != package version $expectedVersion"[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3291313Z [36;1m}[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3291645Z [36;1m"key=$($key.PSPath)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3292056Z [36;1m"exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3292565Z [36;1m"uninstall=$($props.QuietUninstallString ?? $props.UninstallString)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3365279Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3365621Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3365837Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:14.3366134Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:15.1419335Z installing D:\a\monitorers\monitorers\sys-monitor-tauri\installers\windows-installers\nsis\System Monitor_0.1.4_x64-setup.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3759175Z registered: System Monitor 0.1.4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3791765Z   registry: MainBinaryName = sys-monitor-tauri.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3804922Z   registry: DisplayName = System Monitor
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3823830Z   registry: DisplayIcon = "C:\Users\runneradmin\AppData\Local\System Monitor\sys-monitor-tauri.exe"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3837287Z   registry: DisplayVersion = 0.1.4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3855435Z   registry: Publisher = quantdale
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3874674Z   registry: InstallLocation = "C:\Users\runneradmin\AppData\Local\System Monitor"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3894026Z   registry: UninstallString = "C:\Users\runneradmin\AppData\Local\System Monitor\uninstall.exe"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3917336Z   registry: NoModify = 1
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3934912Z   registry: NoRepair = 1
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.3953724Z   registry: EstimatedSize = 9181
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4104859Z install dir: C:\Users\runneradmin\AppData\Local\System Monitor
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4134908Z   installed: sys-monitor-tauri.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4142075Z   installed: uninstall.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4336600Z installed binary: C:\Users\runneradmin\AppData\Local\System Monitor\sys-monitor-tauri.exe (ProductVersion 0.1.4)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4944265Z ##[group]Run npm run verify:packaged
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.4944621Z [36;1mnpm run verify:packaged[0m
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.5017767Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.5018119Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.5018368Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.5018726Z   SIM_APP_EXE: C:\Users\runneradmin\AppData\Local\System Monitor\sys-monitor-tauri.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:23.5019152Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:24.2376477Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:24.2377237Z > sys-monitor-tauri@0.1.4 verify:packaged
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:24.2378534Z > playwright test --config e2e/qualify.playwright.config.ts
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:24.2378875Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:26.9727423Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:26.9729040Z Running 1 test using 1 worker
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:26.9729590Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:52:27.3740489Z [qualify] launching built app: C:\Users\runneradmin\AppData\Local\System Monitor\sys-monitor-tauri.exe
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9282583Z [qualify] tasklist: "sys-monitor-tauri.exe","6760","Console","2","41,868 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9283928Z "msedgewebview2.exe","6524","Console","2","118,680 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9286082Z "msedgewebview2.exe","6956","Console","2","18,752 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9287172Z "msedgewebview2.exe","8072","Console","2","35,084 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9287649Z "msedgewebview2.exe","5564","Console","2","46,392 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9288122Z "msedgewebview2.exe","5584","Console","2","19,360 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9289593Z "msedgewebview2.exe","2520","Console","2","218,972 K"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9290781Z [qualify] app stderr (D:\a\monitorers\monitorers\sys-monitor-tauri\test-results\qualify-packaged-app-qualifies-end-to-end-over-real-IPC\app-stderr.log):
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9292406Z  [PDH] GPU and disk counters initialized successfully.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9293283Z [NVML] Init failed: a libloading error occurred: LoadLibraryExW failed
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9294311Z [PDH] GPU and disk counters initialized successfully.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9295075Z [NVML] Init failed: a libloading error occurred: LoadLibraryExW failed
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9296125Z [Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9296918Z [WMI] Background thread connection initialized (MTA).
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9298375Z [GPU] LUID 0x000070B5 not matched by vendor keyword — GpuClass::Unknown
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9299079Z [GPU] LUID 0x000070B5 not matched by vendor keyword — GpuClass::Unknown
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9299492Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9549729Z   x  1 e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC (1.0m)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9913542Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9921757Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9923543Z   1) e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC ────────────────
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9924433Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9926017Z     ClassifiedSimulationError: RealAppDriver: CDP endpoint http://127.0.0.1:50077/json/version did not come up within 60000ms (TypeError: fetch failed)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9927373Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9927926Z        at drivers\RealAppDriver.ts:98
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9929088Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9949620Z        96 |     await new Promise((r) => setTimeout(r, 500));
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9952720Z        97 |   }
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9953325Z     >  98 |   throw new ClassifiedSimulationError(
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9953860Z           |         ^
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9954686Z        99 |     `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms` + (lastErr ? ` (${String(lastErr)})` : ''),
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9956443Z       100 |     'harness-defect',
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9956855Z       101 |     'cdp',
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9957440Z         at waitForCdp (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:98:9)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9959837Z         at waitForCdpOrProcess (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:144:5)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9969377Z         at RealAppDriver.launch (D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\drivers\RealAppDriver.ts:322:5)
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9970587Z         at D:\a\monitorers\monitorers\sys-monitor-tauri\e2e\sim\qualify.spec.ts:65:19
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9971176Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9972884Z     Error Context: test-results\qualify-packaged-app-qualifies-end-to-end-over-real-IPC\error-context.md
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9973407Z 
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9973985Z   1 failed
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:27.9976241Z     e2e\sim\qualify.spec.ts:54:1 › packaged app qualifies end-to-end over real IPC ─────────────────
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1016109Z ##[error]Process completed with exit code 1.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1200317Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1201117Z with:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1201477Z   name: nsis-qualification-logs
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1202122Z   path: sys-monitor-tauri/test-results/**
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1202508Z   if-no-files-found: ignore
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1202855Z   compression-level: 6
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1203247Z   overwrite: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1203559Z   include-hidden-files: false
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1203870Z   archive: true
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1204145Z env:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1204459Z   CARGO_TERM_COLOR: always
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.1204797Z ##[endgroup]
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.2797994Z With the provided path, there will be 2 files uploaded
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.2801985Z Artifact name is valid!
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.2803075Z Root directory input is valid!
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.5390283Z Uploading artifact: nsis-qualification-logs.zip
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.5453768Z Beginning upload of artifact content to blob storage
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.7218098Z Uploaded bytes 4387
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.7640556Z Finished uploading artifact content to blob storage!
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.7642613Z SHA256 digest of uploaded artifact is 7710178f3335de0554641a0646480a3795dfa57612412d7753d79cab7f29c358
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:28.7643265Z Finalizing artifact upload
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.0819285Z Artifact nsis-qualification-logs successfully finalized. Artifact ID 9566204335
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.0820434Z Artifact nsis-qualification-logs has been successfully uploaded! Final size is 4387 bytes. Artifact ID is 9566204335
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.0824010Z Artifact download URL: https://github.com/quantdale/monitorers/actions/runs/32854438774/artifacts/9566204335
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.1151101Z Post job cleanup.
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.2604654Z [command]"C:\Program Files\Git\bin\git.exe" version
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.2824529Z git version 2.55.0.windows.4
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.2879126Z Temporarily overriding HOME='D:\a\_temp\2560acf6-9d60-4aa1-ab48-8eb42e6d9798' before making global git config changes
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.2879871Z Adding repository directory to the temporary git global config as a safe directory
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.2886625Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\monitorers\monitorers
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.3143534Z Removing SSH command configuration
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.3154098Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:29.3402267Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.1168559Z Removing HTTP extra header
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.1177582Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.1430534Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6695962Z Removing includeIf entries pointing to credentials config files
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6705818Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6919519Z includeif.gitdir:D:/a/monitorers/monitorers/.git.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6920114Z includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6920536Z includeif.gitdir:/github/workspace/.git.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6920999Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.6962146Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/monitorers/monitorers/.git.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7153359Z D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7190656Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/monitorers/monitorers/.git.path D\:\\a\\_temp\\git\-credentials\-02be09bb\-3d63\-490f\-9447\-7b3f97f1342b\.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7421153Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7613270Z D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7651103Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/monitorers/monitorers/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-02be09bb\-3d63\-490f\-9447\-7b3f97f1342b\.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.7883240Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8075963Z /github/runner_temp/git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8109248Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-02be09bb\-3d63\-490f\-9447\-7b3f97f1342b\.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8339122Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8526517Z /github/runner_temp/git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8593257Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-02be09bb\-3d63\-490f\-9447\-7b3f97f1342b\.config
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:30.8823975Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:31.4446829Z Removing credentials config 'D:\a\_temp\git-credentials-02be09bb-3d63-490f-9447-7b3f97f1342b.config'
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:31.4626104Z Cleaning up orphan processes
+Qualify — NSIS install/run/uninstall	UNKNOWN STEP	2026-08-25T13:53:31.5503299Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

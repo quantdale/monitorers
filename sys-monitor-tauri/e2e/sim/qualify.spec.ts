@@ -68,8 +68,10 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
         testInfo.outputPath()
       ));
     } catch (launchError) {
-      // Hosted-runner diagnosis aid: dump the app's stderr and the live
-      // process table so a silent WebView2/CDP failure is attributable.
+      // Hosted-runner diagnosis aid: dump the app's stderr, the process table,
+      // the WebView2 Evergreen runtime registration (its absence makes wry pop
+      // a blocking dialog — process alive, webview never created), and our
+      // window title, so a silent CDP failure is attributable.
       try {
         const { execFileSync } = await import('node:child_process');
         console.log(
@@ -79,7 +81,25 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
             .filter((l) => /sys-monitor|msedgewebview2/i.test(l))
             .join('\n')
         );
-      } catch { /* diagnostics are best-effort */ }
+        console.log(
+          '[qualify] webview2 runtime:',
+          execFileSync(
+            'reg.exe',
+            ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', '/v', 'pv'],
+            { encoding: 'utf8' }
+          )
+        );
+        console.log(
+          '[qualify] window titles:',
+          execFileSync(
+            'powershell.exe',
+            ['-NoProfile', '-c', 'Get-Process sys-monitor-tauri | Select-Object Id,MainWindowTitle | Format-List'],
+            { encoding: 'utf8' }
+          )
+        );
+      } catch (diagError) {
+        console.log('[qualify] diagnostics failed:', String(diagError));
+      }
       const stderrPath = driver.appStderrPathValue ?? join(testInfo.outputPath(), 'app-stderr.log');
       if (existsSync(stderrPath)) {
         console.log(`[qualify] app stderr (${stderrPath}):\n`, readFileSync(stderrPath, 'utf8').slice(0, 4_000));
