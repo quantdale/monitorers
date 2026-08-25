@@ -47,11 +47,11 @@
 
 ## 8. Verification gates
 
-- [ ] 8.1 `npm run verify:fast` locally green (frontend + full Rust matrix incl. clippy `-D warnings`).
-- [ ] 8.2 `npm run verify:e2e` (12/12), `npm run verify:sim` (16/16 runs), `npm run sim:typecheck` green — recorded during the campaign.
-- [ ] 8.3 `npm run verify:version`; `openspec validate --all --strict --no-interactive`; `git diff --check`.
-- [ ] 8.4 `npm run verify:tauri` production executable; local MSI/NSIS build + manifest generation sanity (no machine-mutating steps locally).
-- [ ] 8.5 `npm run verify:packaged` executed against the built exe; record evidence or document blocker.
+- [x] 8.1 `npm run verify:fast` green end-to-end (audits 0 vulns; tsc; vitest 216/216; build; fmt; cargo test ×5 feature lanes — 194/194/175/188/186 lib tests plus probe/main suites; clippy `-D warnings`; cargo audit exit 0). A load-sensitive supervisor-test race was caught by repeated runs and fixed (see §2 note).
+- [x] 8.2 `npm run verify:e2e` 12/12; `npm run verify:sim` matrix 16/16 journey runs (~5.4 min) incl. both new recovery journeys; `npm run sim:typecheck` clean.
+- [x] 8.3 `npm run verify:version`; `openspec validate --all --strict --no-interactive` (16 passed, 0 failed); `git diff --check` clean.
+- [x] 8.4 `npm run verify:tauri` exit 0; local `npx tauri build` produced both installers (`System Monitor_0.1.4_x64_en-US.msi`, `System Monitor_0.1.4_x64-setup.exe`) and the manifest script generated a clean current-version manifest locally (no machine-mutating steps locally).
+- [x] 8.5 `npm run verify:packaged` PASS against the built exe: real IPC `get_history` (schema 5), advancing collector data, viewMode write landed in per-run isolated settings store, representative interaction, clean exit, no orphan app/webview processes, developer settings untouched.
 
 ## 9. Hosted CI
 
@@ -61,4 +61,9 @@
 
 ## Evidence
 
-(Append run IDs, job outcomes, and artifact names here as hosted validation completes.)
+Local (2026-08-25, this machine):
+- `verify:fast`: all five Rust test lanes pass (194 default / 194 all-features / 175 no-default / 188 nvml-only / 186 nvapi-only lib tests + probe + main suites); clippy `-D warnings` exit 0; cargo audit exit 0 (21 allowed advisories); frontend audits/typecheck/tests/build green.
+- `verify:e2e`: 12 passed. `verify:sim`: matrix green, 16 journey runs in ~5.4 min. `verify:packaged`: PASS (see 8.5). `verify:tauri`: exit 0. Installers built locally and hashed via manifest script (2 artifacts, version-filtered).
+
+Hosted CI:
+- BLOCKED at session time: `git push` fails with `Failed to connect to github.com port 443` (network egress from the development machine to github.com is unavailable; first observed on the initial `git fetch` before any code was written). Retries continue; hosted run IDs/job outcomes will be appended here once push succeeds.
