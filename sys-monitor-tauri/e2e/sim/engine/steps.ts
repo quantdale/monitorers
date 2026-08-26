@@ -361,6 +361,32 @@ export async function waitForSidebarCards(
   return ids;
 }
 
+/**
+ * Polls until the rendered sidebar order is SETTLED: at least `minCount`
+ * cards AND two consecutive samples identical (WMI/PDH enrichment appends
+ * have landed). Sample spacing is measurement cadence, not a fixed delay.
+ */
+export async function waitForSidebarSettled(
+  ctx: SimContext,
+  minCount = 3,
+  timeoutMs = 30_000,
+  sampleMs = 1_200
+): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await readSidebarIds(ctx);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, sampleMs));
+    const next = await readSidebarIds(ctx);
+    if (next.length >= minCount && JSON.stringify(next) === JSON.stringify(last)) {
+      ctx.log('observation', { kind: 'sidebar-order-settled', ids: next });
+      return next;
+    }
+    last = next;
+  }
+  ctx.assert('sidebar-cards-settled', false, `sidebar never settled within ${timeoutMs}ms (last: ${last.join(',') || 'none'})`);
+  return last;
+}
+
 /** Reads the REAL run-isolated settings.json as raw text plus parsed form.
  *  Unlike persistedSettings() (which swallows parse errors into {}), this
  *  surfaces corruption explicitly so durability journeys can assert the file
@@ -386,7 +412,7 @@ export function readRealStoreFile(
  *  the CURRENT driver page (a relaunched process replaces the target). */
 export async function invokeCollectorStatus(
   ctx: SimContext
-): Promise<{ state?: string; schema_version?: number; generation?: number } | null> {
+): Promise<{ state?: string; schema_version?: number; generation?: number; timestamp_ms?: number } | null> {
   const page = ctx.driver.page;
   if (!page) return null;
   return page.evaluate(async () => {
@@ -398,6 +424,7 @@ export async function invokeCollectorStatus(
       state?: string;
       schema_version?: number;
       generation?: number;
+      timestamp_ms?: number;
     };
   });
 }

@@ -618,7 +618,7 @@ const sidebarRelaunchPersistence: Journey = {
 
     // ── Launch #1: discovery settles, record the initial rendered order ──
     await S.openSidebar(ctx); // sidebar mounts closed; this launch it opens
-    const initial = await S.waitForSidebarCards(ctx, 3);
+    const initial = await S.waitForSidebarSettled(ctx, 3);
     ctx.log('observation', { kind: 'initial-sidebar-order', ids: initial });
 
     // Baseline history depth (in-memory, Rust-side): wait until the collector
@@ -645,21 +645,34 @@ const sidebarRelaunchPersistence: Journey = {
     ctx.assert('reorder-applied-in-ui', JSON.stringify(reordered) !== JSON.stringify(initial),
       `rendered order changed ${initial.join(',')} -> ${reordered.join(',')}`);
 
-    // The rendered order must land in the run-isolated REAL settings store.
-    // Consistency is checked against the LIVE DOM, not a one-shot snapshot:
-    // WMI/PDH enrichment can append newly discovered ids milliseconds after
-    // the drag, so store-vs-stale-snapshot equality would race (observed on
-    // real hardware). Once DOM and store agree, capture the saved order for
-    // the post-relaunch non-destruction check.
+    // Persistence contract under ghost-aware semantics: the store may be a
+    // SUPERSET of the rendered cards (transiently undiscovered devices stay
+    // saved), but restricted to currently rendered ids it must equal them in
+    // exact order — which is exactly what the drag write produces. Poll until
+    // that consistency holds (i.e., the drag's store write has landed).
     const settled = await S.pollUntil(async () => {
       const domNow = await S.readSidebarIds(ctx);
       const storeNow = await S.persistedSettings(ctx);
-      return { dom: domNow, store: storeNow.sidebarCardOrder };
-    }, ({ dom, store }) => JSON.stringify(store) === JSON.stringify(dom), 12_000, 400);
-    const savedOrder = Array.isArray(settled.store) ? (settled.store as string[]) : null;
-    ctx.assert('persisted-sidebar-order',
-      !!savedOrder && JSON.stringify(savedOrder) === JSON.stringify(settled.dom),
-      `store ${JSON.stringify(settled.store)} matches rendered ${settled.dom.join(',')}`);
+      const arr = Array.isArray(storeNow.sidebarCardOrder) ? (storeNow.sidebarCardOrder as string[]) : null;
+      if (!arr || domNow.length === 0) return { dom: domNow, arr: null, ok: false };
+      const restricted = arr.filter((id) => domNow.includes(id));
+      return {
+        dom: domNow,
+        arr,
+        ok: arr.length >= domNow.length && JSON.stringify(restricted) === JSON.stringify(domNow),
+      };
+    }, (s) => s.ok, 12_000, 400);
+    const savedOrder = settled.arr;
+    ctx.assert('persisted-sidebar-order', !!savedOrder,
+      `dragged order persisted (${(savedOrder ?? []).join(',')})`);
+    ctx.assert('persisted-keeps-seen-devices',
+      !!savedOrder && initial.every((id) => savedOrder.includes(id)) && reordered.every((id) => savedOrder.includes(id)),
+      `store retains every id seen this session (${(savedOrder ?? []).join(',')})`);
+
+    // History depth right before the kill: the old process keeps committing
+    // at 1 Hz during the interaction phase, which gives the post-relaunch
+    // emptiness comparison a real margin.
+    const pointsAtKill = await S.invokeHistoryPointCount(ctx, 60);
 
     const portBefore = driver.cdpPort ?? -1;
 
@@ -672,19 +685,30 @@ const sidebarRelaunchPersistence: Journey = {
 
     // ── Launch #2: native discovery settles again ──
     await S.waitForState(ctx, 'live', 30_000);
-    await S.openSidebar(ctx);
-    const restoredDom = await S.waitForSidebarCards(ctx, Math.max(3, initial.length));
 
-    // In-memory history did NOT survive the process boundary.
+    // Sample the NEW process IMMEDIATELY at live — before any settle waits —
+    // so the fresh in-memory buffer cannot accumulate many commits.
     const pointsAfter = await S.invokeHistoryPointCount(ctx, 60);
-    ctx.assert('history-rebuilt-empty-after-relaunch', pointsAfter >= 0 && pointsAfter < pointsBefore,
-      `buffered points ${pointsBefore} -> ${pointsAfter} across the process boundary`);
+    const statusAfter = await S.invokeCollectorStatus(ctx);
 
-    // Native supervisor re-bootstrapped in the NEW process.
-    const status = await S.invokeCollectorStatus(ctx);
-    ctx.assert('native-status-rebootstrapped', !!status && status.schema_version === 1 && typeof status.state === 'string'
-      && ['starting', 'healthy'].includes(status.state),
-      `status=${JSON.stringify(status)}`);
+    // In-memory history did NOT survive the process boundary: the fresh
+    // buffer, sampled seconds earlier in its life than the old one was at
+    // kill time, must hold strictly fewer points.
+    ctx.assert('history-rebuilt-empty-after-relaunch',
+      pointsAfter >= 0 && pointsAfter < Math.max(pointsAtKill, pointsBefore),
+      `buffered points old=${Math.max(pointsAtKill, pointsBefore)} -> new@live=${pointsAfter}`);
+
+    // Native supervisor re-bootstrapped in the NEW process (generation reset
+    // to 1, contract version intact). Freshness itself is proven by the
+    // empty-history comparison above plus the fresh CDP port and recorded
+    // first-process exit — status.timestamp_ms is wall-clock epoch, not age.
+    ctx.assert('native-status-rebootstrapped',
+      !!statusAfter && statusAfter.schema_version === 1 && statusAfter.generation === 1
+      && typeof statusAfter.state === 'string' && ['starting', 'healthy'].includes(statusAfter.state),
+      `status=${JSON.stringify(statusAfter)}`);
+
+    await S.openSidebar(ctx);
+    const restoredDom = await S.waitForSidebarSettled(ctx, 3);
 
     // Restored EXACTLY as far as discovery allows. Real hardware discovery
     // legitimately varies between processes (Windows materializes GPU Engine
