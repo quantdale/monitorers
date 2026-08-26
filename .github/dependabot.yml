@@ -1,3 +1,8 @@
+# Grouping follows compatibility domains (openspec change
+# dependency-runtime-modernization-and-qualification, design D2): unrelated
+# major/API migrations must never arrive as one catch-all PR. Groups are kept
+# pairwise-disjoint so no dependency ever matches two groups (a dependency that
+# matches multiple groups is left ungrouped by Dependabot).
 version: 2
 updates:
   - package-ecosystem: npm
@@ -16,10 +21,43 @@ updates:
       interval: monthly
     open-pull-requests-limit: 10
     groups:
-      frontend-tooling:
+      # React + React DOM + their matching type packages move coherently.
+      react-framework:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      # Tauri JS packages (API, plugins, CLI) stay coordinated with each other;
+      # coherence with the Rust side is reviewed via the OpenSpec campaign flow.
+      tauri-js:
+        patterns:
+          - "@tauri-apps/*"
+      # Build framework pair plus the compiler. Majors here are expected to be
+      # tightly coupled (plugin peer ranges), so they share one review unit.
+      build-tooling:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "typescript"
+      # Test-only DOM/tooling churn must not ride along with production build
+      # framework majors.
+      test-dom-tooling:
         dependency-type: development
         patterns:
-          - "*"
+          - "jsdom"
+          - "vitest"
+          - "@playwright/*"
+          - "cross-env"
+      # UI/data libraries, grouped only while peer-compatible and independent
+      # of a framework major.
+      ui-libraries:
+        patterns:
+          - "recharts"
+          - "lucide-react"
+          - "@dnd-kit/*"
+      # @types/node is intentionally UNGROUPED: its major tracks the Node
+      # runtime surface and must be attributable independently of Vite/TS.
 
   - package-ecosystem: cargo
     directory: "/sys-monitor-tauri/src-tauri"
@@ -27,9 +65,29 @@ updates:
       interval: monthly
     open-pull-requests-limit: 10
     groups:
-      rust-dependencies:
+      # Collector platform/native: APIs/behavior that directly affect Windows
+      # collection and hardware identity. These migrate deliberately with
+      # collector qualification evidence, isolated from foundation patches.
+      collector-platform:
         patterns:
-          - "*"
+          - "sysinfo"
+          - "wmi"
+          - "windows"
+          - "nvml-wrapper"
+          - "nvapi-sys"
+      # Framework packages reviewed against the matching @tauri-apps JS
+      # releases as one cross-language boundary.
+      tauri-runtime:
+        patterns:
+          - "tauri"
+          - "tauri-build"
+          - "tauri-plugin-*"
+      # Low-risk foundation/serialization packages.
+      rust-foundation:
+        patterns:
+          - "serde"
+          - "serde_json"
+          - "chrono"
 
   - package-ecosystem: github-actions
     directory: "/"
