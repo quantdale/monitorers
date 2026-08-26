@@ -711,19 +711,27 @@ const sidebarRelaunchPersistence: Journey = {
     const restoredDom = await S.waitForSidebarSettled(ctx, 3);
 
     // Restored EXACTLY as far as discovery allows. Real hardware discovery
-    // legitimately varies between processes (Windows materializes GPU Engine
-    // counters lazily; disk enumeration source can differ pre/post WMI), so
-    // two honest invariants replace naive DOM equality:
-    //   (1) NON-DESTRUCTION: the store still holds the exact pre-restart array
-    //       (a filtered subset must never be written back over it);
-    //   (2) ORDER PRESERVATION: rendered ids are a relative-order-preserving
-    //       subset of the saved order (equal discovery reduces to equality).
+    // legitimately varies between processes in BOTH directions (Windows
+    // materializes GPU Engine counters lazily; hosted runners surface extra
+    // ephemeral disks after relaunch), so the honest invariants are:
+    //   (1) APPEND-ONLY NON-DESTRUCTION: every pre-restart saved id survives
+    //       with its relative order intact — new discoveries may append, but
+    //       nothing may be dropped or reordered;
+    //   (2) ORDER PRESERVATION of the rendered subset (equal discovery set +
+    //       no appends reduces to exact equality).
     const refOrder = savedOrder ?? reordered;
     const storeAfter = S.readRealStoreFile(ctx);
     const storedOrder = (storeAfter.parsed?.sidebarCardOrder as string[] | undefined) ?? null;
-    ctx.assert('restored-store-non-destructive',
-      Array.isArray(storedOrder) && JSON.stringify(storedOrder) === JSON.stringify(refOrder),
-      `store kept ${JSON.stringify(storedOrder)} should equal pre-restart ${JSON.stringify(refOrder)}`);
+    let preservedCursor = 0;
+    const appendOnlyPreserved = Array.isArray(storedOrder)
+      && refOrder.every((id) => {
+        const at = storedOrder.indexOf(id, preservedCursor);
+        if (at < 0) return false;
+        preservedCursor = at + 1;
+        return true;
+      });
+    ctx.assert('restored-store-non-destructive', appendOnlyPreserved,
+      `store [${(storedOrder ?? []).join(',')}] preserves pre-restart [${refOrder.join(',')}] as an ordered prefix-subsequence`);
 
     let cursor = 0;
     const orderPreserved = restoredDom.every((id) => {
