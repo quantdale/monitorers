@@ -55,6 +55,13 @@ A manual retry control SHALL be available when supervision is in `failed`. A ret
 - **WHEN** a retry request arrives while a session is healthy or recovering
 - **THEN** it is ignored without starting a second emitter or resetting healthy-state tracking
 
+### Requirement: Retry and shutdown are distinct typed managed states
+The Tauri managed-state layer SHALL expose the cooperative shutdown flag and the manual-retry request as two DISTINCT Rust types (e.g. `StopFlag` and `RetryRequest` newtypes), because Tauri resolves managed state by type and silently refuses duplicate-type registrations. The `retry_collection` command SHALL resolve only the retry type; the application-exit path SHALL resolve only the stop type; registration SHALL be asserted so a refused registration cannot vanish silently. Regression coverage SHALL exercise this real command/state seam (not a local reimplementation) including registration-order independence and the full failed→retry→one-replacement-generation→healthy path with the stop flag never set.
+
+#### Scenario: Retry from failed never touches shutdown
+- **WHEN** the user activates Retry metrics while supervision is `failed`, through the actual managed-state/command wiring
+- **THEN** the supervisor's retry path consumes exactly one replacement generation that reaches healthy on its first emission, no `Stopping` transition occurs, and the stop flag remains unset
+
 ### Requirement: Deterministic fault injection exists only in test builds
 Synthetic panic/retry-policy fault seams used to prove supervisor behavior SHALL exist exclusively in test compilation units (`#[cfg(test)]`) or browser-mode simulation code. Production and default release builds SHALL expose no environment variable, command, cargo feature, or other trigger capable of crashing or perturbing the collector.
 

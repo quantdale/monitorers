@@ -25,3 +25,14 @@ Hook/component tests SHALL cover healthy→recovering→healthy, healthy→recov
 #### Scenario: Generation change does not duplicate history
 - **WHEN** a replacement collector session begins emitting into preserved frontend history
 - **THEN** history arrays continue appending without duplicating pre-recovery points or rewinding timestamps
+
+### Requirement: Mount and reload bootstrap the current collector status race-safely
+On mount/reload in Tauri mode the hook SHALL fetch the supervisor's current managed status (`get_collector_status`) IN ADDITION to subscribing to `collector-status` events, dispatching the fetch only after the listener is attached. A fetched response that is older than an already-observed event SHALL be discarded rather than applied. A malformed or stale lifecycle contract received through either channel SHALL fail visibly without mutating lifecycle state. Pending bootstrap work SHALL NOT touch state after unmount, and a remount SHALL re-bootstrap.
+
+#### Scenario: Failed before mount surfaces Retry immediately
+- **WHEN** the webview mounts or reloads while supervision is already persistent `failed`
+- **THEN** the failed UX and working Retry control appear from the bootstrapped status alone — no new transition event and no process restart required
+
+#### Scenario: Event observed during bootstrap outranks the fetched snapshot
+- **WHEN** a valid `collector-status` event is applied while the bootstrap fetch is still in flight
+- **THEN** the slower fetched response is discarded and the newer observed state remains rendered

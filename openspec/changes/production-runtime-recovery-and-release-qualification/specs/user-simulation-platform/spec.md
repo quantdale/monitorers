@@ -17,3 +17,10 @@ The scriptable mock backend MAY synthesize lifecycle status sequences for journe
 #### Scenario: Bridge lifecycle faults are browser-only
 - **WHEN** the app runs in a real Tauri context
 - **THEN** no module under the simulation bridge executes and no lifecycle fault injection exists in the shipped backend
+
+### Requirement: Mock lifecycle parity matches production first-emit semantics
+A mock generation SHALL report `healthy` only after its FIRST successful snapshot emission — never merely because an interval or recovery timer was scheduled. Automatic recovery and manual retry SHALL obey the same contract, and a dead/non-emitting replacement SHALL never reach `healthy`. Teardown (`stop()`) SHALL cancel the active interval AND every staged crash/recovery timer, and scheduled callbacks SHALL be invalidated by a run token (or equivalent) so stale callbacks can never resurrect or advance a superseded singleton across unmount/remount or between runs.
+
+#### Scenario: Recovery journey proves data before healthy
+- **WHEN** a recovery journey observes the mock lifecycle after injecting a session fault
+- **THEN** at least one real snapshot emission is recorded between the replacement generation starting and its `healthy` status
