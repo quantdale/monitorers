@@ -349,7 +349,11 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
 
     if (diagnostics.length > 0) {
       if (passed) {
-        setPrimaryFailure('harness-defect', 'harness cleanup/isolation diagnostics failed', currentStep);
+        setPrimaryFailure(
+          'harness-defect',
+          `harness cleanup/isolation diagnostics failed: ${diagnostics.join(' | ')}`,
+          currentStep,
+        );
       } else if (failureMessage) {
         failureMessage = `${failureMessage}; diagnostics: ${diagnostics.join(' | ')}`;
       }

@@ -401,9 +401,18 @@ export class RealAppDriver implements SimDriver {
         await this.closeProcess();
         await new Promise((r) => setTimeout(r, 1_000));
         this.port = await freePort();
+        // Elevated hosts receive the debug switches through the machine-wide
+        // HKLM policy (env vars are ignored), so the rewritten value MUST be
+        // re-applied with the NEW port or the respawned process opens its
+        // debug server on the stale one while we poll the new endpoint.
+        this.env = {
+          ...this.env,
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.port} --remote-allow-origins=*`,
+        };
+        this.applyHklmArgsFallback();
         const stderrFd2 = this.appStderrPath ? openSync(this.appStderrPath, 'a') : undefined;
         try {
-          this.proc = spawn(this.appExe, [], { env: { ...this.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.port} --remote-allow-origins=*` }, stdio: ['ignore', 'ignore', stderrFd2 ?? 'ignore'] });
+          this.proc = spawn(this.appExe, [], { env: this.env, stdio: ['ignore', 'ignore', stderrFd2 ?? 'ignore'] });
         } catch (spawnError) {
           if (stderrFd2 !== undefined) closeSync(stderrFd2);
           throw new ClassifiedSimulationError(
