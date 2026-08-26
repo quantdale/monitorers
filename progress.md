@@ -15,24 +15,25 @@ typed lifecycle IPC, packaged-app qualification, and MSI/NSIS install qualificat
 - Run tests, lint, or build when available.
 - Do not run destructive commands, force pushes, production deploys, or database resets.
 
-## Status snapshot (2026-08-25, after the recovery campaign)
+## Status snapshot (2026-08-26, PR #28 safety closure in progress)
 - Authoritative quick reference: root `AGENTS.md`. Supervisor lifecycle, recovery
-  policy, status contract (`LIFECYCLE_SCHEMA_VERSION = 1`), retry semantics, and the
+  policy, status contract (`LIFECYCLE_SCHEMA_VERSION = 1`), retry semantics (honored
+  ONLY while failed — a `Failed` answer never means ignored), and the
   qualification lanes are documented there; `CLAUDE.md` / `.cursorrules` were
-  reconciled against source on 2026-08-25.
+  re-reconciled on 2026-08-26.
+- Safety closure at the post-audit head: typed `StopFlag`/`RetryRequest` managed
+  state (the two raw `Arc<AtomicBool>` registrations used to alias — Retry could
+  hit shutdown), race-fenced `get_collector_status` bootstrap on mount/reload,
+  top-of-loop initial tick deadline, mock healthy-only-after-first-emit + run-token
+  teardown, unconditional WebView2 HKLM policy cleanup with injectable seam,
+  supported download-artifact inputs, corrected retry docs. See tasks.md §10.
 - Collector: supervised sessions (`src-tauri/src/collector/supervisor.rs`). A panic
   ends one session; bounded automatic recovery replaces it (3 attempts/streak,
   staged backoff 500ms→8s, healthy ≥30s resets); exhausted budget → persistent
   `failed` with manual `retry_collection`. Fresh sessions rebuild all OS-facing
-  state and prime rate baselines (no fabricated post-recovery zeros/spikes).
+  state and prime rate baselines before waiting out the first deadline
+  (no fabricated post-recovery zeros/spikes).
   History survives sessions; downtime remains a truthful timestamp gap.
-- Verified locally during the campaign: Rust fmt/clippy clean, 198 tests green;
-  Vitest 216/216; Playwright E2E 12/12; mock sim matrix 16/16 journey runs green
-  (~5.4 min) including new `collector-recovery` and `fault-retry-exhaustion`;
-  `sim:typecheck`, `verify:version`, `openspec validate --strict` clean.
-- Fixed en route: `MetricCard` list view had lost its `metric-card-*` testid
-  (d24d6a1 regression that hung `layout-persistence`); artifact writer now retries
-  transient Windows rename locks.
 - Release boundary: `npm run verify:packaged` drives the built exe via CDP (real
   IPC, isolated real settings store, orphan-process assertions);
   `.github/workflows/release-qualification.yml` (dispatch/tag) builds MSI+NSIS,
