@@ -17,7 +17,7 @@ sysinfo = "0.39"
 wmi = "0.18"
 chrono = "0.4"
 nvapi-sys = { version = "0.1.3", optional = true }
-nvml-wrapper = { version = "0.10", optional = true }
+nvml-wrapper = { version = "0.12", optional = true }
 windows = { version = "0.62", features = [
     "Win32_System_Performance",
     "Win32_Foundation",
