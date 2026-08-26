@@ -42,6 +42,7 @@ cargo clippy --all-targets --all-features -- -D warnings  # CI-enforced; fix war
 cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (>=60s)
 cargo build --example cadence_probe               # probe lives as an example target (single-bin app crate)
 cargo run --example cadence_probe -- --secs 90    # headless probe for the above
+cargo run --example startup_probe                 # session-bootstrap timing probe (startup-cost regressions)
 ```
 
 ## CI gate (never commit failing; CI runs the same checks)
