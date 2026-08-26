@@ -23,6 +23,12 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
 ] }
 
+[dev-dependencies]
+# Headless MockRuntime app for exercising the REAL managed-state/command seam
+# in bin-target unit tests (type-keyed state resolution cannot be tested
+# without a Manager implementation).
+tauri = { version = "2", features = ["test"] }
+
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

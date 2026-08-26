@@ -213,6 +213,13 @@ pub fn run_collector_loop(
         if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return LoopOutcome::Stopped;
         }
+        // Wait until THIS tick's deadline before polling. The rate baselines
+        // were primed moments ago; sampling immediately would fabricate a
+        // near-zero-delta first reading. Shutdown stays responsive inside
+        // wait_until_deadline.
+        if !wait_until_deadline(next_deadline, stop) {
+            return LoopOutcome::Stopped;
+        }
         let tick_started = Instant::now();
         let deadline_overrun = tick_started.saturating_duration_since(next_deadline);
         let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -326,9 +333,6 @@ pub fn run_collector_loop(
         let previous_deadline = next_deadline.saturating_duration_since(loop_epoch);
         next_deadline =
             loop_epoch + rebase_deadline(previous_deadline, elapsed_since_epoch, TICK_INTERVAL);
-        if !wait_until_deadline(next_deadline, stop) {
-            return LoopOutcome::Stopped;
-        }
     }
 }
 
@@ -496,6 +500,54 @@ mod tests {
         assert_eq!(earlier, 1_000_250);
         assert_eq!(later, 1_000_500);
         assert!(later >= earlier);
+    }
+
+    // REGRESSION (first-poll timing): a fresh/recovered session primes its
+    // rate baselines, then MUST wait out the full initial tick deadline before
+    // the first poll/commit. The pre-fix loop entered the poll body before any
+    // wait, producing a near-zero-delta first reading microseconds after
+    // priming. The threshold is 3/4 of TICK_INTERVAL: the fixed loop lands at
+    // ~250ms (+ poll work), the buggy one at single-digit milliseconds — no
+    // realistic scheduling jitter bridges that gap.
+    #[test]
+    fn test_first_poll_waits_for_initial_deadline_after_rate_priming() {
+        let mut state = CollectorState::new();
+        let mut registry = SensorRegistry::new();
+        registry.register(CpuSensorProvider);
+        let store = SafeHistoryStore::new(HistoryStore::new("test"));
+        let mut wmi_bootstrap = WmiBootstrap::new();
+
+        let started = Instant::now();
+        let mut emit_times: Vec<Duration> = Vec::new();
+
+        let outcome = run_collector_loop(
+            &mut state,
+            &mut wmi_bootstrap,
+            &mut registry,
+            &store,
+            Some(LoopLimit::Ticks(2)),
+            None,
+            |_timing| {},
+            |_state, _wmi| {},
+            |_snap| {
+                emit_times.push(started.elapsed());
+            },
+            |_msg| {},
+        );
+
+        assert_eq!(outcome, LoopOutcome::Completed);
+        assert_eq!(emit_times.len(), 2);
+        let first = emit_times[0];
+        let floor = TICK_INTERVAL - TICK_INTERVAL / 4;
+        assert!(
+            first >= floor,
+            "first poll fired {first:?} after baseline priming — a fresh session must wait for its initial {TICK_INTERVAL:?} deadline before polling"
+        );
+        let second = emit_times[1];
+        assert!(
+            second >= first + floor,
+            "second poll fired {second:?} after priming — cadence collapsed"
+        );
     }
 
     #[test]

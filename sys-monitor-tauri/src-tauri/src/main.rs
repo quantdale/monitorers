@@ -16,7 +16,73 @@ use sys_monitor_tauri::{
     CollectorStatus, HistoryPayload, RecoveryPolicy, SafeCollectorStatus, SessionRunner,
     SessionSignals,
 };
+use sysinfo::System;
 use tauri::{Emitter, Manager, RunEvent};
+
+// ── MANAGED LIFECYCLE FLAGS ──────────────────────────────────────────────────
+
+/// Cooperative shutdown flag for collector sessions (Tauri managed state).
+///
+/// Tauri resolves managed state by RUST TYPE: `manage()` returns `false` for a
+/// type that is already registered and every `State<'_, T>` resolves to that
+/// single first-registered value. Two independent flags therefore MUST be two
+/// distinct types — wrapping raw `Arc<AtomicBool>` values twice would silently
+/// alias them onto one instance (the defect this newtype pair exists to kill:
+/// a Retry click could resolve the shutdown flag and permanently stop
+/// collection).
+#[derive(Clone, Default)]
+struct StopFlag(Arc<AtomicBool>);
+
+/// Manual-retry request flag: signaled by the `retry_collection` command,
+/// consumed by the supervisor's terminal wait (Tauri managed state).
+#[derive(Clone, Default)]
+struct RetryRequest(Arc<AtomicBool>);
+
+impl StopFlag {
+    fn set(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    fn load(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Plain-atomic handle for the supervision/session boundary (the
+    /// supervisor and sessions speak `Arc<AtomicBool>`, not Tauri state).
+    fn signal_arc(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl RetryRequest {
+    fn store(&self, value: bool) {
+        self.0.store(value, Ordering::Relaxed);
+    }
+
+    fn signal_arc(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+/// Registers both lifecycle flags as DISTINCT managed types and fails loudly
+/// if either registration is refused — a silently dropped registration would
+/// leave the corresponding `State<'_, T>` unresolvable (panic at first use)
+/// or, worse, aliased to another value of the same type.
+fn register_lifecycle_flags<M: tauri::Manager<R>, R: tauri::Runtime>(
+    manager: &M,
+) -> (StopFlag, RetryRequest) {
+    let stop = StopFlag::default();
+    let retry = RetryRequest::default();
+    assert!(
+        manager.manage(stop.clone()),
+        "StopFlag managed-state registration was refused — lifecycle flags must be distinct managed types"
+    );
+    assert!(
+        manager.manage(retry.clone()),
+        "RetryRequest managed-state registration was refused — lifecycle flags must be distinct managed types"
+    );
+    (stop, retry)
+}
 
 // ── TAURI COMMAND — INITIAL HISTORY LOAD ────────────────────────────────────
 
@@ -53,17 +119,22 @@ fn get_collector_status(status: tauri::State<SafeCollectorStatus>) -> CollectorS
 }
 
 /// Manual retry for an exhausted recovery budget. A request is honored only
-/// while supervision is `Failed`; outside that state it is coalesced to a
-/// no-op and the current lifecycle state is returned so the caller can tell.
+/// while supervision is `Failed`: the retry flag is signaled, a replacement
+/// generation is requested, and `Failed` is returned so the caller can tell
+/// the honored path from a coalesced one. Outside `Failed` the command is a
+/// no-op that echoes the current state back.
+///
+/// This command resolves ONLY [`RetryRequest`] — never [`StopFlag`]. The two
+/// are distinct managed types precisely so this wiring cannot regress.
 #[tauri::command]
 fn retry_collection(
-    retry: tauri::State<'_, Arc<AtomicBool>>,
+    retry: tauri::State<'_, RetryRequest>,
     status: tauri::State<SafeCollectorStatus>,
 ) -> CollectorLifecycleState {
     let current = lock_status(&status);
     if current.state == CollectorLifecycleState::Failed {
         drop(current);
-        retry.store(true, Ordering::Relaxed);
+        retry.store(true);
         return CollectorLifecycleState::Failed;
     }
     current.state
@@ -275,18 +346,22 @@ fn run_session_body(
             // The collector's grace/prune logic has already determined the
             // current stable device set in this snapshot. Keep the sidebar on
             // that same set and notify the frontend only when metadata changes.
+            // Borrowed (not cloned) read of the current profile: this runs on
+            // EVERY emitted tick, so the steady state must not pay a full
+            // HardwareProfile deep clone just to conclude "nothing changed".
             let profile_changed = {
                 let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(current) = shared.profile.clone() {
-                    let next = reconcile_profile_with_snapshot(&current, snap);
-                    if next != current {
-                        shared.profile = Some(next);
-                        true
-                    } else {
-                        false
+                match shared.profile.as_ref() {
+                    Some(current) => {
+                        let next = reconcile_profile_with_snapshot(current, snap);
+                        if next != *current {
+                            shared.profile = Some(next);
+                            true
+                        } else {
+                            false
+                        }
                     }
-                } else {
-                    false
+                    None => false,
                 }
             };
             if profile_changed {
@@ -346,19 +421,19 @@ fn reconcile_profile_with_snapshot(
         .gpus
         .iter()
         .map(|gpu| {
-            let (_, classified_kind) = classify_gpu(&gpu.name);
+            let (classified_vendor, classified_kind) = classify_gpu(&gpu.name);
             let existing = current.gpus.iter().find(|entry| entry.key == gpu.key);
             GpuInfo {
                 key: gpu.key.clone(),
                 name: gpu.name.clone(),
-                vendor: existing
-                    .map(|entry| entry.vendor.clone())
-                    .unwrap_or_else(|| match gpu.vendor.as_str() {
+                vendor: existing.map(|entry| entry.vendor.clone()).unwrap_or(
+                    match gpu.vendor.as_str() {
                         "nvidia" => sys_monitor_tauri::hardware::GpuVendor::Nvidia,
                         "amd" => sys_monitor_tauri::hardware::GpuVendor::Amd,
                         "intel" => sys_monitor_tauri::hardware::GpuVendor::Intel,
-                        _ => classify_gpu(&gpu.name).0,
-                    }),
+                        _ => classified_vendor,
+                    },
+                ),
                 kind: existing
                     .filter(|entry| entry.kind != sys_monitor_tauri::hardware::GpuKind::Unknown)
                     .map(|entry| entry.kind.clone())
@@ -399,12 +474,18 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            // One temporary state instance extracts the CPU brand for the
-            // shared HistoryStore. Session-owned state is rebuilt fresh by
-            // every supervised session (see TauriSessionRunner).
-            let probe_state = CollectorState::new();
-            let cpu_name = probe_state
-                .system
+            // Startup fast path: only the CPU brand string is needed here, so
+            // build it from a CPU-only sysinfo refresh. A full CollectorState
+            // would additionally open the PDH query + counters, load the NVML
+            // DLL, enumerate disks/networks and pay sysinfo's
+            // MINIMUM_CPU_UPDATE_INTERVAL re-refresh — several hundred ms of
+            // duplicated OS work that the supervised session (which owns the
+            // real state) repeats properly moments later.
+            let probe_system = System::new_with_specifics(
+                sysinfo::RefreshKind::nothing()
+                    .with_cpu(sysinfo::CpuRefreshKind::everything()),
+            );
+            let cpu_name = probe_system
                 .cpus()
                 .first()
                 .map(|c| c.brand().to_string())
@@ -418,10 +499,7 @@ fn main() {
                 policy.max_attempts,
             )));
 
-            let stop_flag = Arc::new(AtomicBool::new(false));
-            app.manage(Arc::clone(&stop_flag));
-            let retry_request = Arc::new(AtomicBool::new(false));
-            app.manage(Arc::clone(&retry_request));
+            let (stop_flag, retry_request) = register_lifecycle_flags(app);
 
             // Layer-2 dev tap (SYSMON_CADENCE_LOG=1): also stream one JSONL
             // cadence record per emit to stderr so the assembled app's cadence
@@ -446,8 +524,8 @@ fn main() {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         supervise(
                             &mut runner,
-                            Arc::clone(&stop_flag),
-                            Arc::clone(&retry_request),
+                            stop_flag.signal_arc(),
+                            retry_request.signal_arc(),
                             policy,
                             |status| {
                                 {
@@ -459,7 +537,7 @@ fn main() {
                                 {
                                     static STATUS_EMIT_ERROR: std::sync::OnceLock<()> =
                                         std::sync::OnceLock::new();
-                                    if !stop_flag.load(Ordering::Relaxed) {
+                                    if !stop_flag.load() {
                                         STATUS_EMIT_ERROR.get_or_init(|| {
                                             eprintln!(
                                                 "[Supervisor] collector-status delivery failed: {error}"
@@ -502,8 +580,10 @@ fn main() {
 
     app.run(move |app_handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            if let Some(stop) = app_handle.try_state::<Arc<AtomicBool>>() {
-                stop.store(true, Ordering::Relaxed);
+            // Shutdown resolves ONLY the typed stop flag — it must never touch
+            // RetryRequest (see the StopFlag/RetryRequest type distinction).
+            if let Some(stop) = app_handle.try_state::<StopFlag>() {
+                stop.set();
             }
         }
     });
@@ -572,22 +652,307 @@ mod tests {
         assert_eq!(next.disks[0].kind, DiskKind::Unknown);
     }
 
-    // Retry coalescing is a pure decision over the lifecycle state: honor the
-    // request only in Failed, otherwise report the current state untouched.
-    #[test]
-    fn test_retry_coalescing_decision_is_failed_only() {
-        use super::CollectorLifecycleState;
-        fn should_signal(state: CollectorLifecycleState) -> bool {
-            state == CollectorLifecycleState::Failed
+    // ── Retry/stop managed-state wiring (real Tauri seam) ──
+    //
+    // These tests exercise the actual type-keyed managed-state resolution and
+    // the real command body against a headless MockRuntime app. The historical
+    // defect: two raw `Arc<AtomicBool>` values were both passed to `manage()`;
+    // Tauri keys state by type, so the second registration was refused, its
+    // value dropped on the floor, and BOTH the retry command and the exit path
+    // resolved the shutdown flag — a Retry click could stop collection forever.
+
+    use super::{
+        lock_status, register_lifecycle_flags, retry_collection, supervise,
+        CollectorLifecycleState, CollectorStatus, RecoveryPolicy, RetryRequest,
+        SafeCollectorStatus, SessionRunner, SessionSignals, StopFlag,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+    type SharedLog<T> = Arc<StdMutex<Vec<T>>>;
+    use std::time::{Duration, Instant};
+    use tauri::Manager as _;
+
+    fn failed_status(reason: &str) -> CollectorStatus {
+        CollectorStatus {
+            schema_version: 1,
+            state: CollectorLifecycleState::Failed,
+            generation: 3,
+            attempt: 4,
+            max_attempts: 2,
+            reason: Some(reason.to_string()),
+            timestamp_ms: 0,
         }
-        assert!(should_signal(CollectorLifecycleState::Failed));
-        for other in [
-            CollectorLifecycleState::Starting,
+    }
+
+    #[test]
+    fn retry_command_signals_only_the_retry_flag_from_failed() {
+        let app = tauri::test::mock_app();
+        let (stop, _retry) = register_lifecycle_flags(&app);
+        app.manage(StdMutex::new(failed_status("budget exhausted")));
+
+        // The registered flags must be independent values: same-type aliasing
+        // would make Arc::ptr_eq hold here.
+        let retry_state = app.state::<RetryRequest>();
+        assert!(!Arc::ptr_eq(&stop.signal_arc(), &retry_state.signal_arc()));
+
+        // Real command body, real State resolution.
+        let answer = retry_collection(retry_state, app.state::<SafeCollectorStatus>());
+        assert_eq!(answer, CollectorLifecycleState::Failed);
+        assert!(
+            app.state::<RetryRequest>().0.load(Ordering::Relaxed),
+            "retry must be signaled"
+        );
+        assert!(!stop.load(), "a Retry click must NEVER set the stop flag");
+    }
+
+    #[test]
+    fn flag_resolution_is_independent_of_registration_order() {
+        let app = tauri::test::mock_app();
+        // Deliberately REVERSE the production registration order to prove the
+        // wiring does not depend on insertion order (with aliased same-type
+        // state, whichever flag registered first would absorb both writes).
+        assert!(
+            app.manage(RetryRequest::default()),
+            "first registration must win"
+        );
+        assert!(
+            app.manage(StopFlag::default()),
+            "distinct types never collide"
+        );
+        // A duplicate same-type registration is refused loudly by manage();
+        // our register helper asserts on it. Raw behavior check:
+        assert!(
+            !app.manage(RetryRequest::default()),
+            "duplicate type must be refused"
+        );
+
+        app.state::<RetryRequest>().store(true);
+        assert!(app.state::<RetryRequest>().0.load(Ordering::Relaxed));
+        assert!(!app.state::<StopFlag>().load());
+        app.state::<StopFlag>().set();
+        assert!(app.state::<StopFlag>().load());
+        assert!(app.state::<RetryRequest>().0.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn retry_outside_failed_is_coalesced_and_signals_nothing() {
+        let app = tauri::test::mock_app();
+        let (stop, _retry) = register_lifecycle_flags(&app);
+        let mut healthy = failed_status("x");
+        healthy.state = CollectorLifecycleState::Healthy;
+        healthy.attempt = 0;
+        app.manage(StdMutex::new(healthy));
+
+        for state in [
             CollectorLifecycleState::Healthy,
+            CollectorLifecycleState::Starting,
             CollectorLifecycleState::Recovering,
             CollectorLifecycleState::Stopping,
         ] {
-            assert!(!should_signal(other));
+            {
+                let status_state = app.state::<SafeCollectorStatus>();
+                let mut guard = lock_status(&status_state);
+                guard.state = state;
+            }
+            let answer = retry_collection(
+                app.state::<RetryRequest>(),
+                app.state::<SafeCollectorStatus>(),
+            );
+            assert_eq!(answer, state, "coalesced click echoes the current state");
+            assert!(
+                !app.state::<RetryRequest>().0.load(Ordering::Relaxed),
+                "{state:?} must not be signaled"
+            );
+            assert!(!stop.load(), "{state:?} must not touch the stop flag");
         }
+    }
+
+    // Scripted runner for the end-to-end supervision seam: generations 1..=N
+    // panic instantly (driving escalation into Failed); the generation started
+    // by a manual retry emits data and stays alive until stopped.
+    struct RetryScriptRunner {
+        fail_generations: u32,
+        generations_seen: SharedLog<u32>,
+        replacement_started: Arc<AtomicUsize>,
+    }
+
+    impl SessionRunner for RetryScriptRunner {
+        fn start(
+            &mut self,
+            generation: u32,
+            signals: SessionSignals,
+        ) -> std::thread::JoinHandle<super::LoopOutcome> {
+            self.generations_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(generation);
+            let panics = generation <= self.fail_generations;
+            let replacement_started = Arc::clone(&self.replacement_started);
+            std::thread::Builder::new()
+                .name("scripted-session".to_string())
+                .spawn(move || {
+                    if panics {
+                        return super::LoopOutcome::Panicked(format!(
+                            "synthetic panic gen {generation}"
+                        ));
+                    }
+                    replacement_started.fetch_add(1, Ordering::SeqCst);
+                    // First successful emission → supervisor reports Healthy.
+                    signals.first_emit.store(true, Ordering::Relaxed);
+                    // Replacement session stays alive until cooperative stop.
+                    while !signals.stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    super::LoopOutcome::Stopped
+                })
+                .expect("scripted session spawn must not fail")
+        }
+    }
+
+    impl RetryScriptRunner {
+        fn new(
+            fail_generations: u32,
+        ) -> (Self, SharedLog<u32>, SharedLog<CollectorLifecycleState>) {
+            let generations = Arc::new(StdMutex::new(Vec::new()));
+            let statuses = Arc::new(StdMutex::new(Vec::new()));
+            (
+                Self {
+                    fail_generations,
+                    generations_seen: Arc::clone(&generations),
+                    replacement_started: Arc::new(AtomicUsize::new(0)),
+                },
+                generations,
+                statuses,
+            )
+        }
+    }
+
+    fn wait_for_status(
+        statuses: &StdMutex<Vec<CollectorLifecycleState>>,
+        want: CollectorLifecycleState,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if statuses.lock().unwrap_or_else(|e| e.into_inner()).last() == Some(&want) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        false
+    }
+
+    #[test]
+    fn manual_retry_from_failed_starts_exactly_one_replacement_generation_without_stopping() {
+        let app = tauri::test::mock_app();
+        // The supervisor thread consumes EXACTLY the instances registered as
+        // managed state — the same seam production setup wires.
+        let (stop_flag, retry_request) = register_lifecycle_flags(&app);
+        app.manage(StdMutex::new(CollectorStatus::initial(2)));
+
+        // 3 failing sessions exhaust the 2-attempt budget → Failed.
+        let (mut runner, generations, statuses) = RetryScriptRunner::new(3);
+        let policy = RecoveryPolicy {
+            max_attempts: 2,
+            base_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(2),
+            healthy_reset_after: Duration::from_secs(3600),
+        };
+        let statuses_cb = Arc::clone(&statuses);
+        let supervisor_stop = stop_flag.signal_arc();
+        let supervisor_retry = retry_request.signal_arc();
+        let supervisor_handle = app.handle().clone();
+        let supervisor = std::thread::Builder::new()
+            .name("test-supervisor".to_string())
+            .spawn(move || {
+                supervise(
+                    &mut runner,
+                    supervisor_stop,
+                    supervisor_retry,
+                    policy,
+                    |status| {
+                        // Mirror production wiring: transitions land in the
+                        // MANAGED status store the command reads.
+                        {
+                            let store = supervisor_handle.state::<SafeCollectorStatus>();
+                            let mut guard = lock_status(&store);
+                            *guard = status.clone();
+                        }
+                        statuses_cb
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(status.state);
+                    },
+                );
+            });
+
+        assert!(
+            wait_for_status(
+                &statuses,
+                CollectorLifecycleState::Failed,
+                Duration::from_secs(10)
+            ),
+            "supervision must reach Failed after exhausting the budget"
+        );
+
+        // THE REGRESSION: from Failed, a user Retry click goes through the real
+        // managed-state/command seam. It must signal the supervisor's retry
+        // path — never the stop flag — and produce exactly one replacement
+        // generation whose first data makes it Healthy, with no Stopping in
+        // between.
+        let answer = retry_collection(
+            app.state::<RetryRequest>(),
+            app.state::<SafeCollectorStatus>(),
+        );
+        assert_eq!(
+            answer,
+            CollectorLifecycleState::Failed,
+            "honored retry answers Failed"
+        );
+        assert!(
+            !app.state::<StopFlag>().load(),
+            "stop flag must stay false across the retry click"
+        );
+
+        assert!(
+            wait_for_status(
+                &statuses,
+                CollectorLifecycleState::Healthy,
+                Duration::from_secs(10)
+            ),
+            "replacement session must become Healthy after its first data"
+        );
+
+        let seen = generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert_eq!(
+            seen,
+            vec![1, 2, 3, 4],
+            "exactly one replacement generation may start"
+        );
+
+        let history = statuses.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let failed_idx = history
+            .iter()
+            .rposition(|s| *s == CollectorLifecycleState::Failed)
+            .unwrap();
+        let healthy_idx = history
+            .iter()
+            .rposition(|s| *s == CollectorLifecycleState::Healthy)
+            .unwrap();
+        assert!(healthy_idx > failed_idx);
+        assert!(
+            !history[failed_idx..=healthy_idx].contains(&CollectorLifecycleState::Stopping),
+            "no Stopping transition may appear between Failed and post-retry Healthy: {history:?}"
+        );
+
+        // Cooperative shutdown ends the test cleanly.
+        app.state::<StopFlag>().set();
+        supervisor
+            .expect("test supervisor thread must spawn")
+            .join()
+            .expect("supervisor thread must not panic");
     }
 }
