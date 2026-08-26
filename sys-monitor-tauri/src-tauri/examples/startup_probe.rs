@@ -99,14 +99,16 @@ fn main() {
         "session bootstrap: profile discovery        median {} ms",
         median(&mut profile_costs)
     );
+    // Per-iteration TOTALS must be captured BEFORE either phase vector is
+    // sorted: median() sorts in place, so zipping afterwards would pair
+    // timings by rank across iterations and misstate end-to-end startup cost.
+    let mut totals: Vec<u128> = state_costs
+        .iter()
+        .zip(profile_costs.iter())
+        .map(|(a, b)| a + b)
+        .collect();
     println!(
         "session bootstrap: TOTAL                    median {} ms",
-        median(
-            &mut state_costs
-                .iter()
-                .zip(profile_costs.iter())
-                .map(|(a, b)| a + b)
-                .collect::<Vec<_>>()
-        )
+        median(&mut totals)
     );
 }

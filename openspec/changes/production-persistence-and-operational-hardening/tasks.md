@@ -46,8 +46,8 @@
 ## 8. Canonical validation and qualification
 
 - [x] 8.1 Full local gate at final head: `verify:full` exit 0; `verify:packaged` PASS; targeted + full `sim:real` green (sidebar 16/16, soak 25/25); `verify:version` consistent; `openspec validate --all --strict --no-interactive` 17/17; `git diff --check` clean.
-- [ ] 8.2 Push branch; obtain hosted Windows gates green at final head (rust/frontend/e2e/simulation); release qualification rerun if shared release surfaces changed. (PR #29 opened; packaged sim dispatch run 32952215490; release-qual dispatch run 32952259607.)
-- [ ] 8.3 Review full diff, hosted annotations, and any PR review threads; fix valid findings with regression coverage.
+- [x] 8.2 Push branch; obtain hosted Windows gates green at final head `317c266`: rust.yml success (run 32956962281), e2e.yml success (32956962288), simulation mock success (32956962301), packaged dispatch success (32956986920 — all six real journeys), release qualification success (32956990487).
+- [ ] 8.3 Review full diff, hosted annotations, and any PR review threads; fix valid findings with regression coverage. (PR #29; Kilo review pending at time of writing.)
 
 ## 9. Completion
 

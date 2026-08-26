@@ -90,7 +90,7 @@ Journey `sidebar-relaunch-persistence` (real lane only) drives the built exe:
 | | Old | New |
 |---|---|---|
 | Mechanism | `cargo install cargo-audit --version 0.22.1 --locked` | `taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc` with `tool: cargo-audit@0.22.1` |
-| Cost (Rust — verify job, windows-latest) | **5m14.5s** install step of a 10m56s job (~48%); measured from hosted log, run `32925221386`, job `98046655685`, step start 03:08:37.9Z → next step 03:13:52.4Z (2026-08-26) | download-only (seconds); exact time captured from this branch's first hosted rust.yml run (see §9) |
+| Cost (Rust — verify job, windows-latest) | **5m14.5s** install step of a 10m56s job (~48%); measured from hosted log, run `32925221386`, job `98046655685`, step start 03:08:37.9Z → next step 03:13:52.4Z (2026-08-26) | **~3.3s** install step; measured from hosted log of this branch's final-head run `32956962281`, job `98140643565` (action starts 10:13:18.2Z, `verify:rust` begins 10:13:21.5Z). Whole Rust job: 10m56s → **6m11s** (-4m45s, -43%) |
 | Audit semantics | pinned 0.22.1 | identical: same version pin, official RustSec release binary |
 | Supply chain | compiles from registry source each run | action pinned to full commit SHA (immutable); official prebuilt distribution; no unsigned arbitrary binaries |
 | Failure visibility | install failure fails job | action failure fails job BEFORE the audit step — audit can never be silently skipped |
@@ -132,10 +132,31 @@ window).
 
 Recorded after the full gate completed — see §9 for hosted results.
 
-## 9. Hosted qualification
+## 9. Hosted qualification at final head `317c2661de49a3daef41214d398fd25765627584`
 
-Filled after push: workflow run IDs for rust.yml (Rust/frontend/production
-executable), e2e.yml, simulation.yml mock gate, simulation.yml packaged
-dispatch (incl. new real-lane journeys), and release-qualification rerun if
-required. New cargo-audit install step wall-time captured there closes the
-"new cost" cell in §5.
+| Lane | Run | Result |
+|---|---|---|
+| rust.yml — Rust / Frontend / Windows production executable | `32956962281` | success (6m11s / 29s / 7m38s) |
+| e2e.yml — mock-data harness | `32956962288` | success |
+| simulation.yml — config lint + mock lane (PR) | `32956962301` | success (16 journeys green) |
+| simulation.yml — packaged lane (dispatch) | `32956986920` | success — real-lane journeys on windows-latest: first-launch-onboarding glancer 9/9, customizer 16/16; customization-roundtrip both personas 9/9; **sidebar-relaunch-persistence 16/16**; **restart-soak-durability 25/25** |
+| release-qualification.yml (dispatch) | `32956990487` | success — MSI install/run/uninstall, NSIS install/run/uninstall, signed-hash manifest |
+
+### Hosted-run defect loop (fixed within this campaign)
+
+- Run `32952589280`: first cold launch lost its WebView2 target between CDP
+  readiness and page attach (harness bring-up gap) → bounded fresh-process
+  retry added to `RealAppDriver.launch`.
+- Run `32954583100`: retry exposed the elevated-host port channel (HKLM policy
+  still pointed at the stale port on respawn → attempt-2 timeout). Retry now
+  rewrites the policy with the fresh port. Sidebar store invariant corrected to
+  append-only preservation after the hosted runner legitimately discovered MORE
+  devices post-relaunch.
+- Run `32956986920` (final head): all six journeys green — flake absorbed by
+  design, not luck.
+
+### Pre-existing annotation (not introduced here)
+
+`actions/download-artifact@<sha>` emits a Node 20 deprecation warning on Node 24
+runners. Warning-only, affects every workflow equally, pre-dates this branch;
+recorded as future maintenance rather than churned inside this campaign.

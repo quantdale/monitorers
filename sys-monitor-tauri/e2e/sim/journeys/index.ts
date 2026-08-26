@@ -743,6 +743,19 @@ const sidebarRelaunchPersistence: Journey = {
     ctx.assert('restored-sidebar-order-preserved', orderPreserved && restoredDom.length >= 3,
       `rendered ${restoredDom.join(',')} is an order-preserving subset of saved ${refOrder.join(',')}`);
 
+    // When the relaunch discovers the SAME device set as the first process,
+    // the restore contract tightens to EXACT order equality; under discovery
+    // variance the subset semantics above are the honest contract (the OpenSpec
+    // delta defines both branches).
+    const sameDiscovery =
+      JSON.stringify([...restoredDom].sort()) === JSON.stringify([...initial].sort());
+    if (sameDiscovery) {
+      ctx.assert('restored-order-exact-when-discovery-matches', JSON.stringify(restoredDom) === JSON.stringify(reordered),
+        `exact restored order with identical discovery: ${restoredDom.join(',')}`);
+    } else {
+      ctx.log('observation', { kind: 'discovery-variance', initial, restoredDom });
+    }
+
     // Unrelated persisted settings remain coherent.
     const storeFile = S.readRealStoreFile(ctx);
     ctx.assert('store-valid-json', storeFile.exists && storeFile.parsed !== null, 'isolated settings.json parses');

@@ -48,8 +48,12 @@ opt-level = 3
 #   lto=true,  codegen-units=1    4m45s   exe 9,122,816 B
 #   lto="thin", codegen-units=1   3m15s   exe 9,419,776 B   ← adopted (-32%)
 #   lto="thin", codegen-units=16  2m22s   exe 10,225,152 B  (+12% size)
+# Size column note: measured before strip was restored below, so shipped
+# artifacts are SMALLER than those numbers; the wall-time comparison (the
+# part CI re-pays) is unaffected by strip timing.
 # codegen-units stays 1: cu=16 saves another ~50s per build but grows the
 # shipped binary another ~800KB with no runtime benefit — flip only if release
 # build minutes ever outweigh artifact size for this app.
 lto = "thin"
 codegen-units = 1
+strip = true
