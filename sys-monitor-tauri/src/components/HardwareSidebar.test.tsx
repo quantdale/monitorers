@@ -213,7 +213,9 @@ describe('HardwareSidebar (render)', () => {
       root.render(React.createElement(HardwareSidebar, { open: true, profile: p, memTotalGb: null }));
     });
 
-    const ids = Array.from(container.querySelectorAll('[data-sb-id]')).map((n) => n.getAttribute('data-sb-id'));
+    const ids = Array.from(container.querySelectorAll('[data-sb-id]'))
+      .map((n) => n.getAttribute('data-sb-id'))
+      .filter((id): id is string => id !== null);
     expect(ids).toEqual([
       'sb_cpu',
       'sb_gpu_gpu-nvidia',

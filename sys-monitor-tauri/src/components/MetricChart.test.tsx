@@ -1,5 +1,5 @@
 import React, { Profiler, useState } from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { MetricChart } from './MetricChart';
@@ -19,8 +19,16 @@ const REACT_MEMO_TYPE = Symbol.for('react.memo');
 describe('MetricChart render-fan-out guard', () => {
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
+  let originalRO: typeof ResizeObserver | undefined;
+
+  beforeEach(() => {
+    originalRO = globalThis.ResizeObserver;
+  });
 
   afterEach(() => {
+    // Restore the real (or absent) ResizeObserver for every future test in
+    // this file — the stub below must never leak across test bodies.
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalRO;
     const currentRoot = root;
     if (currentRoot) act(() => currentRoot.unmount());
     container?.remove();
@@ -35,7 +43,8 @@ describe('MetricChart render-fan-out guard', () => {
 
   it('skips commits when parent re-renders with unchanged props, commits when data changes', () => {
     // jsdom has no ResizeObserver; ResponsiveContainer needs one that reports
-    // a size synchronously for the chart to mount.
+    // a size synchronously for the chart to mount. Saved/restored by the
+    // describe-level beforeEach/afterEach.
     class ResizeObserverStub {
       callback: ResizeObserverCallback;
       constructor(callback: ResizeObserverCallback) {
@@ -55,10 +64,9 @@ describe('MetricChart render-fan-out guard', () => {
       unobserve(): void {}
       disconnect(): void {}
     }
-    const originalRO = globalThis.ResizeObserver;
     (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
 
-    try {
+    {
       const data: ChartPoint[] = [
         { t: 1000, v: 10 },
         { t: 2000, v: 40 },
@@ -112,8 +120,6 @@ describe('MetricChart render-fan-out guard', () => {
       // and a data change must always commit at least once.
       expect(commitsAfterUnchangedRerender).toBeLessThanOrEqual(4);
       expect(commitsAfterDataChange).toBeGreaterThanOrEqual(1);
-    } finally {
-      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalRO;
     }
   });
 });
