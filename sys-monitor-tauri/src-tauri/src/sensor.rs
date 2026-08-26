@@ -101,31 +101,10 @@ impl SensorProvider for GpuSensorProvider {
         };
 
         #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
-        let nvidia_telemetry = {
-            let candidates: Vec<_> = gpu_updates
-                .iter()
-                .filter(|(_, name, _)| collector::is_nvidia_gpu(name))
-                .collect();
-            match (
-                candidates.as_slice(),
-                query_nvidia_gpu_temp(state.nvapi_initialized),
-            ) {
-                ([(key, _, _)], Some(temp)) => Some(
-                    std::iter::once((
-                        key.clone(),
-                        crate::state::NvidiaTelemetry {
-                            temp_c: Some(temp as f64),
-                            ..Default::default()
-                        },
-                    ))
-                    .collect(),
-                ),
-                // NVAPI's fallback query cannot safely associate a reading
-                // with one of several identical GPUs.
-                (_, Some(_)) => Some(std::collections::HashMap::new()),
-                _ => Some(std::collections::HashMap::new()),
-            }
-        };
+        let nvidia_telemetry = collector::nvidia::nvapi_telemetry_for(
+            &gpu_updates,
+            query_nvidia_gpu_temp(state.nvapi_initialized),
+        );
 
         #[cfg(not(any(feature = "nvml", feature = "nvapi")))]
         let nvidia_telemetry = None;
@@ -155,7 +134,11 @@ impl SensorProvider for GpuSensorProvider {
 
 struct ProviderEntry {
     provider: Box<dyn SensorProvider>,
-    last_polled: std::time::Instant,
+    /// None until the provider's first poll; `None` means due immediately.
+    /// Avoids an unchecked `Instant - interval` subtraction (which would panic
+    /// on a host with sub-interval uptime) while preserving first-poll-now
+    /// semantics.
+    last_polled: Option<std::time::Instant>,
 }
 
 pub struct SensorRegistry {
@@ -175,10 +158,9 @@ impl SensorRegistry {
     }
 
     pub fn register(&mut self, provider: impl SensorProvider + 'static) {
-        let interval = provider.poll_interval();
         self.entries.push(ProviderEntry {
             provider: Box::new(provider),
-            last_polled: Instant::now() - interval,
+            last_polled: None,
         });
     }
 
@@ -201,8 +183,12 @@ impl SensorRegistry {
         self.entries
             .iter_mut()
             .map(|entry| {
-                if now.duration_since(entry.last_polled) >= entry.provider.poll_interval() {
-                    entry.last_polled = now;
+                let interval = entry.provider.poll_interval();
+                let due = entry
+                    .last_polled
+                    .is_none_or(|last| now.duration_since(last) >= interval);
+                if due {
+                    entry.last_polled = Some(now);
                     let started = Instant::now();
                     let raw = entry.provider.poll(state, wmi_con);
                     if perf_logging_enabled() {

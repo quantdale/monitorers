@@ -20,6 +20,7 @@ const metrics: SlicedHistory = {
   net_sent: [1],
   gpus: [],
   collectorError: null,
+  collectorState: null,
 };
 
 function Harness(props: {

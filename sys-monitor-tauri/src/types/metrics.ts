@@ -1,5 +1,34 @@
 export type MetricValue = number | null;
 
+/**
+ * Mirrors `CollectorLifecycleState` (src-tauri/src/collector/supervisor.rs).
+ * Serde serializes the Rust enum as snake_case via `rename_all`.
+ */
+export type CollectorLifecycleState =
+  | 'starting'
+  | 'healthy'
+  | 'recovering'
+  | 'failed'
+  | 'stopping';
+
+/**
+ * Mirrors `CollectorStatus` (src-tauri/src/collector/supervisor.rs) — the typed
+ * lifecycle contract delivered via the `collector-status` event and the
+ * `get_collector_status` command. Keep in sync by hand; its schema version is
+ * independent of the metrics snapshot version.
+ */
+export interface CollectorStatus {
+  schema_version: number;
+  state: CollectorLifecycleState;
+  /** Monotonically increasing supervised-session counter (starts at 1). */
+  generation: number;
+  /** Consecutive failed sessions in the current streak (0 while healthy). */
+  attempt: number;
+  max_attempts: number;
+  reason: string | null;
+  timestamp_ms: number;
+}
+
 export interface NvidiaTelemetry {
   temp_c?: number | null;
   power_w?: number | null;
@@ -15,7 +44,6 @@ export interface DiskSnapshot {
   read_mb_s: number;
   write_mb_s: number;
   avg_response_ms: number;
-  temp_c?: number | null;
 }
 
 export interface GpuSnapshot {
@@ -39,8 +67,8 @@ export interface MetricsSnapshot {
   mem_used_gb: number;
   mem_total_gb: number;
   disks: DiskSnapshot[];
-  net_recv_kb: number;
-  net_sent_kb: number;
+  net_recv_kib_s: number;
+  net_sent_kib_s: number;
   gpus: GpuSnapshot[];
 }
 
@@ -50,7 +78,6 @@ export interface DiskHistory {
   read_mb_s: number;
   write_mb_s: number;
   avg_response_ms: number;
-  temp_c?: number | null;
   /**
    * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
    * this disk was last seen in a live snapshot. Not part of the Rust IPC

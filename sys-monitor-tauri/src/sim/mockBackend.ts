@@ -31,7 +31,13 @@
  * produces the same snapshot sequence regardless of wall clock.
  */
 
-import type { HistoryPayload, MetricsSnapshot, NvidiaTelemetry } from '../types/metrics';
+import type {
+  CollectorLifecycleState,
+  CollectorStatus,
+  HistoryPayload,
+  MetricsSnapshot,
+  NvidiaTelemetry,
+} from '../types/metrics';
 
 export type GpuVendor = 'nvidia' | 'intel' | 'amd' | 'unknown';
 
@@ -40,7 +46,6 @@ export interface SimDiskSpec {
   read_mb_s?: number;
   write_mb_s?: number;
   avg_response_ms?: number;
-  temp_c?: number | null;
 }
 
 export interface SimGpuSpec {
@@ -53,6 +58,10 @@ export interface SimGpuSpec {
 
 export type SimFault =
   | { kind: 'collector-error'; message: string }
+  /** Session-panic simulation with bounded automatic recovery. */
+  | { kind: 'collector-crash'; reason?: string; recoverAfterMs?: number }
+  /** Repeated failures exhaust the budget; stays failed until retryCollection(). */
+  | { kind: 'collector-crash-permanent'; reason?: string; attempts?: number; stageMs?: number }
   | { kind: 'disk-remove'; key: string }
   | { kind: 'disk-add'; key: string }
   | { kind: 'gpu-remove'; name?: string; key?: string }
@@ -69,7 +78,7 @@ export type HistoryLoadFault = { mode: 'fail' } | { mode: 'slow'; delayMs: numbe
 export interface SimScenario {
   /** Scenario shape version (bump on incompatible changes). */
   version: 1;
-  /** Emitted `schema_version` in snapshots/history. Default 4 (production). */
+  /** Emitted `schema_version` in snapshots/history. Default 5 (production). */
   schema_version?: number;
   /** Mock clock speed factor (1 = real-time 250 ms ticks). */
   speed?: number;
@@ -151,8 +160,8 @@ function gpuWave(name: string): Wave {
 
 /** Default disk specs — byte-for-byte the values of the pre-bridge mock. */
 const DEFAULT_DISKS: SimDiskSpec[] = [
-  { key: 'C:', read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2, temp_c: 42 },
-  { key: 'D:', read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7, temp_c: 38 },
+  { key: 'C:', read_mb_s: 12.5, write_mb_s: 8.2, avg_response_ms: 3.2 },
+  { key: 'D:', read_mb_s: 3.1, write_mb_s: 1.8, avg_response_ms: 1.7 },
 ];
 
 const DEFAULT_GPUS: SimGpuSpec[] = [
@@ -163,7 +172,7 @@ const DEFAULT_GPUS: SimGpuSpec[] = [
 export function defaultScenario(): SimScenario {
   return {
     version: 1,
-    schema_version: 4,
+    schema_version: 5,
     speed: 1,
     disks: DEFAULT_DISKS.map((disk) => ({ ...disk })),
     gpus: DEFAULT_GPUS.map((gpu) => ({ ...gpu })),
@@ -233,6 +242,17 @@ export function clearSimScenario(runId: string): void {
 
 const HISTORICAL_DENSITY = 1000; // ms per history point in mock seeds
 
+export const LIFECYCLE_SCHEMA_VERSION = 1;
+
+/** Default wall-clock stage duration for synthesized recovery sequences. */
+const RECOVERY_STAGE_MS = 500;
+
+/**
+ * Mirrors the production supervisor's lifecycle constants for journey realism:
+ * three automatic attempts per streak (matching RecoveryPolicy::production).
+ */
+const SIM_MAX_ATTEMPTS = 3;
+
 export class MockBackend {
   readonly runId: string;
   readonly scenario: SimScenario;
@@ -244,6 +264,29 @@ export class MockBackend {
   private timer: ReturnType<typeof setInterval> | null = null;
   private snapListeners = new Set<(snap: MetricsSnapshot) => void>();
   private errorListeners = new Set<(message: string) => void>();
+  private statusListeners = new Set<(status: CollectorStatus) => void>();
+  /** Supervised-lifecycle mirror for journey realism (browser mode only). */
+  private lifecycle: CollectorStatus = {
+    schema_version: LIFECYCLE_SCHEMA_VERSION,
+    state: 'starting',
+    generation: 0,
+    attempt: 0,
+    max_attempts: SIM_MAX_ATTEMPTS,
+    reason: null,
+    timestamp_ms: Date.now(),
+  };
+  private generation = 0;
+  private crashTimeouts: ReturnType<typeof setTimeout>[] = [];
+  /**
+   * Bumped by `stop()` and by every (re)start so scheduled crash/recovery
+   * callbacks can detect they belong to a superseded run. A stale callback
+   * must never mutate or resurrect the singleton — the module-level backend
+   * outlives individual mounts, so an uncancelled timeout could otherwise
+   * restart emission after unmount and contaminate the next run.
+   */
+  private runToken = 0;
+  /** True from a replacement generation's start until its FIRST snapshot emission. */
+  private awaitingFirstEmit = false;
 
   private disks: SimDiskSpec[];
   private gpus: SimGpuSpec[];
@@ -267,7 +310,7 @@ export class MockBackend {
     this.gpus = this.scenario.gpus === undefined
       ? DEFAULT_GPUS.map((gpu) => ({ ...gpu }))
       : this.scenario.gpus.map((gpu) => ({ ...gpu }));
-    this.schemaVersion = this.scenario.schema_version ?? 4;
+    this.schemaVersion = this.scenario.schema_version ?? 5;
     this.speed = this.scenario.speed ?? 1;
     this.historyFault = this.scenario.history_fault ?? null;
     this.corruptSettings = this.scenario.corrupt_settings ?? false;
@@ -286,18 +329,42 @@ export class MockBackend {
     return this.freezeRemaining > 0;
   }
 
-  /** Starts the emission loop. Idempotent; restarts adjust to the new speed. */
+  /** Starts the emission loop as a NEW generation. Idempotent; halted backends stay halted. */
   start(): void {
     if (this.halted || this.timer !== null) return;
+    this.runToken += 1;
+    this.generation += 1;
+    this.awaitingFirstEmit = true;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'starting',
+      generation: this.generation,
+      attempt: 0,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason: null,
+      timestamp_ms: Date.now(),
+    });
+    this.armTimer();
+  }
+
+  /** (Re)arms the interval clock only — no lifecycle transitions. */
+  private armTimer(): void {
+    if (this.timer !== null) return;
     const period = timerPeriodMs(this.speed);
     this.timer = setInterval(() => this.advance(), period);
   }
 
   stop(): void {
+    // Invalidate every pending crash/recovery callback BEFORE clearing them,
+    // then clear both the active interval and all staged timers: teardown must
+    // cancel anything capable of restarting the backend.
+    this.runToken += 1;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.clearCrashTimeouts();
+    this.awaitingFirstEmit = false;
   }
 
   onSnapshot(listener: (snap: MetricsSnapshot) => void): void {
@@ -314,6 +381,146 @@ export class MockBackend {
 
   offCollectorError(listener: (message: string) => void): void {
     this.errorListeners.delete(listener);
+  }
+
+  onCollectorStatus(listener: (status: CollectorStatus) => void): void {
+    this.statusListeners.add(listener);
+  }
+
+  offCollectorStatus(listener: (status: CollectorStatus) => void): void {
+    this.statusListeners.delete(listener);
+  }
+
+  /** Latest synthesized lifecycle status (`get_collector_status` analog). */
+  getStatus(): CollectorStatus {
+    return { ...this.lifecycle };
+  }
+
+  /**
+   * Manual-retry analog of the `retry_collection` command. Honored only while
+   * the synthesized supervisor is `failed`; otherwise a coalesced no-op.
+   * Returns the lifecycle state observed at call time, mirroring the backend
+   * command contract.
+   */
+  retryCollection(): CollectorLifecycleState {
+    const observed = this.lifecycle.state;
+    if (observed !== 'failed') return observed;
+    this.clearCrashTimeouts();
+    this.halted = false;
+    this.start();
+    return observed;
+  }
+
+  private emitStatus(status: CollectorStatus): void {
+    this.lifecycle = status;
+    for (const listener of this.statusListeners) {
+      listener(status);
+    }
+  }
+
+  private clearCrashTimeouts(): void {
+    for (const timeout of this.crashTimeouts.splice(0)) clearTimeout(timeout);
+  }
+
+  /**
+   * Schedules a crash/recovery callback bound to the current run token. If
+   * `stop()`/`start()` supersedes the run before the delay elapses, the
+   * callback is a verified no-op even if it somehow still fires.
+   */
+  private scheduleCrashCallback(callback: () => void, delayMs: number): void {
+    const token = this.runToken;
+    this.crashTimeouts.push(
+      setTimeout(() => {
+        if (token !== this.runToken) return; // stale callback from a dead run
+        callback();
+      }, delayMs)
+    );
+  }
+
+  /**
+   * Synthesizes a session panic with bounded automatic recovery: emissions
+   * stop, status walks recovering → healthy, then ticks resume truthfully
+   * (the gap between remains a real gap — no fabricated samples).
+   */
+  private simulateCrashRecovery(reason: string, recoverAfterMs: number): void {
+    if (this.lifecycle.state === 'recovering' || this.lifecycle.state === 'failed') return;
+    this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'recovering',
+      generation: this.generation,
+      attempt: 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason,
+      timestamp_ms: Date.now(),
+    });
+    this.scheduleCrashCallback(
+      () => {
+        this.halted = false;
+        // The replacement generation reports healthy only after its first
+        // successful snapshot (start() arms awaitingFirstEmit), exactly like
+        // the production supervisor's first-emit transition.
+        this.start();
+      },
+      recoverAfterMs
+    );
+  }
+
+  /**
+   * Synthesizes repeated failures exhausting the recovery budget: staged
+   * recovering statuses then a persistent failed state. Only retryCollection()
+   * (or a new run) restores emission afterwards.
+   */
+  private simulateCrashExhaustion(reason: string, attempts: number, stageMs: number): void {
+    if (this.lifecycle.state === 'recovering' || this.lifecycle.state === 'failed') return;
+    this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'recovering',
+      generation: this.generation,
+      attempt: 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason,
+      timestamp_ms: Date.now(),
+    });
+    for (let i = 2; i <= attempts; i += 1) {
+      this.scheduleCrashCallback(
+        () => {
+          this.generation += 1;
+          this.emitStatus({
+            schema_version: LIFECYCLE_SCHEMA_VERSION,
+            state: 'recovering',
+            generation: this.generation,
+            attempt: i,
+            max_attempts: SIM_MAX_ATTEMPTS,
+            reason,
+            timestamp_ms: Date.now(),
+          });
+        },
+        stageMs * (i - 1)
+      );
+    }
+    this.scheduleCrashCallback(
+      () => {
+        this.halted = true;
+        this.generation += 1;
+          this.emitStatus({
+            schema_version: LIFECYCLE_SCHEMA_VERSION,
+            state: 'failed',
+            generation: this.generation,
+            attempt: attempts + 1,
+            max_attempts: SIM_MAX_ATTEMPTS,
+            reason,
+            timestamp_ms: Date.now(),
+          });
+          for (const listener of [...this.errorListeners]) {
+            listener(`metrics collection failed after ${attempts} recovery attempts — ${reason}`);
+          }
+      },
+      stageMs * attempts
+    );
   }
 
   /**
@@ -338,6 +545,19 @@ export class MockBackend {
     switch (fault.kind) {
       case 'collector-error':
         this.haltWithError(fault.message);
+        break;
+      case 'collector-crash':
+        this.simulateCrashRecovery(
+          fault.reason ?? 'synthetic session panic',
+          fault.recoverAfterMs ?? RECOVERY_STAGE_MS * 2
+        );
+        break;
+      case 'collector-crash-permanent':
+        this.simulateCrashExhaustion(
+          fault.reason ?? 'synthetic repeated session panics',
+          fault.attempts ?? SIM_MAX_ATTEMPTS,
+          fault.stageMs ?? RECOVERY_STAGE_MS
+        );
         break;
       case 'disk-remove':
         this.disks = this.disks.filter((d) => d.key !== fault.key);
@@ -372,12 +592,13 @@ export class MockBackend {
     }
   }
 
-  /** Sets the clock speed factor (restarts the emission timer). */
+  /** Sets the clock speed factor without churning lifecycle state. */
   setSpeed(factor: number): void {
     this.speed = validateSimSpeed(factor);
     if (this.timer !== null) {
-      this.stop();
-      this.start();
+      clearInterval(this.timer);
+      this.timer = null;
+      this.armTimer();
     }
   }
 
@@ -402,7 +623,24 @@ export class MockBackend {
     }
     this.tick += 1;
     this.applyTimeline(this.tick);
+    // A timeline fault may have stopped/halted the loop mid-tick; emitting a
+    // frame afterwards would fake data flowing through a dead session.
+    if (this.halted || this.timer === null) return;
     this.emitSnapshot();
+    if (this.awaitingFirstEmit) {
+      // First successful snapshot of this generation → Healthy. A replacement
+      // that never emits never becomes healthy (timer-scheduled != Healthy).
+      this.awaitingFirstEmit = false;
+      this.emitStatus({
+        schema_version: LIFECYCLE_SCHEMA_VERSION,
+        state: 'healthy',
+        generation: this.generation,
+        attempt: 0,
+        max_attempts: SIM_MAX_ATTEMPTS,
+        reason: null,
+        timestamp_ms: Date.now(),
+      });
+    }
   }
 
   private applyTimeline(tick: number): void {
@@ -451,7 +689,6 @@ export class MockBackend {
         read_mb_s: d.read_mb_s ?? wave.base + 4,
         write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
         avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
-        temp_c: d.temp_c ?? ((hashKey(d.key) % 25) + 30),
       };
     });
 
@@ -486,8 +723,8 @@ export class MockBackend {
       mem_used_gb: 6 + 2 * Math.sin(t * 0.1),
       mem_total_gb: 16,
       disks,
-      net_recv_kb: Math.max(0, sinAt({ base: 100, amp: 200, periodFactor: 0.4, phase: 2.5 }, t)),
-      net_sent_kb: Math.max(0, sinAt({ base: 50, amp: 150, periodFactor: 0.4, phase: 3 }, t)),
+      net_recv_kib_s: Math.max(0, sinAt({ base: 100, amp: 200, periodFactor: 0.4, phase: 2.5 }, t)),
+      net_sent_kib_s: Math.max(0, sinAt({ base: 50, amp: 150, periodFactor: 0.4, phase: 3 }, t)),
       gpus,
     };
   }
@@ -532,7 +769,6 @@ export class MockBackend {
           read_mb_s: d.read_mb_s ?? wave.base + 4,
           write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
           avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
-          temp_c: d.temp_c ?? ((hashKey(d.key) % 25) + 30),
           last_seen_ts: now,
         };
       }),
@@ -563,8 +799,21 @@ export class MockBackend {
   }
 
   private haltWithError(message: string): void {
-    this.halted = true;
+    // Legacy permanent-halt path: mirror the supervised contract by reporting
+    // a terminal failed status (retryable via retryCollection) alongside the
+    // historical collector-error listener notification.
     this.stop();
+    this.generation += 1;
+    this.emitStatus({
+      schema_version: LIFECYCLE_SCHEMA_VERSION,
+      state: 'failed',
+      generation: this.generation,
+      attempt: SIM_MAX_ATTEMPTS + 1,
+      max_attempts: SIM_MAX_ATTEMPTS,
+      reason: message,
+      timestamp_ms: Date.now(),
+    });
+    this.halted = true;
     for (const listener of this.errorListeners) {
       listener(message);
     }

@@ -24,7 +24,7 @@ sort by original index. Secondary series and null gaps remain aligned.
 
 ## Card content module
 `src/cards/` — the pure-ish presentation layer for dashboard cards:
-`renderCardContent(id, { metrics, viewMode, hasNvidiaData })` maps a card id
+`renderCardContent({ id, metrics, viewMode, hasNvidiaData })` maps a card id
 to the `SortableCard` that renders it (or null when the metric is absent),
 and `formatters.ts` holds every value formatter and badge style. App.tsx
 stays layout/drag/settings glue and never formats values itself.
@@ -35,3 +35,16 @@ stays layout/drag/settings glue and never formats values itself.
 - The chart *renders* data; history *commits* on 1 Hz `on_tick` events.
 - A time-range selector means elapsed timestamp coverage. A missing sample is
   a gap, not a zero-valued observation.
+
+## Collector session / supervision
+The backend runs collection as *supervised sessions*
+(`src-tauri/src/collector/supervisor.rs`). A panic ends one session; the
+supervisor replaces it with a fresh one (bounded attempts, staged backoff,
+healthy-period streak reset) and reports transitions as `CollectorStatus`
+(`starting | healthy | recovering | failed | stopping`). The frontend calls
+this the *lifecycle*. A *generation* is one supervised session's ordinal.
+
+## Retry metrics
+The user-facing control for an exhausted recovery budget: invokes
+`retry_collection` (honored only while `failed`, coalesced otherwise). Success
+clears the failure UI automatically — never by restarting the process.

@@ -86,17 +86,6 @@ The settings layer SHALL serialize rapid writes from one app instance so last-wr
 - **WHEN** two independent patch sequences representing two app instances are interleaved and applied to the same in-memory settings reducer in a defined order
 - **THEN** the final state equals what plain last-write-wins application of that same interleaved order would produce (i.e., no key is silently lost or duplicated by the merge logic itself)
 
-### Requirement: Collector panic halts metrics permanently until relaunch
-When the collector thread's tick body panics, the application SHALL emit a `collector-error` event exactly once, the tick loop SHALL terminate (no further `metrics-update` events emitted), and the frontend SHALL display the error banner and retain the last-known card values indefinitely until the process is relaunched.
-
-#### Scenario: A caught panic emits exactly one error event and stops further snapshots
-- **WHEN** a tick body panics inside `catch_unwind`
-- **THEN** exactly one `collector-error` payload is emitted and no further `metrics-update` events are emitted afterward on that run
-
-#### Scenario: The frontend error banner persists once set
-- **WHEN** `useMetrics`'s `collector-error` listener receives an error payload
-- **THEN** `collectorError` remains set to that message for the remainder of the component's lifetime (no automatic clearing)
-
 ### Requirement: History commits stay gated to full-poll ticks at all sustained runtimes
 The 1Hz history-commit cadence (`is_full_poll_tick`/`on_tick` on the backend, `shouldCommitHistory` on the frontend) SHALL remain correctly gated during sustained runtime, so that a selected time window continues to represent real elapsed time and CPU/GPU history density matches other metrics' density.
 
@@ -131,14 +120,14 @@ When WMI connection attempts are slow or exhausted (all 8 backoff attempts fail)
 - **THEN** CPU, memory, network, and disk polling still produce valid snapshots; only GPU vendor classification and CPU thermal data are absent
 
 ### Requirement: History ring buffers wrap correctly under sustained long-running use
-Each history ring buffer (`cpu_history`, `mem_history`, disk/GPU per-key histories, `timestamps`) SHALL be verified to cap at `HISTORY_LEN` (3600) samples and to drop the oldest sample when a new one is pushed at capacity, without growing unbounded or losing internal consistency between parallel buffers (e.g. `timestamps` and `cpu_history` staying the same length).
+Each history ring buffer (`cpu_history`, `mem_history`, disk/GPU per-key histories, `timestamps`) SHALL be verified to cap at `HISTORY_CAPACITY` (3600, aliased `MAX_HISTORY`) samples and to drop the oldest sample when a new one is pushed at capacity, without growing unbounded or losing internal consistency between parallel buffers (e.g. `timestamps` and `cpu_history` staying the same length).
 
 #### Scenario: Pushing past capacity drops the oldest sample
-- **WHEN** `push_history` is called on a buffer already at `HISTORY_LEN` capacity
-- **THEN** the buffer's length remains at `HISTORY_LEN` and its oldest previous element is no longer present
+- **WHEN** `push_history` is called on a buffer already at `HISTORY_CAPACITY` capacity
+- **THEN** the buffer's length remains at `HISTORY_CAPACITY` and its oldest previous element is no longer present
 
 #### Scenario: Parallel histories stay length-synchronized over many pushes
-- **WHEN** `timestamps` and `cpu_history` both receive a push on every full-poll tick over a long simulated run exceeding `HISTORY_LEN` ticks
+- **WHEN** `timestamps` and `cpu_history` both receive a push on every full-poll tick over a long simulated run exceeding `HISTORY_CAPACITY` ticks
 - **THEN** both buffers have identical length at every point in the run
 
 ### Requirement: Cold-start and empty states render safely before first data arrives
@@ -172,3 +161,15 @@ The settings loader SHALL read `settingsVersion`, treat absence as legacy v0, mi
 #### Scenario: Future settings are preserved
 - **WHEN** a store contains a future settings version
 - **THEN** the app does not overwrite it with a downgraded schema and exposes a visible safe error/fallback state
+
+### Requirement: Collector panic triggers supervised recovery instead of permanent halt
+When a collector session's tick body (or its bootstrap) panics, the application SHALL surface exactly one legacy `collector-error` event for diagnostics, end that session, and the supervisor SHALL replace it per the bounded recovery policy (`collector-supervision`). The frontend SHALL keep last-known card values visible during automatic recovery, SHALL show the transient recovering state, and SHALL clear failure UI only on actual recovery proof (a `healthy` status) or via the manual Retry metrics control after budget exhaustion.
+
+#### Scenario: A caught panic emits exactly one error event and ends the session
+- **WHEN** a tick body panics inside `catch_unwind`
+- **THEN** exactly one `collector-error` payload is emitted for that session, no further `metrics-update` events are emitted on that session, and the supervisor reports the session outcome
+
+#### Scenario: Recovery proof clears retained values' failure state
+- **WHEN** a replacement session reports `healthy` after a panic
+- **THEN** the frontend clears the failure/recovering UI automatically and live values resume appending truthful samples
+

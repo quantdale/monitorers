@@ -177,6 +177,38 @@ pub fn reconcile_nvml_readings(
 
 // ── NVAPI GPU TEMPERATURE ────────────────────────────────────────────────────
 
+#[cfg(all(feature = "nvapi", not(feature = "nvml")))]
+use std::collections::HashMap;
+
+/// Associate an NVAPI temperature reading with collector GPU keys.
+///
+/// NVAPI reports one aggregate reading and cannot identify which adapter it
+/// came from, so the reading is attached only when exactly one Nvidia-candidate
+/// GPU is present; multi-GPU systems intentionally receive no telemetry rather
+/// than a guess. Shared by the full-poll path (`collector::poll`) and the GPU
+/// sensor provider so the association policy lives in exactly one place.
+#[cfg(all(feature = "nvapi", not(feature = "nvml")))]
+pub fn nvapi_telemetry_for(
+    gpu_updates: &[(String, String, f64)],
+    temp: Option<f32>,
+) -> Option<HashMap<String, crate::state::NvidiaTelemetry>> {
+    let candidates: Vec<_> = gpu_updates
+        .iter()
+        .filter(|(_, name, _)| crate::collector::is_nvidia_gpu(name))
+        .collect();
+    Some(match (candidates.as_slice(), temp) {
+        ([(key, _, _)], Some(temp)) => std::iter::once((
+            key.clone(),
+            crate::state::NvidiaTelemetry {
+                temp_c: Some(temp as f64),
+                ..Default::default()
+            },
+        ))
+        .collect(),
+        _ => HashMap::new(),
+    })
+}
+
 /// Scan the populated thermal sensors (`sensors[..count]`) for a plausible GPU
 /// core temperature and return it, or `None` if nothing valid is present.
 ///
@@ -439,6 +471,45 @@ mod tests {
             let mapped = reconcile_nvml_readings(&updates, &readings);
             assert_eq!(mapped.len(), 1);
             assert_eq!(mapped["GPU-uuid-a"].temp_c, Some(51.0));
+        }
+    }
+
+    // --- nvapi_telemetry_for (single-source association policy) ---
+    // Only compiled in nvapi-without-nvml builds — the same gate as the
+    // function itself, which is absent under default features.
+
+    #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
+    mod nvapi_association {
+        use super::*;
+
+        #[test]
+        fn single_candidate_receives_the_reading() {
+            let updates = vec![("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0)];
+            let mapped = nvapi_telemetry_for(&updates, Some(71.0));
+            assert_eq!(mapped.unwrap()["luid-a"].temp_c, Some(71.0));
+        }
+
+        #[test]
+        fn multiple_candidates_receive_nothing_rather_than_a_guess() {
+            let updates = vec![
+                ("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0),
+                ("luid-b".to_string(), "GeForce RTX 4090".to_string(), 20.0),
+            ];
+            let mapped = nvapi_telemetry_for(&updates, Some(71.0));
+            assert!(mapped.unwrap().is_empty());
+        }
+
+        #[test]
+        fn non_nvidia_candidates_are_ignored() {
+            let updates = vec![("luid-a".to_string(), "Radeon RX 6700 XT".to_string(), 10.0)];
+            let mapped = nvapi_telemetry_for(&updates, Some(71.0));
+            assert!(mapped.unwrap().is_empty());
+        }
+
+        #[test]
+        fn failed_reading_yields_empty_map_not_none() {
+            let updates = vec![("luid-a".to_string(), "GeForce RTX 3060".to_string(), 10.0)];
+            assert!(nvapi_telemetry_for(&updates, None).unwrap().is_empty());
         }
     }
 

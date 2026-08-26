@@ -5,44 +5,9 @@
  * lane drives the packaged app and leaves unsupported steps registered (see
  * the register discipline in e2e/exploratory-register.md).
  */
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import type { Journey, SimContext } from '../types';
+import type { Journey } from '../types';
 import * as S from '../engine/steps';
-
-async function readSettingsShim(ctx: SimContext): Promise<Record<string, unknown>> {
-  const page = ctx.driver.page;
-  if (!page) return {};
-  // Read the per-run localStorage settings namespace synchronously.
-  return (await page.evaluate(
-    (runId) => {
-      try {
-        const raw = localStorage.getItem(`sysmon_sim_settings_${runId}`);
-        return raw ? JSON.parse(raw) : {};
-      } catch {
-        return {};
-      }
-    },
-    ctx.opts.runId
-  )) as Record<string, unknown>;
-}
-
-function readRealSettings(ctx: SimContext): Record<string, unknown> {
-  const d = ctx.driver as unknown as { appDataDir?: string | null };
-  const dir = d.appDataDir;
-  if (!dir) return {};
-  const p = join(dir, 'settings.json');
-  if (!existsSync(p)) return {};
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-async function persistedSettings(ctx: SimContext): Promise<Record<string, unknown>> {
-  return ctx.driver.kind === 'real' ? readRealSettings(ctx) : readSettingsShim(ctx);
-}
+import { freeRoam } from '../engine/freeroam';
 
 // ── 1. First-launch onboarding ────────────────────────────────────────────────
 
@@ -59,11 +24,17 @@ const firstLaunch: Journey = {
     ctx.assert('default-order-cpu-first', ids[0] === 'cpu', `first card should be cpu, got ${ids.join(',')}`);
     ctx.assert('default-memory-second', ids[1] === 'memory', `second card should be memory`);
     // The default order is persisted to the per-run settings store.
-    const persisted = await persistedSettings(ctx);
+    const persisted = await S.persistedSettings(ctx);
     ctx.assert('card-order-persisted', Array.isArray(persisted.cardOrder), 'cardOrder persisted');
     await new Promise((r) => setTimeout(r, 500));
     const again = await S.readCardIds(ctx);
     ctx.assert('order-stable', JSON.stringify(again) === JSON.stringify(ids), 'order stable across re-read');
+
+    // Free-roam epilogue: the persona spends a couple of self-directed ticks
+    // exercising its decision dice (wantsAction/wrongClick/inspectSettings).
+    // Runs AFTER every assertion above, so these deliberate mutations cannot
+    // invalidate the first-launch contract.
+    await freeRoam(ctx, { ticks: 2 });
   },
 };
 
@@ -99,8 +70,8 @@ const customizationRoundtrip: Journey = {
     await S.setWindow(ctx, 300);
     await S.setViewMode(ctx, 'tile');
 
-    // Wait for persistence to settle, then restart.
-    await new Promise((r) => setTimeout(r, 700));
+    // Wait for persistence to actually land (no fixed sleep), then restart.
+    await S.waitForPersistedSettings(ctx, (s) => s.windowSecs === 300 && s.viewMode === 'tile');
     await S.restartApp(ctx);
     await S.waitForState(ctx, 'live');
 
@@ -115,7 +86,7 @@ const customizationRoundtrip: Journey = {
     ctx.assert('restored-hidden', !restored.includes(toHide), `${toHide} still hidden after restart`);
 
     // Persistence layer check (real settings.json on the real driver).
-    const persisted = await persistedSettings(ctx);
+    const persisted = await S.persistedSettings(ctx);
     ctx.assert('persisted-window', persisted.windowSecs === 300, `windowSecs persisted as 300, got ${persisted.windowSecs}`);
     ctx.assert('persisted-view-mode', persisted.viewMode === 'tile', 'viewMode persisted as tile');
   },
@@ -150,32 +121,196 @@ const longWatchCadence: Journey = {
   },
 };
 
-// ── 4. Fault response (mock lane; scripted faults) ───────────────────────────
+// ── 4. Fault response: budget exhaustion + manual retry (mock lane) ──────────
 
 const faultResponse: Journey = {
-  id: 'fault-response',
-  title: 'Fault response: collector error + disk ghost/restore',
+  id: 'fault-retry-exhaustion',
+  title: 'Fault response: exhausted recovery budget, manual retry restores',
+  supportedDrivers: ['mock'],
+  personaIds: ['sentinel'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'exhaustion journey requires a page');
+      return;
+    }
+
+    const cpuValue = async () => {
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
+    };
+
+    // Probe: record every status/snapshot in order so the journey can prove
+    // healthy is never reported before replacement data actually flows.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __SIM__?: { backend: {
+          onCollectorStatus(cb: (s: { state: string }) => void): void;
+          onSnapshot(cb: () => void): void;
+        } };
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      const log: Array<{ kind: string; state?: string }> = [];
+      w.__recoveryProbe = log;
+      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
+      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
+    });
+
+    // Repeated failures exhaust the budget: interruption is reported
+    // immediately, then the persistent alert appears with the failure message
+    // and an accessible Retry control.
+    await S.injectFault(ctx, { kind: 'collector-crash-permanent', reason: 'repeated synthetic panics' });
+    await S.waitForState(ctx, 'collector-error-banner');
+    // Sample the held value only after the failed state is on screen: ticks
+    // may legitimately render during fault-injection latency.
+    const held = await cpuValue();
+    const bannerText = await page.locator('[data-testid="collector-error-banner"]').innerText();
+    ctx.assert('failure-message-visible', /recovery attempts/i.test(bannerText), `alert names the failure: ${bannerText.slice(0, 60)}`);
+    const retry = page.getByRole('button', { name: /retry metrics/i });
+    await retry.waitFor({ state: 'visible', timeout: 5_000 });
+    ctx.assert('retry-button-accessible', await retry.isEnabled(), 'Retry metrics button is present and enabled');
+
+    // Last-known values stay visible (no zeros) while failed.
+    const duringFailure = await cpuValue();
+    ctx.assert('values-retained-while-failed', held.length > 0 && held === duringFailure, `cpu value held (${held.slice(0, 40)})`);
+
+    // No automatic restart happens while failed.
+    await new Promise((r) => setTimeout(r, 1_500));
+    ctx.assert('no-auto-restart', (await page.locator('[data-testid="collector-error-banner"]').count()) === 1, 'failed state persists without automatic restart');
+
+    // Anchor: where the persistent failure was first reported in the probe.
+    const faultIdx = await page.evaluate(() => {
+      const w = window as unknown as { __recoveryProbe?: Array<{ kind: string; state?: string }> };
+      return (w.__recoveryProbe ?? []).findIndex((e) => e.kind === 'status' && e.state === 'failed');
+    });
+
+    // Manual retry: one click leaves Failed and live collection resumes.
+    await retry.click();
+    const cleared = await S.pollUntil(
+      async () => (await page.locator('[data-testid="collector-error-banner"]').count()) === 0,
+      (gone) => gone,
+      10_000
+    );
+    ctx.assert('retry-clears-failure', cleared, 'failure UI cleared after manual retry');
+    const resumed = await S.pollUntil(cpuValue, (v) => v !== held, 15_000);
+    ctx.assert('values-resume-after-retry', resumed !== held, `cpu value resumed (${resumed.slice(0, 40)})`);
+
+    // Lifecycle ordering proof: healthy may only be reported AFTER the
+    // replacement generation actually emitted data (timer-scheduled !=
+    // Healthy). The probe log must show starting → snapshot(s) → healthy.
+    const probe = await page.evaluate(() => {
+      const w = window as unknown as {
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      return w.__recoveryProbe ?? [];
+    });
+    const startingIdx = probe.findIndex((e) => e.kind === 'status' && e.state === 'starting');
+    const postRetryHealthy = probe.findIndex(
+      (e, i) => i > Math.max(faultIdx, startingIdx) && e.kind === 'status' && e.state === 'healthy'
+    );
+    const snapsBeforeHealthy = probe
+      .slice(Math.max(faultIdx, startingIdx), postRetryHealthy)
+      .filter((e) => e.kind === 'snapshot').length;
+    ctx.assert(
+      'healthy-only-after-replacement-data',
+      postRetryHealthy > 0 && snapsBeforeHealthy >= 1,
+      `healthy followed actual replacement emission (${snapsBeforeHealthy} snapshots before it)`
+    );
+  },
+};
+
+// ── 4b. Automatic recovery: interruption is transient, app stays usable ──────
+
+const collectorRecovery: Journey = {
+  id: 'collector-recovery',
+  title: 'Automatic recovery: interruption shows recovering UI, then clears itself',
   supportedDrivers: ['mock'],
   personaIds: ['sentinel', 'customizer'],
   async run(ctx) {
     await S.waitForState(ctx, 'live');
-    await ctx.dwell();
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'recovery journey requires a page');
+      return;
+    }
 
-    // 4a. Collector error → banner appears, never clears, values freeze.
-    await S.injectFault(ctx, { kind: 'collector-error', message: 'metrics collection stopped — restart the app' });
-    await S.waitForState(ctx, 'collector-error-banner');
-    const errText = await ctx.driver.page?.locator('[data-testid="collector-error-banner"]').innerText();
-    ctx.assert('banner-text', (errText ?? '').includes('restart the app'), 'banner text matches');
-    // Values freeze: cpu value stops changing after the error.
-    const val = async () => {
-      const page = ctx.driver.page;
-      if (!page) return '';
-      return (await page.locator('[data-testid="metric-card-cpu"]').innerText()).replace(/\s+/g, ' ');
+    const cpuValue = async () => {
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
     };
-    const v1 = await val();
-    await new Promise((r) => setTimeout(r, 1200));
-    const v2 = await val();
-    ctx.assert('values-frozen', v1 === v2, `cpu value held (${v1.slice(0, 40)})`);
+
+    // Probe: record every status/snapshot in order so the journey can prove
+    // the automatic recovery reports healthy only after real replacement data.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __SIM__?: { backend: {
+          onCollectorStatus(cb: (s: { state: string }) => void): void;
+          onSnapshot(cb: () => void): void;
+        } };
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      const log: Array<{ kind: string; state?: string }> = [];
+      w.__recoveryProbe = log;
+      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
+      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
+    });
+
+    // Session panic: emissions stop, recovering status drives the polite banner.
+    await S.injectFault(ctx, { kind: 'collector-crash', reason: 'journey synthetic panic', recoverAfterMs: 2_500 });
+    await S.waitForState(ctx, 'collector-recovering-banner');
+    // Sample the retained value only once recovery is visibly underway; ticks
+    // may legitimately render during fault-injection latency.
+    const beforeInterruption = await cpuValue();
+    await S.waitForState(ctx, 'collector-recovering-banner');
+    const recoveringText = await page.locator('[data-testid="collector-recovering-banner"]').innerText();
+    ctx.assert('recovering-message', /recovering/i.test(recoveringText), `transient announcement shown: ${recoveringText.slice(0, 50)}`);
+
+    // Dashboard keeps last-known values during recovery — no zeros, no blanks.
+    const duringRecovery = await cpuValue();
+    ctx.assert('last-known-retained', beforeInterruption.length > 0 && beforeInterruption === duringRecovery, `cpu value retained (${beforeInterruption.slice(0, 40)})`);
+    ctx.assert('cards-still-present', (await page.locator('[data-testid^="metric-card-"]').count()) >= 3, 'dashboard stays rendered during recovery');
+
+    // Automatic restoration: banner clears by itself; no restart, no user action.
+    const autoCleared = await S.pollUntil(
+      async () => (await page.locator('[data-testid="collector-recovering-banner"]').count()) === 0,
+      (gone) => gone,
+      12_000
+    );
+    ctx.assert('auto-clear-on-recovery', autoCleared, 'recovering banner cleared automatically after restoration');
+
+    // Live values resume moving after the gap.
+    const resumed = await S.pollUntil(cpuValue, (v) => v !== beforeInterruption, 15_000);
+    ctx.assert('values-resume-after-recovery', resumed !== beforeInterruption, `cpu value resumed (${resumed.slice(0, 40)})`);
+
+    // Lifecycle ordering proof (automatic path): healthy only AFTER the
+    // replacement generation's first snapshot — never merely because a timer
+    // was scheduled. The probe shows …recovering → starting → snapshot → healthy.
+    const probe = await page.evaluate(() => {
+      const w = window as unknown as {
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      return w.__recoveryProbe ?? [];
+    });
+    const recoveringIdx = probe.findIndex((e) => e.kind === 'status' && e.state === 'recovering');
+    const autoHealthyIdx = probe.findIndex(
+      (e, i) => i > recoveringIdx && e.kind === 'status' && e.state === 'healthy'
+    );
+    const snapsBeforeAutoHealthy = probe
+      .slice(recoveringIdx + 1, autoHealthyIdx)
+      .filter((e) => e.kind === 'snapshot').length;
+    ctx.assert(
+      'healthy-only-after-replacement-data',
+      recoveringIdx >= 0 && autoHealthyIdx > recoveringIdx && snapsBeforeAutoHealthy >= 1,
+      `automatic healthy followed ${snapsBeforeAutoHealthy} replacement snapshots`
+    );
+
+    // The app remains fully usable afterwards: a settings interaction lands and
+    // persists through the normal path.
+    await S.setWindow(ctx, 300);
+    await S.waitForPersistedSettings(ctx, (s) => s.windowSecs === 300);
+    const persisted = await S.persistedSettings(ctx);
+    ctx.assert('usable-after-recovery', persisted.windowSecs === 300, `post-recovery settings interaction persisted (windowSecs=${String(persisted.windowSecs)})`);
   },
 };
 
@@ -194,13 +329,20 @@ const diskGhostCycle: Journey = {
     const key = diskId.slice('disk_'.length);
 
     await S.injectFault(ctx, { kind: 'disk-remove', key });
-    await new Promise((r) => setTimeout(r, 7000));
-    const during = await S.readCardIds(ctx);
+    // Semantic wait: poll until the ghost TTL prunes the card (no fixed sleep).
+    const during = await S.pollUntil(
+      () => S.readCardIds(ctx),
+      (ids) => !ids.includes(diskId),
+      15_000
+    );
     ctx.assert('disk-hidden', !during.includes(diskId), `${diskId} pruned from view`);
 
     await S.injectFault(ctx, { kind: 'disk-add', key });
-    await new Promise((r) => setTimeout(r, 1500));
-    const restored = await S.readCardIds(ctx);
+    const restored = await S.pollUntil(
+      () => S.readCardIds(ctx),
+      (ids) => ids.includes(diskId),
+      8_000
+    );
     ctx.assert('disk-restored', restored.includes(diskId), `${diskId} restored`);
   },
 };
@@ -329,15 +471,127 @@ const degradedStartup: Journey = {
   },
 };
 
+// ── 6. PDH freeze hold + recovery (mock lane; scripted fault) ─────────────────
+
+const freezeRecovery: Journey = {
+  id: 'fault-freeze-recovery',
+  title: 'Fault response: values hold during a PDH freeze, then resume',
+  supportedDrivers: ['mock'],
+  personaIds: ['sentinel'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const val = async () => {
+      const page = ctx.driver.page;
+      if (!page) return '';
+      const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
+      // Only the metric value freezes — the card also renders a clock that
+      // keeps ticking through the hold, so compare the percentage alone.
+      return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
+    };
+
+    // 128 ticks ≈ 32 simulated seconds ≈ 4 wall seconds at the lane's 8×
+    // clock — comfortably longer than the sampling latency below.
+    await S.injectFault(ctx, { kind: 'freeze', ticks: 128 });
+    await new Promise((r) => setTimeout(r, 300)); // let a frozen emission render
+    const held = await val();
+    await new Promise((r) => setTimeout(r, 2_000)); // mid-freeze sample
+    const mid = await val();
+    ctx.assert(
+      'values-held-during-freeze',
+      held.length > 0 && held === mid,
+      `cpu value held during freeze (${held.slice(0, 40)})`
+    );
+
+    // Once the freeze budget is spent the pipeline must resume moving.
+    const resumed = await S.pollUntil(val, (v) => v !== held, 12_000);
+    ctx.assert('values-resume-after-freeze', resumed !== held, 'cpu value resumed after freeze');
+  },
+};
+
+// ── 7. Layout persistence: view modes + sidebar order across restart ──────────
+
+const layoutPersistence: Journey = {
+  id: 'layout-persistence',
+  title: 'View-mode switch mid-run survives a restart (DOM + persisted settings)',
+  supportedDrivers: ['mock'],
+  personaIds: ['customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'layout journey requires a page');
+      return;
+    }
+    const listDisplay = () =>
+      page
+        .locator('[data-testid="dashboard-card-list"]')
+        .evaluate((el) => getComputedStyle(el).display);
+    // List rows are fixed-height compact cards (height: 50); default/tile
+    // cards embed a 140px chart and are far taller.
+    const firstCardHeight = () =>
+      page
+        .locator('[data-testid^="metric-card-"]')
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().height);
+
+    // default → tile: the dashboard becomes a two-column grid.
+    await S.setViewMode(ctx, 'tile');
+    await S.pollUntil(listDisplay, (d) => d === 'grid', 5_000);
+    ctx.assert('tile-grid-applied', (await listDisplay()) === 'grid', 'tile view renders a grid');
+
+    // tile → list: cards collapse into fixed-height compact rows.
+    await S.setViewMode(ctx, 'list');
+    await S.pollUntil(firstCardHeight, (h) => h > 0 && h < 80, 5_000);
+    const listHeight = await firstCardHeight();
+    ctx.assert('list-compacts-cards', listHeight > 0 && listHeight < 80, `list card height ${listHeight}px`);
+
+    // Restart: layout comes back exactly as left. Sidebar reorder is NOT
+    // exercised here — the mock harness has no hardware profile, so sidebar
+    // cards never render (see e2e/exploratory-register.md).
+    await S.restartApp(ctx);
+    await S.waitForState(ctx, 'live', 30_000);
+    const restored = await S.persistedSettings(ctx);
+    ctx.assert(
+      'restored-view-mode',
+      restored.viewMode === 'list',
+      `viewMode restored as list, got ${String(restored.viewMode)}`
+    );
+    await S.pollUntil(firstCardHeight, (h) => h > 0 && h < 80, 5_000);
+    const restoredHeight = await firstCardHeight();
+    ctx.assert('restored-list-dom', restoredHeight > 0 && restoredHeight < 80, `restored card height ${restoredHeight}px`);
+  },
+};
+
+// ── 8. Persona free roam: decision dice drive self-directed ticks ─────────────
+
+const personaFreeRoam: Journey = {
+  id: 'persona-free-roam',
+  title: 'Free roam: persona decision dice (wantsAction/wrongClick/inspectSettings) over N ticks',
+  // Mock only: the pointer-drag reorder is tuned to the compressed mock clock;
+  // on the real lane that step self-skips, and the lane stays unregistered
+  // until driven once by hand (exploratory-register discipline).
+  supportedDrivers: ['mock'],
+  personaIds: ['glancer', 'customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    await S.waitForCards(ctx, 3);
+    await freeRoam(ctx, { ticks: 6 });
+  },
+};
+
 export const JOURNEYS: Journey[] = [
   firstLaunch,
   customizationRoundtrip,
   longWatchCadence,
   faultResponse,
+  collectorRecovery,
   diskGhostCycle,
   gpuHotplugGap,
   schemaMismatch,
   degradedStartup,
+  freezeRecovery,
+  layoutPersistence,
+  personaFreeRoam,
 ];
 
 export function getJourney(id: string): Journey {

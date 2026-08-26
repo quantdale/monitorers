@@ -1,0 +1,414 @@
+# Release qualification for sys-monitor-tauri.
+#
+# Builds the production MSI and NSIS installers once, then qualifies each
+# format on an independent clean Windows runner: silent install → locate the
+# installed executable via system registration (no hardcoded paths) → verify
+# installed product/version identity → launch and smoke-test the INSTALLED
+# binary through the packaged-app CDP driver → silent uninstall → assert clean
+# removal and no orphan processes.
+#
+# Policy: dispatch/tag-only. These jobs build two full release bundles and
+# exercise real system installation; they are deliberately NOT required PR
+# gates (see openspec/specs/ci-pipeline-efficiency-and-coverage/).
+#
+# Signing truthfulness: no code signing certificate exists for this project;
+# installers are unsigned and SmartScreen may warn on first run. The manifest
+# records this explicitly (scripts/installer-manifest.mjs).
+name: Release qualification
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-installers:
+    name: Build — MSI and NSIS installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      # v6.1.0 — 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sys-monitor-tauri/src-tauri/target
+          key: ${{ runner.os }}-release-${{ hashFiles('sys-monitor-tauri/src-tauri/Cargo.lock', 'sys-monitor-tauri/src-tauri/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Version consistency gate
+        run: npm run verify:version
+
+      - name: Build MSI and NSIS installers
+        run: npx tauri build
+
+      - name: Assert both installers exist and are non-empty
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Recurse -Filter *.msi src-tauri/target/release/bundle
+          $nsis = Get-ChildItem -Recurse -Filter *-setup.exe src-tauri/target/release/bundle
+          if (-not $msi) { throw "MSI installer was not produced" }
+          if (-not $nsis) { throw "NSIS installer was not produced" }
+          foreach ($f in @($msi) + @($nsis)) {
+            if ($f.Length -le 0) { throw "installer is empty: $($f.FullName)" }
+            Write-Host "artifact: $($f.Name) ($([math]::Round($f.Length/1MB,2)) MB)"
+          }
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Upload installers
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-installers
+          path: |
+            sys-monitor-tauri/src-tauri/target/release/bundle/msi/*.msi
+            sys-monitor-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  qualify-msi:
+    name: Qualify — MSI install/run/uninstall
+    needs: build-installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Download installers
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: windows-installers
+          # download-artifact resolves relative to the workspace root while job
+          # steps run inside sys-monitor-tauri/; land it inside the default cwd.
+          path: sys-monitor-tauri/installers
+
+      - name: Install silently and verify registration
+        id: install
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem -Recurse -Filter *.msi installers | Select-Object -First 1).FullName
+          if (-not $msi) { throw "downloaded MSI not found" }
+          Write-Host "installing $msi"
+          $p = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart","/l*v","$env:RUNNER_TEMP\msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec install failed with exit code $($p.ExitCode)" }
+
+          $expectedVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $key = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' |
+            Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'System Monitor' } |
+            Select-Object -First 1
+          if (-not $key) { throw "installed product not found in uninstall registry" }
+          $props = Get-ItemProperty $key.PSPath
+          Write-Host "registered: $($props.DisplayName) $($props.DisplayVersion) at $($props.InstallLocation)"
+          if ($props.DisplayVersion -ne $expectedVersion) {
+            throw "installed version $($props.DisplayVersion) != package version $expectedVersion"
+          }
+          # Locate the application binary structurally: the largest non-uninstaller
+          # executable under the registered install location. Verifying its file
+          # ProductVersion against the release version catches metadata drift at
+          # the actual installed artifact, not just registry text.
+          $dir = $props.InstallLocation
+          if (-not $dir -or -not (Test-Path $dir)) { throw "InstallLocation not usable: '$($props.InstallLocation)'" }
+          Get-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }
+          $appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -notmatch 'uninstall' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $appExe) { throw "installed executable missing under $dir" }
+          $exe = $appExe.FullName
+          $binaryVersion = $appExe.VersionInfo.ProductVersion
+          Write-Host "installed binary: $exe (ProductVersion $binaryVersion)"
+          if ($binaryVersion -notlike "*$expectedVersion*") {
+            throw "binary ProductVersion $binaryVersion != package version $expectedVersion"
+          }
+          "productCode=$($key.PSChildName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Smoke-test the installed executable (real IPC over CDP)
+        env:
+          SIM_APP_EXE: ${{ steps.install.outputs.exe }}
+        run: npm run verify:packaged
+
+      - name: Uninstall silently and assert clean removal
+        shell: pwsh
+        run: |
+          $code = "${{ steps.install.outputs.productCode }}"
+          $exe = "${{ steps.install.outputs.exe }}"
+          $p = Start-Process msiexec.exe -ArgumentList "/x",$code,"/qn","/norestart" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec uninstall failed with exit code $($p.ExitCode)" }
+          if (Test-Path $exe) { throw "installed executable still present after uninstall: $exe" }
+          $leftover = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' |
+            Where-Object { $_.PSChildName -eq $code }
+          if ($leftover) { throw "uninstall registry entry still present after uninstall" }
+          $orphan = Get-Process -Name 'sys-monitor-tauri' -ErrorAction SilentlyContinue
+          if ($orphan) { throw "orphaned application processes remain: $($orphan.Id -join ',')" }
+          Write-Host "MSI qualification: clean removal confirmed"
+
+      - name: Upload qualification diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: msi-qualification-logs
+          path: |
+            ${{ runner.temp }}/msi-install.log
+            sys-monitor-tauri/test-results/**
+          if-no-files-found: ignore
+
+  qualify-nsis:
+    name: Qualify — NSIS install/run/uninstall
+    needs: build-installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sys-monitor-tauri/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Download installers
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: windows-installers
+          # download-artifact resolves relative to the workspace root while job
+          # steps run inside sys-monitor-tauri/; land it inside the default cwd.
+          path: sys-monitor-tauri/installers
+
+      - name: Install silently and verify registration
+        id: install
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem -Recurse -Filter *-setup.exe installers | Select-Object -First 1).FullName
+          if (-not $setup) { throw "downloaded NSIS setup not found" }
+          Write-Host "installing $setup"
+          # NSIS silent install: /S. Default Tauri installMode is currentUser,
+          # so registration lives under HKCU.
+          $p = Start-Process $setup -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "NSIS install failed with exit code $($p.ExitCode)" }
+
+          $expectedVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $keys = @(
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+          )
+          $key = $keys | ForEach-Object {
+            Get-ChildItem $_ -ErrorAction SilentlyContinue |
+              Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName -eq 'System Monitor' } |
+              Select-Object -First 1
+          } | Select-Object -First 1
+          if (-not $key) { throw "installed product not found in uninstall registry" }
+          $props = Get-ItemProperty $key.PSPath
+          Write-Host "registered: $($props.DisplayName) $($props.DisplayVersion)"
+          # Dump every registered value: Tauri's NSIS key layout varies by
+          # installMode/version and this is the cheapest place to see it.
+          foreach ($p in $key.Property) { Write-Host "  registry: $p = $($props.$p)" }
+          if ($props.DisplayVersion -ne $expectedVersion) {
+            throw "installed version $($props.DisplayVersion) != package version $expectedVersion"
+          }
+          # Structural binary discovery: prefer InstallLocation, then the
+          # directory owning the registered uninstaller, then Tauri's per-user
+          # default (%LOCALAPPDATA%\<productName>).
+          $dir = $null
+          foreach ($candidate in @(
+            $props.InstallLocation,
+            ($(if ($props.UninstallString) { Split-Path ($props.UninstallString.Trim('"')) -Parent })),
+            ($(if ($props.QuietUninstallString) { Split-Path ($props.QuietUninstallString.Trim('"')) -Parent })),
+            (Join-Path $env:LOCALAPPDATA 'System Monitor')
+          )) {
+            if ($candidate -and (Test-Path $candidate)) { $dir = $candidate; break }
+          }
+          if (-not $dir) { throw "could not resolve install directory from registry" }
+          Write-Host "install dir: $dir"
+          Get-ChildItem -Path $dir | ForEach-Object { Write-Host "  installed: $($_.Name)" }
+          $appExe = Get-ChildItem -Path $dir -Recurse -Filter '*.exe' |
+            Where-Object { $_.Name -notmatch 'uninstall' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $appExe) { throw "installed executable missing under $dir" }
+          $exe = $appExe.FullName
+          $binaryVersion = $appExe.VersionInfo.ProductVersion
+          Write-Host "installed binary: $exe (ProductVersion $binaryVersion)"
+          if ($binaryVersion -notlike "*$expectedVersion*") {
+            throw "binary ProductVersion $binaryVersion != package version $expectedVersion"
+          }
+          "key=$($key.PSPath)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "uninstall=$($props.QuietUninstallString ?? $props.UninstallString)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Smoke-test the installed executable (real IPC over CDP)
+        env:
+          SIM_APP_EXE: ${{ steps.install.outputs.exe }}
+        run: npm run verify:packaged
+
+      - name: Uninstall silently and assert removal
+        env:
+          # Interpolating registry strings into the script body breaks parsing
+          # when the uninstall command contains embedded quotes (Tauri NSIS
+          # writes QuietUninstallString as a quoted path); env vars arrive
+          # verbatim and are parsed explicitly below.
+          SYSMON_UNINSTALL_CMD: ${{ steps.install.outputs.uninstall }}
+          SYSMON_INSTALLED_EXE: ${{ steps.install.outputs.exe }}
+          SYSMON_REGKEY: ${{ steps.install.outputs.key }}
+        shell: pwsh
+        run: |
+          $exe = $env:SYSMON_INSTALLED_EXE
+          $keyPath = $env:SYSMON_REGKEY
+          $raw = $env:SYSMON_UNINSTALL_CMD.Trim()
+          if ($raw.StartsWith('"')) {
+            $endIdx = $raw.IndexOf('"', 1)
+            if ($endIdx -lt 0) { throw "uninstall command not parseable: $raw" }
+            $uninstExe = $raw.Substring(1, $endIdx - 1)
+            $rest = $raw.Substring($endIdx + 1).Trim()
+          } else {
+            $parts = $raw.Split(' ', 2)
+            $uninstExe = $parts[0]
+            $rest = if ($parts.Length -gt 1) { $parts[1] } else { '' }
+          }
+          if (-not (Test-Path $uninstExe)) { throw "uninstaller not found: $uninstExe" }
+          if ($rest -notmatch '/S') { $rest = "$rest /S".Trim() }
+          Write-Host "uninstalling: \"$uninstExe\" $rest"
+          $p = Start-Process -FilePath $uninstExe -ArgumentList $rest -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Host "uninstaller exit code $($p.ExitCode); verifying state directly" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $exe) {
+            # NSIS removes its own directory last; a short retry absorbs the
+            # final delete while keeping the assertion strict.
+            $gone = $false
+            foreach ($i in 1..10) {
+              Start-Sleep -Seconds 2
+              if (-not (Test-Path $exe)) { $gone = $true; break }
+            }
+            if (-not $gone) { throw "installed executable still present after uninstall: $exe" }
+          }
+          if (Get-ItemProperty $keyPath -ErrorAction SilentlyContinue) {
+            throw "uninstall registry entry still present after uninstall"
+          }
+          $orphan = Get-Process -Name 'sys-monitor-tauri' -ErrorAction SilentlyContinue
+          if ($orphan) { throw "orphaned application processes remain: $($orphan.Id -join ',')" }
+          # Documented product behavior: NSIS uninstall retains user data
+          # (settings.json under %APPDATA%\com.quantdale.systemmonitor).
+          # Retention is asserted as retention, never as failure.
+          Write-Host "NSIS qualification: clean removal confirmed (user data intentionally retained)"
+
+      - name: Upload qualification diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nsis-qualification-logs
+          path: sys-monitor-tauri/test-results/**
+          if-no-files-found: ignore
+
+  release-manifest:
+    name: Release — artifact integrity manifest
+    needs: [build-installers, qualify-msi, qualify-nsis]
+    if: always()
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sys-monitor-tauri
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Download installers
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: windows-installers
+          path: sys-monitor-tauri/bundle-artifacts
+
+      - name: Generate signed-hash manifest
+        shell: pwsh
+        env:
+          MSI_RESULT: ${{ needs.qualify-msi.result }}
+          NSIS_RESULT: ${{ needs.qualify-nsis.result }}
+        run: |
+          $overall = if ($env:MSI_RESULT -eq 'success' -and $env:NSIS_RESULT -eq 'success') { 'passed' } else { 'failed' }
+          node scripts/installer-manifest.mjs `
+            --bundle bundle-artifacts `
+            --out release-manifest.json `
+            --qualification-result $overall `
+            --note "msi=$env:MSI_RESULT nsis=$env:NSIS_RESULT; unsigned builds (no certificate)"
+          Get-Content release-manifest.json
+
+      - name: Fail if qualification did not pass
+        shell: pwsh
+        run: |
+          $manifest = Get-Content release-manifest.json | ConvertFrom-Json
+          if ($manifest.qualification.result -ne 'passed') {
+            throw "release qualification did not pass: $($manifest.qualification | ConvertTo-Json -Compress)"
+          }
+
+      # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Upload release manifest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-manifest
+          path: sys-monitor-tauri/release-manifest.json
+          if-no-files-found: error

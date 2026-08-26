@@ -19,7 +19,11 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: 'line',
-  timeout: Number(process.env.SIM_TIMEOUT ?? 600_000),
+  // The whole journey×persona matrix runs as one spec; the budget must cover
+  // every selected run including the recovery journeys added by the
+  // production-runtime-recovery campaign (17 mock-lane runs at the default
+  // selection). Override with SIM_TIMEOUT when trimming the matrix.
+  timeout: Number(process.env.SIM_TIMEOUT ?? 900_000),
   use: {
     trace: 'off',
   },

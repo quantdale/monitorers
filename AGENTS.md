@@ -4,10 +4,10 @@ Windows-only real-time system monitor: Rust/Tauri v2 backend (Win32 PDH/WMI/NVML
 
 ## Instruction sources
 
-- `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both have drifted from source; where they disagree, trust the source. Verified stale claims:
-  - Schema version is **4**, not 2 or 3 (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
-  - The backend is no longer a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `src/bin/cadence_probe.rs`.
-  - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store` — the "no persistence by design" claim is stale.
+- `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both were re-reconciled against source on 2026-08-21; if they ever appear to disagree again, trust the source and fix the docs. Previously-stale claims, now corrected in all three files:
+  - Schema version is **4** (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
+  - The backend is not a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `examples/cadence_probe.rs`.
+  - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store`.
   - Cargo default features are `["nvapi", "nvml"]`.
 
 ## Commands (from `sys-monitor-tauri/`)
@@ -22,6 +22,7 @@ npm run e2e              # Playwright against the Vite mock harness (auto-starts
 npm run sim              # user-simulation mock lane (journeys × personas, engine + artifacts)
 npm run sim:real         # user-simulation packaged lane — drives the BUILT app via CDP (needs app built)
 npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.json)
+npm run verify:packaged  # packaged-app qualification: build exe, drive it via CDP (real IPC/settings/data), assert clean teardown
 ```
 
 Simulation run knobs (`SIM_LANE`, `SIM_JOURNEYS`, `SIM_PERSONAS`, `SIM_SEED`, `SIM_SPEED`,
@@ -37,17 +38,18 @@ reproducible from the run header
 cargo test                # test count is reported by Cargo; do not hard-code it in docs
 cargo test collector::disk   # one module
 cargo fmt -- --check      # CI-enforced; run `cargo fmt` first if it fails
-cargo clippy -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
+cargo clippy --all-targets --all-features -- -D warnings  # CI-enforced; fix warnings, don't #[allow] them
 cargo test --ignored cadence_real_hardware  # opt-in real-hardware cadence check (>=60s)
-cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
+cargo build --example cadence_probe               # probe lives as an example target (single-bin app crate)
+cargo run --example cadence_probe -- --secs 90    # headless probe for the above
 ```
 
 ## CI gate (never commit failing; CI runs the same checks)
 
-- Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo audit`
+- Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo audit`
 - Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
 - Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is a required PR/push gate in `.github/workflows/simulation.yml`
-- CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane on workflow_dispatch, shipped-config lint).
+- CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane + shipped-config fault-surface lint on dispatch); `.github/workflows/release-qualification.yml` (dispatch/tag only: MSI/NSIS install/run/uninstall qualification + hashed release manifest).
 
 ## Backend invariants (do not violate)
 
@@ -57,20 +59,23 @@ cargo run --bin cadence_probe -- --secs 90  # headless probe for the above
 - PDH handles are opened once in `CollectorState::new()` and never recreated (recreating resets rate-counter baselines — first reading is always 0%). One `PdhCollectQueryData` per tick.
 - `WMIConnection` is `!Send`: created on the background MTA thread (exponential backoff, base 1s, max 30s, 8 attempts), never leaves it.
 - Never push directly to a history `VecDeque` — always `push_history()` (`MAX_HISTORY = 3600`).
-- Every tick body runs in `catch_unwind`; on panic it emits `collector-error` and the thread stops permanently (no auto-restart).
+- Every tick body runs in `catch_unwind`; a caught panic ends the SESSION with `LoopOutcome::Panicked` and the supervisor (`collector/supervisor.rs`) replaces it: bounded automatic recovery (3 attempts/streak, staged backoff 500ms→8s, healthy ≥30s resets the streak), then persistent `failed` with manual retry via the `retry_collection` command. Shutdown wins from every state; at most one session ever emits.
+- Fresh sessions rebuild ALL OS-facing state (PDH/sysinfo/NVML/WMI bootstrap/registry) on their own thread and prime rate baselines, then WAIT for the initial tick deadline before the first poll/commit — post-recovery first commits are real ~250ms deltas, never fabricated 0% or downtime spikes. The loop waits at the TOP of each iteration; never move the wait back below the tick body.
+- Tauri managed state is keyed by Rust TYPE: two independent flags MUST be distinct newtypes (`StopFlag`, `RetryRequest` in `main.rs`, registered via `register_lifecycle_flags` which asserts each registration). Never register two values of the same raw type (`manage` silently refuses the duplicate and everything aliases the first value).
 - Nvidia code is feature-gated `#[cfg(feature = "nvml")]` (primary) / `#[cfg(feature = "nvapi")]` (fallback). Every `unsafe` block needs `// SAFETY:`.
 - IPC payload structs derive `Serialize` only — never `Deserialize`.
 
 ## IPC contract (Tauri v2) — easy to get wrong
 
 - Rust params are `snake_case` (`window_secs`); JS **must pass camelCase** (`{ windowSecs }`). Mismatch fails silently — history stays `null`, UI hangs on "Collecting metrics…".
-- `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-error` (string).
+- `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-status` (typed `CollectorStatus`), `collector-error` (legacy string, still fired per panic for diagnostics).
 - Detect Tauri v2 runtime with `window.__TAURI_INTERNALS__`, **not** `window.__TAURI__`.
-- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **4**. Bump both together when the payload shape changes.
+- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **5**. The lifecycle contract has its own version: `LIFECYCLE_SCHEMA_VERSION` (Rust `collector/supervisor.rs`) must equal `EXPECTED_LIFECYCLE_SCHEMA_VERSION` (TS) — currently **1**. Bump each pair together when its payload shape changes.
+- Commands: `get_history`, `get_hardware_profile`, `get_collector_status`, `retry_collection` (honored ONLY while `failed`: signals the retry flag and answers `Failed`; any other answered state means the click was coalesced — a `Failed` answer never means ignored), `sim_store_override` (simulation-only).
 
 ## Frontend conventions
 
-- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`); in the browser it serves the scriptable mock backend (`src/sim/mockBackend.ts` — default sine script identical to the old inline mock). `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (in browser mode, to the bridge's per-run localStorage shim when a sim run is active, no-op otherwise); `main.tsx` mounts a single `SettingsProvider` so every `useSettings()` consumer shares one store instance and one `save()` path (no lost updates between dashboard and sidebar).
+- `hooks/useMetrics.ts` is the single source of truth (invoke `get_history` + listen `metrics-update`; on mount/reload it ALSO bootstraps the current managed status via `get_collector_status` after the status listener attaches, fenced by an applied-status sequence so an older fetch response can never overwrite a newer observed event); in the browser it serves the scriptable mock backend (`src/sim/mockBackend.ts` — default sine script identical to the old inline mock; lifecycle parity: a generation reports `healthy` only after its FIRST successful snapshot, and `stop()` invalidates every staged crash/recovery timer via a run token so stale callbacks can never resurrect the singleton). `hooks/useSettings.ts` persists `cardOrder`/`hiddenCardIds`/`viewMode`/`windowSecs` to `settings.json` via plugin-store (in browser mode, to the bridge's per-run localStorage shim when a sim run is active, no-op otherwise); `main.tsx` mounts a single `SettingsProvider` so every `useSettings()` consumer shares one store instance and one `save()` path (no lost updates between dashboard and sidebar).
 - Named exports only (exception: `App.tsx` default export). Inline React styles only — no CSS modules/Tailwind (CSP needs `style-src 'unsafe-inline'`; no external network/fonts). Recharts `<Area isAnimationActive={false}>` always — live 1 Hz data can't animate.
 - `types/metrics.ts` **manually mirrors** the Rust serde structs — no codegen; keep in sync by hand.
 - Vite dev port **5180** is strict (`vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.quantdale.systemmonitor`; no env vars — all config is compile-time.

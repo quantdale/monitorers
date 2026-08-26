@@ -22,6 +22,24 @@ The simulation platform (`e2e/sim/`) revisits this register:
   only. Real PDH/WMI behavior is whatever the hardware does; CADENCE truth stays
   with `cadence_probe`.
 
+## Update — e2e/sim hardening (2026-08-21)
+
+- **Sidebar reorder is mock-undrivable** (discovered while fixing the dead
+  `[data-sb-id]` selectors in `engine/steps.ts`): the browser harness never
+  has a hardware profile — `useHardwareProfile` skips
+  `get_hardware_profile` when `isTauri()` is false — so sidebar cards and
+  their drag handles never render. Registered in the table below;
+  `dragSidebarCard` remains available to the real lane.
+- The PDH **freeze fault is now exercised** by the `fault-freeze-recovery`
+  journey (hold + resume), and view-mode persistence mid-run/restart by
+  `layout-persistence`.
+- **Free-roam pointer reorder is mock-lane-only by design**: the persona
+  free-roam step (`engine/freeroam.ts`) skips `reorderDashboard` on the real
+  lane — a CDP-driven pointer drag against the relaunched WebView2 window is
+  drivable in principle but unproven, so it logs a skip observation instead of
+  gambling the lane's stability. The step itself stays registered here until
+  driven once by hand on the real lane.
+
 ## Scenarios that stay exploratory
 
 | Scenario | Reason it stays exploratory |
@@ -34,6 +52,7 @@ The simulation platform (`e2e/sim/`) revisits this register:
 | Battery state change (laptop unplugged / plugged in) | Requires physical power source change; can be simulated at the OS level on some platforms but not deterministically from a webview harness |
 | Lid close/open (laptop sleep/wake) | Requires physical hardware action; cannot be triggered from a webview test |
 | Multi-process launch (run a second instance of the app) | The app has no single-instance guard; a second process would launch a second window. This is testable but was deemed low-value since the app doesn't enforce single-instance behavior |
+| Sidebar card reorder on the mock lane (dashboard reorder is drivable) | The browser harness has no hardware profile, so sidebar cards never render; sidebar reorder stays real-lane-only (see the 2026-08-21 update above) |
 
 ## Scenarios converted to driven E2E (see e2e/tests/)
 

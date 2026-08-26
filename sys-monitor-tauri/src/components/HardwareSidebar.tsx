@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -21,7 +21,6 @@ import {
   Monitor,
   Network,
 } from 'lucide-react';
-import type { SlicedHistory } from '../hooks/useMetrics';
 import type { HardwareProfile, HardwareProfileState } from '../hooks/useHardwareProfile';
 import { useSettings } from '../hooks/useSettings';
 import { SortableSidebarCard } from './SortableSidebarCard';
@@ -135,10 +134,16 @@ interface Props {
   profileState?: HardwareProfileState;
   /** Kept for focused component tests and embedders that already have a profile. */
   profile?: HardwareProfile | null;
-  metrics: SlicedHistory | null;
+  /** The single metrics-derived value this sidebar shows (memory card's total
+   *  RAM). Passing the scalar instead of the whole SlicedHistory keeps the
+   *  memoized sidebar from re-rendering on every metrics tick. */
+  memTotalGb?: number | null;
 }
 
-export function HardwareSidebar({ open, profileState, profile: suppliedProfile, metrics }: Props) {
+// Memoized: App re-renders every metrics tick, but every prop here is a
+// primitive or a stable object (profileState is useMemo'd in
+// useHardwareProfile), so the whole sidebar subtree skips those renders.
+export const HardwareSidebar = memo(function HardwareSidebar({ open, profileState, profile: suppliedProfile, memTotalGb }: Props) {
   const { settings, save } = useSettings();
   const profile = suppliedProfile !== undefined ? suppliedProfile : profileState?.profile ?? null;
   const loading = suppliedProfile === undefined ? profileState?.loading ?? false : profile === null;
@@ -243,8 +248,8 @@ export function HardwareSidebar({ open, profileState, profile: suppliedProfile, 
             <div style={rowStyle}>
               <span style={labelStyle}>Total RAM</span>
               <span style={valueStyle}>
-                {metrics != null && formatGigabytes(metrics.mem_total_gb) !== '—'
-                  ? `${formatGigabytes(metrics.mem_total_gb)} GB`
+                {memTotalGb != null && formatGigabytes(memTotalGb) !== '—'
+                  ? `${formatGigabytes(memTotalGb)} GB`
                   : '—'}
               </span>
             </div>
@@ -349,4 +354,4 @@ export function HardwareSidebar({ open, profileState, profile: suppliedProfile, 
       </div>
     </div>
   );
-}
+});

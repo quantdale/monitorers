@@ -5,6 +5,10 @@
 **Audit date:** 2026-07-25
 **Total findings:** 54 (0 Critical · 9 High · 26 Medium · 19 Low)
 
+> **Remediation status (2026-08-21):** This audit predates several remediation waves. All findings were addressed through OpenSpec changes archived under `openspec/changes/archive/` (notably `2026-08-03-*` and `2026-08-13-comprehensive-reliability-hardening`, which covered the large-initiative items COR-002/ARC-001 per-device GPU keying and ERR-002 crash diagnostics). A further hardening pass on 2026-08-21 fixed residual issues (nondeterministic disk ordering, duplicated NVAPI/vendor mapping, non-numeric WMI parse fallback, drag-reorder negative-index corruption, per-tick render churn) and added persistent collector-error logging. Treat findings below as historical record; verify against current source before acting on any individual item. Current verified gate status lives in `progress.md`.
+>
+> **Update (2026-08-25):** ARC-002 (fail-stop collector) is now resolved by the `production-runtime-recovery-and-release-qualification` change: supervised bounded recovery with manual retry replaced permanent thread death; see `src-tauri/src/collector/supervisor.rs`.
+
 > This document supersedes the condensed-table version — every finding below carries the full record (status, location, evidence, problem, severity reasoning, impact, likelihood, root cause, recommendation). A rendered version with severity chips and navigation also exists as a published artifact from this session; this file is the complete, git-trackable source of record.
 
 ---

@@ -42,8 +42,8 @@ pub struct RawPoll {
     /// gate ghost-pruning on this: an empty disk display order on a PDH-failed
     /// tick means "PDH unavailable", not "every disk vanished".
     pub pdh_ok: bool,
-    pub net_recv_kb_s: f64,
-    pub net_sent_kb_s: f64,
+    pub net_recv_kib_s: f64,
+    pub net_sent_kib_s: f64,
 }
 
 // ── CollectorState ───────────────────────────────────────────────────────────
@@ -150,7 +150,11 @@ impl CollectorState {
             #[cfg(feature = "nvml")]
             nvml,
             #[cfg(feature = "nvml")]
-            nvidia_last_enrichment: Instant::now() - std::time::Duration::from_secs(1),
+            // checked_sub: a host with <1s uptime cannot rewind Instant; due-now
+            // vs due-in-1s is immaterial, a panic at startup is not.
+            nvidia_last_enrichment: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
             #[cfg(feature = "nvml")]
             nvml_last_attempt: Instant::now(),
         }

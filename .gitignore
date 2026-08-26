@@ -17,6 +17,9 @@ sys-monitor-tauri/e2e/playwright-report/
 # Simulation platform (e2e/sim) artifacts
 sys-monitor-tauri/e2e-results/
 
+# Generated release evidence (CI uploads it; never source-controlled)
+sys-monitor-tauri/release-manifest.json
+
 # Debug artifacts
 debug-*.log
 

@@ -10,7 +10,6 @@ import {
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  arrayMove,
   verticalListSortingStrategy,
   rectSortingStrategy,
   sortableKeyboardCoordinates,
@@ -30,6 +29,7 @@ import {
   computeVisibleCardOrder,
   hasMetricsButNoVisibleCards,
   isCardPresent,
+  moveCardId,
   shouldShowLoadingState,
 } from './cardIdentity';
 import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
@@ -60,11 +60,38 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const hardwareProfileState = useHardwareProfile();
-  const { metrics, historyLoadError } = useMetrics(windowSecs);
+  const { metrics, historyLoadError, lifecycle, retryMetrics } = useMetrics(windowSecs);
+  const collectorState = lifecycle?.state ?? metrics?.collectorState ?? null;
+  const [retryPending, setRetryPending] = useState(false);
+
+  function handleRetryMetrics() {
+    if (retryPending) return;
+    setRetryPending(true);
+    void retryMetrics().finally(() => setRetryPending(false));
+  }
   useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const hasNvidiaData = computeHasNvidiaData(metrics);
+  // Memoized derived state: element identity changes only when metrics, view
+  // mode, or visibility change, so unrelated re-renders (drag start/end,
+  // sidebar toggle, selector open/close) reuse the exact card tree and React
+  // skips every SortableCard/Recharts subtree.
+  const visibleCardOrder = useMemo(
+    () => computeVisibleCardOrder(cardOrder, hiddenCardIds, metrics),
+    [cardOrder, hiddenCardIds, metrics],
+  );
+  const cards = useMemo(
+    () =>
+      visibleCardOrder.map((id) => (
+        <ErrorBoundary key={id + '_boundary'}>
+          {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}
+        </ErrorBoundary>
+      )),
+    [visibleCardOrder, metrics, viewMode, hasNvidiaData],
   );
 
   if (settingsError) {
@@ -127,16 +154,14 @@ export default function App() {
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = cardOrder.indexOf(active.id as string);
-      const newIndex = cardOrder.indexOf(over.id as string);
-      save({ cardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
-    }
+    if (!over || active.id === over.id) return;
+    // moveCardId returns null when either id is missing from cardOrder (e.g.
+    // the drop target's hardware vanished mid-drag): skip the write instead
+    // of letting arrayMove's negative-index wrap-around silently corrupt the
+    // persisted order.
+    const next = moveCardId(cardOrder, active.id as string, over.id as string);
+    if (next) save({ cardOrder: next });
   }
-
-  const hasNvidiaData = computeHasNvidiaData(metrics);
-
-  const visibleCardOrder = computeVisibleCardOrder(cardOrder, hiddenCardIds, metrics);
 
   const containerStyle =
     viewMode === 'tile'
@@ -147,7 +172,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} metrics={metrics} />
+      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} memTotalGb={metrics?.mem_total_gb ?? null} />
       <div
         style={{
           flex: 1,
@@ -165,7 +190,25 @@ export default function App() {
             color: '#fff',
           }}
         >
-      {metrics?.collectorError && (
+      {collectorState === 'recovering' && (
+        <div
+          data-testid="collector-recovering-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            background: 'rgba(243, 156, 18, 0.12)',
+            border: '1px solid rgba(243, 156, 18, 0.7)',
+            borderRadius: 4,
+            color: '#ffeaa7',
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 14,
+          }}
+        >
+          Metrics collection interrupted. Recovering…
+        </div>
+      )}
+      {(collectorState === 'failed' || metrics?.collectorError) && collectorState !== 'recovering' && (
         <div
           data-testid="collector-error-banner"
           role="alert"
@@ -179,9 +222,38 @@ export default function App() {
             marginBottom: 12,
             fontSize: 14,
             fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
           }}
         >
-          {metrics.collectorError}
+          <span>
+            {metrics?.collectorError ??
+              lifecycle?.reason ??
+              'Metrics collection failed.'}
+          </span>
+          {collectorState === 'failed' && (
+            <button
+              type="button"
+              data-testid="retry-metrics-button"
+              onClick={handleRetryMetrics}
+              disabled={retryPending}
+              aria-label={retryPending ? 'Retrying metrics collection' : 'Retry metrics collection'}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 4,
+                border: '1px solid rgba(231, 76, 60, 0.9)',
+                background: '#1e1e1e',
+                color: '#ffd6d3',
+                cursor: retryPending ? 'wait' : 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              Retry metrics
+            </button>
+          )}
         </div>
       )}
       {saveError && (
@@ -319,11 +391,7 @@ export default function App() {
               data-active-card-id={draggingCardId ?? ''}
               style={containerStyle}
             >
-              {visibleCardOrder.map(id => (
-                <ErrorBoundary key={id + '_boundary'}>
-                  {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}
-                </ErrorBoundary>
-              ))}
+              {cards}
             </div>
           </SortableContext>
         </DndContext>

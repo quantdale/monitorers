@@ -1,11 +1,11 @@
-// ── HEADLESS CADENCE PROBE ───────────────────────────────────────────────────
+// ── HEADLESS CADENCE PROBE (cargo example) ──────────────────────────────────
 // Runs the REAL collector tick loop for a bounded duration and streams one JSONL
 // record per emitted snapshot to stdout, so an AI agent or CI can verify the
 // 1Hz-history / 4Hz-liveness cadence against real hardware without a GUI.
 //
-//   cargo run --bin cadence_probe -- --secs 90 > cadence.jsonl   # probe only
-//   cargo run --bin cadence_probe -- --check cadence.jsonl       # check a file
-//   cargo run --bin cadence_probe -- --secs 90 --check -         # probe + self-check
+//   cargo run --example cadence_probe -- --secs 90 > cadence.jsonl   # probe only
+//   cargo run --example cadence_probe -- --check cadence.jsonl       # check a file
+//   cargo run --example cadence_probe -- --secs 90 --check -         # probe + self-check
 //
 // Built with default features (nvapi/nvml) so it exercises the same code path
 // as the shipped app. Run on a sensor-equipped Windows host.

@@ -1,17 +1,32 @@
+import { lazy, Suspense, useMemo } from 'react';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-} from 'recharts';
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
-import { computeChartPoints } from '../chartPoints';
+import { computeChartPoints, type ChartPoint } from '../chartPoints';
 import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
+
+// Recharts (with its d3 tree) is the heaviest dependency: load the chart
+// body off the critical path. Titles, values, badges and the data-chart-*
+// metadata attributes stay synchronous so tests and E2E never wait on this
+// chunk to assert card state.
+const MetricChart = lazy(() => import('./MetricChart').then((m) => ({ default: m.MetricChart })));
+
+/** Accessible placeholder while the chart chunk loads; reserves the exact
+ * chart box so nothing shifts when the real chart mounts. #888 on #1a1a1a
+ * keeps the status text above the WCAG AA 4.5:1 bar. */
+function ChartLoading({ height }: { height: number | '100%' }) {
+  return (
+    <div
+      role="status"
+      aria-label="Rendering chart"
+      style={{ width: '100%', height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <span style={{ color: '#888', fontSize: 11, fontFamily: 'monospace' }}>Rendering chart…</span>
+    </div>
+  );
+}
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -57,21 +72,49 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
-  const data = hasChart
-    ? computeChartPoints({
-        history: history!,
-        timestamps,
-        secondaryHistory: hasSecondary ? secondaryHistory : undefined,
-        maxPoints: MAX_CHART_POINTS,
-      })
-    : [];
-  const chartMetadata = {
-    'data-chart-point-count': data.length,
-    'data-chart-gap-count': data.filter((point) => point.v == null).length,
-    'data-chart-start-ts': data[0]?.t ?? '',
-    'data-chart-latest-ts': data[data.length - 1]?.t ?? '',
-    'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
-  };
+
+  // Resampling a full ring (up to MAX_HISTORY=3600 samples) down to chart
+  // points runs per card on every render. The channel arrays keep stable
+  // identities across scalar-only live ticks (see useMetrics' windowed
+  // memo), so keying this memo on them skips the extrema resample for the
+  // three non-full ticks between history commits and after unrelated
+  // re-renders (drag, sidebar toggles) — it only recomputes when that
+  // series' data or alignment actually changed.
+  const chart = useMemo(() => {
+    if (!hasChart) {
+      return {
+        data: [] as ChartPoint[],
+        metadata: {
+          'data-chart-point-count': 0,
+          'data-chart-gap-count': 0,
+          'data-chart-start-ts': '' as string | number,
+          'data-chart-latest-ts': '' as string | number,
+          'data-chart-span-ms': 0,
+        },
+      };
+    }
+    const data = computeChartPoints({
+      history: history!,
+      timestamps,
+      secondaryHistory: hasSecondary ? secondaryHistory : undefined,
+      maxPoints: MAX_CHART_POINTS,
+    });
+    return {
+      data,
+      metadata: {
+        'data-chart-point-count': data.length,
+        'data-chart-gap-count': data.filter((point) => point.v == null).length,
+        'data-chart-start-ts': data[0]?.t ?? '',
+        'data-chart-latest-ts': data[data.length - 1]?.t ?? '',
+        'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- secondaryHistory only participates when hasSecondary is true
+  }, [history, hasSecondary ? secondaryHistory : undefined, timestamps]);
+  const { data, metadata: chartMetadata } = chart;
+
+  // List-view min/max scans the whole window per render; same identity-based skip.
+  const listMinMax = useMemo(() => historyMinMax(history ?? []), [history]);
 
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
@@ -91,13 +134,14 @@ export function MetricCard({
   );
 
   if (viewMode === 'list') {
-    const { min, max } = historyMinMax(history ?? []);
+    const { min, max } = listMinMax;
     const displayValue = listViewValue ?? value;
     const displayMinMax = listViewMinMax ?? `Min: ${min.toFixed(1)}%  Max: ${max.toFixed(1)}%`;
 
     return (
       <div
         className="metric-card"
+        data-testid={`metric-card-${id}`}
         style={{
           background: '#1e1e1e',
           borderRadius: 8,
@@ -153,36 +197,16 @@ export function MetricCard({
         >
           {hasChart && (
             <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: '100%' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 2, left: 0 }}>
-                <YAxis domain={yDomain} hide />
-                <XAxis dataKey="t" hide />
-                <Area
-                  type="monotone"
-                  dataKey="v"
-                  stroke={color}
-                  fill={color}
-                  fillOpacity={hasSecondary ? 0 : 0.2}
-                  strokeWidth={1.5}
-                  isAnimationActive={false}
-                  dot={false}
-                  connectNulls={false}
-                />
-                {hasSecondary && (
-                  <Area
-                    type="monotone"
-                    dataKey="v2"
-                    stroke={secondaryColor!}
-                    fill={secondaryColor!}
-                    fillOpacity={0}
-                    strokeWidth={1.5}
-                    isAnimationActive={false}
-                    dot={false}
-                    connectNulls={false}
-                  />
-                )}
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<ChartLoading height="100%" />}>
+              <MetricChart
+                data={data}
+                yDomain={yDomain}
+                color={color}
+                secondaryColor={secondaryColor}
+                hasSecondary={hasSecondary}
+                showTimeAxis={false}
+              />
+            </Suspense>
             </div>
           )}
         </div>
@@ -260,49 +284,16 @@ export function MetricCard({
       </div>
       {hasChart && (
         <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: 140 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-            <YAxis domain={yDomain} hide />
-            <XAxis
-              dataKey="t"
-              type="number"
-              domain={['dataMin', 'dataMax']}
-              tickFormatter={(ms: number) =>
-                new Date(ms).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
-              }
-              tick={{ fontSize: 10 }}
-              interval="preserveStartEnd"
-            />
-            <Area
-              type="monotone"
-              dataKey="v"
-              stroke={color}
-              fill={color}
-              fillOpacity={hasSecondary ? 0 : 0.15}
-              strokeWidth={1.5}
-              isAnimationActive={false}
-              dot={false}
-              connectNulls={false}
-            />
-            {hasSecondary && (
-              <Area
-                type="monotone"
-                dataKey="v2"
-                stroke={secondaryColor!}
-                fill={secondaryColor!}
-                fillOpacity={0}
-                strokeWidth={1.5}
-                isAnimationActive={false}
-                dot={false}
-                connectNulls={false}
-              />
-            )}
-          </AreaChart>
-        </ResponsiveContainer>
+        <Suspense fallback={<ChartLoading height={140} />}>
+          <MetricChart
+            data={data}
+            yDomain={yDomain}
+            color={color}
+            secondaryColor={secondaryColor}
+            hasSecondary={hasSecondary}
+            showTimeAxis
+          />
+        </Suspense>
         </div>
       )}
     </div>

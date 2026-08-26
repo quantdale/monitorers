@@ -54,6 +54,7 @@ function emit(eventName: string, payload: unknown) {
 interface RenderResult {
   result: () => ReturnType<typeof useHardwareProfile>;
   unmount: () => void;
+  rerender: () => void;
 }
 
 function renderUseHardwareProfile(): RenderResult {
@@ -77,6 +78,7 @@ function renderUseHardwareProfile(): RenderResult {
       return hookValue;
     },
     unmount: () => act(() => root.unmount()),
+    rerender: () => act(() => root.render(React.createElement(TestComponent))),
   };
 }
 
@@ -164,6 +166,27 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     await flush();
 
     expect(result().profile).toEqual(expect.objectContaining({ cpu_name: 'Ryzen 9' }));
+
+    unmount();
+  });
+
+  it('keeps the state object referentially stable across re-renders without profile changes', async () => {
+    profileResult = fullProfile();
+    const { result, rerender, unmount } = renderUseHardwareProfile();
+    await flush();
+    const first = result();
+
+    // A parent re-render (e.g. a metrics tick) must not rebuild the state
+    // object — App hands it straight to the memoized HardwareSidebar.
+    rerender();
+    expect(result()).toBe(first);
+
+    // A real profile change must produce a fresh object.
+    profileResult = { cpu_vendor: 'amd', cpu_name: 'Ryzen 9', gpus: [], disks: [] };
+    act(() => emit('hardware-profile-ready', {}));
+    await flush();
+    expect(result()).not.toBe(first);
+    expect(result().profile?.cpu_name).toBe('Ryzen 9');
 
     unmount();
   });

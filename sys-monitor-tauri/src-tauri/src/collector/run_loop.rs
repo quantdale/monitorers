@@ -19,6 +19,37 @@ use crate::state::{CollectorState, SafeHistoryStore};
 /// fourth emitted tick, so this is a 4 Hz live / 1 Hz history schedule.
 pub const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Why a completed collector-loop invocation ended. Production supervision
+/// treats `Panicked` as "replace the session"; `Stopped`/`Completed` end
+/// supervision without a replacement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LoopOutcome {
+    /// The loop exhausted an explicit `LoopLimit` (probes/tests only).
+    Completed,
+    /// The cooperative stop flag ended the loop (application shutdown).
+    Stopped,
+    /// An unexpected panic escaped inside the loop; the payload is the best
+    /// human-readable panic description available.
+    Panicked(String),
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Public form of [`panic_message`] for callers that catch panics outside this
+/// module (e.g. the supervised session body wrapper) and need the same
+/// best-effort human-readable description for lifecycle reporting.
+pub fn panic_message_of(payload: &Box<dyn std::any::Any + Send>) -> String {
+    panic_message(payload)
+}
+
 /// A bounded run can be limited by ticks for deterministic unit tests or by
 /// monotonic wall time for the real-hardware probe. Duration runs begin at the
 /// first emitted snapshot so bootstrap/work time cannot shorten the measured
@@ -76,15 +107,12 @@ impl WmiBootstrap {
                     let exponent = self.attempts.saturating_sub(1).min(5);
                     let backoff = (Self::BASE_BACKOFF * 2u32.pow(exponent)).min(Self::MAX_BACKOFF);
                     self.next_attempt = Instant::now() + backoff;
-                    if self.attempts == 1 || self.attempts == Self::MAX_ATTEMPTS {
-                        eprintln!(
-                            "[WMI] attempt {}/{} failed: {:?}; next retry in {:?}",
-                            self.attempts,
-                            Self::MAX_ATTEMPTS,
-                            error,
-                            backoff
-                        );
-                    }
+                    // Every failed attempt logs exactly one line (at most
+                    // MAX_ATTEMPTS total): fully silent middle attempts made
+                    // transient WMI outages undiagnosable from stderr alone.
+                    let attempt = self.attempts;
+                    let max_attempts = Self::MAX_ATTEMPTS;
+                    eprintln!("[WMI] attempt {attempt}/{max_attempts} failed: {error:?}; next retry in {backoff:?}");
                 }
             }
         }
@@ -142,7 +170,8 @@ pub fn monotonic_timestamp_ms(wall_origin_ms: u64, epoch: Instant, now: Instant)
 /// where every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O and a
 /// history commit) and the other 3 are registry-only (CPU + GPU scalar refresh,
 /// no history write). A caught panic delivers exactly one message to `on_error`
-/// and stops the loop (no auto-restart, by design).
+/// and ends the loop with `LoopOutcome::Panicked`, which the supervisor uses to
+/// replace the session.
 ///
 /// `limit: Some(LoopLimit::Ticks(n))` returns after `n` iterations;
 /// `Some(LoopLimit::Duration(d))` uses monotonic elapsed time; `None` loops
@@ -160,27 +189,36 @@ pub fn run_collector_loop(
     mut on_wmi_ready: impl FnMut(&mut CollectorState, &wmi::WMIConnection),
     mut emit: impl FnMut(&MetricsSnapshot),
     mut on_error: impl FnMut(&str),
-) {
-    // Re-baseline the sysinfo network counters before the first tick: the last
-    // refresh happened in CollectorState::new(), and the startup gap (WMI retry,
-    // profile detect) can be seconds long. Without this, the first poll() would
-    // aggregate that whole gap into a single network delta — a large spike in
-    // the first chart point. This refresh is a no-op for metrics but resets the
-    // delta baseline so the first real reading is ~250ms worth.
-    state.sysinfo_networks.refresh(false);
+) -> LoopOutcome {
+    // Re-baseline the fresh session's rate counters before the first tick: a
+    // recovered session constructs brand-new PDH handles whose rate counters
+    // have no baseline (first reading would be a fabricated 0%), and the
+    // sysinfo network counters need their delta window reset so the startup or
+    // recovery gap cannot aggregate into a single network spike. The first
+    // tick's deadline is then offset one full period so every committed value —
+    // including the very first — is a genuine ~250ms delta.
+    let _ = crate::collector::prime_rate_baselines(state);
     state.network_last_refresh = Instant::now();
 
     let loop_epoch = Instant::now();
     let wall_origin_ms = Utc::now().timestamp_millis().max(0) as u64;
-    let mut next_deadline = loop_epoch;
+    let mut next_deadline = loop_epoch + TICK_INTERVAL;
     let mut tick: u32 = 0;
     let mut wmi_ready = false;
     let mut first_emit_epoch: Option<Instant> = None;
     loop {
-        if matches!(limit, Some(LoopLimit::Ticks(0)))
-            || stop.is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            break;
+        if matches!(limit, Some(LoopLimit::Ticks(0))) {
+            return LoopOutcome::Completed;
+        }
+        if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return LoopOutcome::Stopped;
+        }
+        // Wait until THIS tick's deadline before polling. The rate baselines
+        // were primed moments ago; sampling immediately would fabricate a
+        // near-zero-delta first reading. Shutdown stays responsive inside
+        // wait_until_deadline.
+        if !wait_until_deadline(next_deadline, stop) {
+            return LoopOutcome::Stopped;
         }
         let tick_started = Instant::now();
         let deadline_overrun = tick_started.saturating_duration_since(next_deadline);
@@ -265,27 +303,28 @@ pub fn run_collector_loop(
                     if wmi_result.is_err() {
                         eprintln!("[Collector] WMI bootstrap panicked");
                         on_error("metrics collection stopped — restart the app");
-                        break;
+                        return LoopOutcome::Panicked("WMI bootstrap panicked".to_string());
                     }
                 }
                 on_timing(timing);
             }
-            Err(_) => {
-                eprintln!("[Collector] background thread panicked");
+            Err(payload) => {
+                let message = panic_message(&payload);
+                eprintln!("[Collector] background thread panicked: {message}");
                 on_error("metrics collection stopped — restart the app");
-                break;
+                return LoopOutcome::Panicked(message);
             }
         }
 
         tick = tick.wrapping_add(1);
         if let Some(LoopLimit::Ticks(max)) = limit {
             if tick >= max {
-                break;
+                return LoopOutcome::Completed;
             }
         }
         if let Some(LoopLimit::Duration(duration)) = limit {
             if first_emit_epoch.is_some_and(|epoch| epoch.elapsed() >= duration) {
-                break;
+                return LoopOutcome::Completed;
             }
         }
 
@@ -294,9 +333,6 @@ pub fn run_collector_loop(
         let previous_deadline = next_deadline.saturating_duration_since(loop_epoch);
         next_deadline =
             loop_epoch + rebase_deadline(previous_deadline, elapsed_since_epoch, TICK_INTERVAL);
-        if !wait_until_deadline(next_deadline, stop) {
-            break;
-        }
     }
 }
 
@@ -324,7 +360,7 @@ mod tests {
         let mut on_tick_count = 0u32;
         let mut error_count = 0u32;
 
-        run_collector_loop(
+        let outcome = run_collector_loop(
             &mut state,
             &mut wmi_bootstrap,
             &mut registry,
@@ -344,6 +380,11 @@ mod tests {
             },
         );
 
+        assert_eq!(
+            outcome,
+            LoopOutcome::Completed,
+            "a bounded clean run completes"
+        );
         assert_eq!(emit_count, 8, "exactly 8 ticks must emit");
         assert_eq!(error_count, 0, "a bounded clean run must not error");
         assert_eq!(
@@ -353,8 +394,9 @@ mod tests {
     }
 
     // Drives the REAL run_collector_loop with a provider that panics on its 2nd
-    // poll. Assertions: exactly one on_error delivery, and no further emits
-    // after the panicking tick — the loop stops permanently (no auto-restart).
+    // poll. Assertions: exactly one on_error delivery, no further emits after
+    // the panicking tick, and the outcome surfaces as LoopOutcome::Panicked for
+    // supervision.
     #[test]
     fn test_run_collector_loop_panicking_provider_emits_one_error_and_stops() {
         use crate::sensor::SensorProvider;
@@ -397,7 +439,7 @@ mod tests {
         let mut emit_count = 0u32;
         let mut error_count = 0u32;
 
-        run_collector_loop(
+        let outcome = run_collector_loop(
             &mut state,
             &mut wmi_bootstrap,
             &mut registry,
@@ -419,6 +461,13 @@ mod tests {
         assert_eq!(
             error_count, 1,
             "exactly one on_error and the loop must stop"
+        );
+        // The panic must be surfaced to supervision with a descriptive payload
+        // so the supervisor can replace the session instead of failing silently.
+        assert_eq!(
+            outcome,
+            LoopOutcome::Panicked("synthetic provider panic".to_string()),
+            "the synthetic panic payload must reach the caller"
         );
     }
 
@@ -453,6 +502,54 @@ mod tests {
         assert!(later >= earlier);
     }
 
+    // REGRESSION (first-poll timing): a fresh/recovered session primes its
+    // rate baselines, then MUST wait out the full initial tick deadline before
+    // the first poll/commit. The pre-fix loop entered the poll body before any
+    // wait, producing a near-zero-delta first reading microseconds after
+    // priming. The threshold is 3/4 of TICK_INTERVAL: the fixed loop lands at
+    // ~250ms (+ poll work), the buggy one at single-digit milliseconds — no
+    // realistic scheduling jitter bridges that gap.
+    #[test]
+    fn test_first_poll_waits_for_initial_deadline_after_rate_priming() {
+        let mut state = CollectorState::new();
+        let mut registry = SensorRegistry::new();
+        registry.register(CpuSensorProvider);
+        let store = SafeHistoryStore::new(HistoryStore::new("test"));
+        let mut wmi_bootstrap = WmiBootstrap::new();
+
+        let started = Instant::now();
+        let mut emit_times: Vec<Duration> = Vec::new();
+
+        let outcome = run_collector_loop(
+            &mut state,
+            &mut wmi_bootstrap,
+            &mut registry,
+            &store,
+            Some(LoopLimit::Ticks(2)),
+            None,
+            |_timing| {},
+            |_state, _wmi| {},
+            |_snap| {
+                emit_times.push(started.elapsed());
+            },
+            |_msg| {},
+        );
+
+        assert_eq!(outcome, LoopOutcome::Completed);
+        assert_eq!(emit_times.len(), 2);
+        let first = emit_times[0];
+        let floor = TICK_INTERVAL - TICK_INTERVAL / 4;
+        assert!(
+            first >= floor,
+            "first poll fired {first:?} after baseline priming — a fresh session must wait for its initial {TICK_INTERVAL:?} deadline before polling"
+        );
+        let second = emit_times[1];
+        assert!(
+            second >= first + floor,
+            "second poll fired {second:?} after priming — cadence collapsed"
+        );
+    }
+
     #[test]
     fn test_run_collector_loop_honors_stop_before_startup_work() {
         let mut state = CollectorState::new();
@@ -463,7 +560,7 @@ mod tests {
         let stop = AtomicBool::new(true);
         let mut emits = 0_u32;
 
-        run_collector_loop(
+        let outcome = run_collector_loop(
             &mut state,
             &mut wmi_bootstrap,
             &mut registry,
@@ -479,6 +576,11 @@ mod tests {
         assert_eq!(
             emits, 0,
             "a stop requested during app shutdown must prevent a new tick"
+        );
+        assert_eq!(
+            outcome,
+            LoopOutcome::Stopped,
+            "shutdown reports a cooperative stop"
         );
     }
 }

@@ -15,6 +15,7 @@
     "e2e:ui": "playwright test --config e2e/playwright.config.ts --ui",
     "sim": "playwright test --config e2e/sim/playwright.config.ts",
     "sim:real": "cross-env SIM_LANE=real playwright test --config e2e/sim/playwright.config.ts",
+    "verify:packaged": "playwright test --config e2e/qualify.playwright.config.ts",
     "sim:typecheck": "tsc -p e2e/tsconfig.sim.json --noEmit",
     "verify:frontend": "node scripts/verify.mjs frontend",
     "verify:rust": "node scripts/verify.mjs rust",

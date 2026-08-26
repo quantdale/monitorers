@@ -10,7 +10,7 @@ use crate::state::HistoryStore;
 
 /// Bump in lockstep with `EXPECTED_SCHEMA_VERSION` in the frontend
 /// (`src/hooks/useMetrics.ts`) when `MetricsSnapshot`'s shape changes.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O, history committed).
 /// The other 3 ticks are registry-only (CPU + GPU scalar refresh, no history write).
@@ -34,8 +34,8 @@ pub struct MetricsSnapshot {
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
     pub disks: Vec<DiskSnapshot>,
-    pub net_recv_kb: f64,
-    pub net_sent_kb: f64,
+    pub net_recv_kib_s: f64,
+    pub net_sent_kib_s: f64,
     pub gpus: Vec<GpuSnapshot>,
 }
 
@@ -66,7 +66,6 @@ pub struct DiskSnapshot {
     pub read_mb_s: f64,
     pub write_mb_s: f64,
     pub avg_response_ms: f64,
-    pub temp_c: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -104,7 +103,6 @@ pub struct DiskHistory {
     pub read_mb_s: f64,
     pub write_mb_s: f64,
     pub avg_response_ms: f64,
-    pub temp_c: Option<f64>,
 }
 
 /// Returns the index range whose recorded timestamps fall within the real
@@ -191,6 +189,33 @@ pub fn clamp_window_secs(window_secs: u64) -> u64 {
     window_secs.clamp(1, crate::state::HISTORY_CAPACITY as u64)
 }
 
+// ── SHARED PAYLOAD PROJECTION HELPERS ────────────────────────────────────────
+
+/// Map a GPU display name to the lowercase vendor tag carried in IPC payloads.
+/// Single source shared by the snapshot and history builders so the two
+/// payloads can never disagree about a card's vendor.
+fn vendor_tag(name: &str) -> &'static str {
+    match classify_gpu(name).0 {
+        GpuVendor::Nvidia => "nvidia",
+        GpuVendor::Intel => "intel",
+        GpuVendor::Amd => "amd",
+        GpuVendor::Unknown => "unknown",
+    }
+}
+
+/// Project stored Nvidia enrichment into its IPC shape. Shared by the snapshot
+/// and history builders so neither can drift from the payload contract.
+fn telemetry_snapshot(telemetry: &crate::state::NvidiaTelemetry) -> NvidiaTelemetrySnapshot {
+    NvidiaTelemetrySnapshot {
+        temp_c: telemetry.temp_c,
+        power_w: telemetry.power_w,
+        mem_used_mb: telemetry.mem_used_mb,
+        mem_total_mb: telemetry.mem_total_mb,
+        fan_speed_pct: telemetry.fan_speed_pct,
+        clock_mhz: telemetry.clock_mhz,
+    }
+}
+
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
 pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
@@ -212,7 +237,6 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
             read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
             write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
             avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
-            temp_c: None,
         })
         .collect();
 
@@ -220,16 +244,9 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
     // once per snapshot instead of re-running classify_gpu for every entry.
     let mut vendor_cache: HashMap<String, String> = HashMap::new();
     for (_, name, _) in &s.gpu_entries {
-        vendor_cache.entry(name.clone()).or_insert_with(|| {
-            let (vendor_enum, _kind) = classify_gpu(name);
-            match vendor_enum {
-                GpuVendor::Nvidia => "nvidia",
-                GpuVendor::Intel => "intel",
-                GpuVendor::Amd => "amd",
-                GpuVendor::Unknown => "unknown",
-            }
-            .to_string()
-        });
+        vendor_cache
+            .entry(name.clone())
+            .or_insert_with(|| vendor_tag(name).to_string());
     }
     let gpus = s
         .gpu_entries
@@ -239,17 +256,7 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
                 .get(name)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            let nvidia = s
-                .nvidia_telemetry
-                .get(key)
-                .map(|telemetry| NvidiaTelemetrySnapshot {
-                    temp_c: telemetry.temp_c,
-                    power_w: telemetry.power_w,
-                    mem_used_mb: telemetry.mem_used_mb,
-                    mem_total_mb: telemetry.mem_total_mb,
-                    fan_speed_pct: telemetry.fan_speed_pct,
-                    clock_mhz: telemetry.clock_mhz,
-                });
+            let nvidia = s.nvidia_telemetry.get(key).map(telemetry_snapshot);
             let temp_c = nvidia.as_ref().and_then(|telemetry| telemetry.temp_c);
             GpuSnapshot {
                 key: key.clone(),
@@ -276,8 +283,8 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
         mem_used_gb: s.mem_used_gb,
         mem_total_gb: s.mem_total_gb,
         disks,
-        net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
-        net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
+        net_recv_kib_s: s.net_recv_history.back().copied().unwrap_or(0.0),
+        net_sent_kib_s: s.net_sent_history.back().copied().unwrap_or(0.0),
         gpus,
     }
 }
@@ -285,9 +292,12 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
 // ── HISTORY PAYLOAD BUILDER (SLICED) ─────────────────────────────────────────
 
 pub fn build_history_payload(s: &HistoryStore, window_secs: u64) -> HistoryPayload {
+    // Sliced once and reused for the timestamps channel and for padding disks
+    // that have no history yet (both must align to the same sample count).
+    let sliced_timestamps = slice_timestamps(&s.timestamps, window_secs);
     HistoryPayload {
         schema_version: SCHEMA_VERSION,
-        timestamps: slice_timestamps(&s.timestamps, window_secs),
+        timestamps: sliced_timestamps.clone(),
         cpu: slice_history(&s.cpu_history, &s.timestamps, window_secs),
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
@@ -301,13 +311,10 @@ pub fn build_history_payload(s: &HistoryStore, window_secs: u64) -> HistoryPaylo
                     .disk_active_histories
                     .get(k)
                     .map(|h| slice_aligned_history(h, &s.timestamps, window_secs))
-                    .unwrap_or_else(|| {
-                        vec![None; slice_timestamps(&s.timestamps, window_secs).len()]
-                    }),
+                    .unwrap_or_else(|| vec![None; sliced_timestamps.len()]),
                 read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
                 write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
                 avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
-                temp_c: None,
             })
             .collect(),
         net_recv: slice_history(&s.net_recv_history, &s.timestamps, window_secs),
@@ -316,27 +323,11 @@ pub fn build_history_payload(s: &HistoryStore, window_secs: u64) -> HistoryPaylo
             .gpu_entries
             .iter()
             .map(|(key, name, hist)| {
-                let nvidia = s
-                    .nvidia_telemetry
-                    .get(key)
-                    .map(|telemetry| NvidiaTelemetrySnapshot {
-                        temp_c: telemetry.temp_c,
-                        power_w: telemetry.power_w,
-                        mem_used_mb: telemetry.mem_used_mb,
-                        mem_total_mb: telemetry.mem_total_mb,
-                        fan_speed_pct: telemetry.fan_speed_pct,
-                        clock_mhz: telemetry.clock_mhz,
-                    });
+                let nvidia = s.nvidia_telemetry.get(key).map(telemetry_snapshot);
                 GpuHistory {
                     key: key.clone(),
                     name: name.clone(),
-                    vendor: match classify_gpu(name).0 {
-                        GpuVendor::Nvidia => "nvidia",
-                        GpuVendor::Intel => "intel",
-                        GpuVendor::Amd => "amd",
-                        GpuVendor::Unknown => "unknown",
-                    }
-                    .to_string(),
+                    vendor: vendor_tag(name).to_string(),
                     values: slice_aligned_history(hist, &s.timestamps, window_secs),
                     temp_c: nvidia.as_ref().and_then(|telemetry| telemetry.temp_c),
                     nvidia,
@@ -578,7 +569,6 @@ mod tests {
             vec![Some(102.0), Some(103.0), Some(104.0)]
         );
         assert_eq!(payload.disks[0].read_mb_s, 12.5);
-        assert_eq!(payload.disks[0].temp_c, None);
         assert_eq!(payload.disks[1].key, "D:");
         assert_eq!(payload.gpus.len(), 1);
         assert_eq!(payload.gpus[0].name, "GeForce RTX 4070");
@@ -668,6 +658,70 @@ mod tests {
         assert_eq!(
             clamp_window_secs(u64::MAX),
             crate::state::HISTORY_CAPACITY as u64
+        );
+    }
+
+    // --- vendor_tag (shared by both payload builders) ---
+
+    #[test]
+    fn test_vendor_tag_maps_display_names_to_payload_tags() {
+        assert_eq!(vendor_tag("GeForce RTX 4070"), "nvidia");
+        assert_eq!(vendor_tag("Radeon RX 6700 XT"), "amd");
+        assert_eq!(vendor_tag("Iris Xe Graphics"), "intel");
+        assert_eq!(vendor_tag("Mystery Adapter"), "unknown");
+        assert_eq!(vendor_tag(""), "unknown");
+    }
+
+    #[test]
+    fn test_snapshot_and_history_payload_agree_on_vendor() {
+        let mut s = HistoryStore::new("test");
+        s.gpu_entries.push((
+            "gpu0".to_string(),
+            "GeForce RTX 4070".to_string(),
+            deque(&[10.0]),
+        ));
+        let snap = build_snapshot(&s, true);
+        let payload = build_history_payload(&s, 10);
+        assert_eq!(snap.gpus[0].vendor, "nvidia");
+        assert_eq!(payload.gpus[0].vendor, snap.gpus[0].vendor);
+    }
+
+    // --- build_history_payload: disk without history (padding path) ---
+
+    #[test]
+    fn test_build_history_payload_pads_disk_without_history_with_nulls() {
+        let mut s = HistoryStore::new("test");
+        s.disk_display_order.push("Q:".to_string());
+        for tick in 0..2u64 {
+            s.cpu_history.push_back(tick as f64);
+            s.push_timestamp(1_000 + tick * 1_000);
+        }
+        let payload = build_history_payload(&s, 10);
+        assert_eq!(payload.disks.len(), 1);
+        assert_eq!(
+            payload.disks[0].values,
+            vec![None, None],
+            "a disk with no history must align to the timestamp slice, not render 0%"
+        );
+        assert_eq!(payload.disks[0].read_mb_s, 0.0);
+    }
+
+    // --- slice functions when a history ring outlives its timestamp ring ---
+    // The collector keeps these in lockstep; a commit desync must degrade to a
+    // tail-aligned read (offset saturated at zero), never panic or shift.
+
+    #[test]
+    fn test_slice_history_longer_than_timestamps_is_tail_aligned() {
+        let d = deque(&[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(slice_history(&d, &ts(&[1_000, 2_000]), 10), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_slice_aligned_history_longer_than_timestamps_stays_aligned() {
+        let d = deque(&[5.0, 6.0, 7.0, 8.0]);
+        assert_eq!(
+            slice_aligned_history(&d, &ts(&[1_000, 2_000]), 10),
+            vec![Some(5.0), Some(6.0)]
         );
     }
 }

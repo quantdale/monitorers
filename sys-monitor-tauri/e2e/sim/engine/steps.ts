@@ -8,12 +8,17 @@
  * outcomes; hard failures are surfaced via `ctx.assert`.
  */
 import { expect } from '@playwright/test';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { SimContext, JourneyState } from '../types';
 import { drawThinkTime, drawDwellTime, mistakes } from './behavior';
 
 const CARD = '[data-testid^="metric-card-"]';
 const CARD_ID = (id: string) => `[data-testid="metric-card-${id}"]`;
-const SIDEBAR_HANDLE = 'div[title="Drag to reorder"]';
+// Sidebar drag handles are buttons inside the hardware sidebar (see
+// SortableSidebarCard.tsx); the sidebar does not expose card ids as DOM
+// attributes, so sidebar-order assertions go through persisted settings.
+const SIDEBAR_HANDLE = '#hardware-sidebar button[title="Drag to reorder"]';
 const DASH_HANDLE = '.drag-handle';
 
 async function sleep(ms: number): Promise<void> {
@@ -30,15 +35,70 @@ export async function readCardIds(ctx: SimContext): Promise<string[]> {
   );
 }
 
-/** Reads the current sidebar card ids in DOM order. */
-export async function readSidebarCardIds(ctx: SimContext): Promise<string[]> {
+/**
+ * Polls `read()` until `predicate` holds or the deadline passes, returning
+ * the last value. Semantic replacement for fixed sleeps: waits exactly as
+ * long as the app needs, and no longer.
+ */
+export async function pollUntil<T>(
+  read: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  timeoutMs: number,
+  intervalMs = 200
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let value = await read();
+  while (!predicate(value) && Date.now() < deadline) {
+    await sleep(intervalMs);
+    value = await read();
+  }
+  return value;
+}
+
+// ── Persisted settings (per-run shim on mock, temp settings.json on real) ─────
+
+async function readSettingsShim(ctx: SimContext): Promise<Record<string, unknown>> {
   const page = ctx.driver.page;
-  if (!page) return [];
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll('[data-sb-id]')).map((n) =>
-      (n.getAttribute('data-sb-id') ?? '').replace(/^sb_/, '')
-    )
-  );
+  if (!page) return {};
+  // Read the per-run localStorage settings namespace synchronously.
+  return (await page.evaluate(
+    (runId) => {
+      try {
+        const raw = localStorage.getItem(`sysmon_sim_settings_${runId}`);
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    },
+    ctx.opts.runId
+  )) as Record<string, unknown>;
+}
+
+function readRealSettings(ctx: SimContext): Record<string, unknown> {
+  const d = ctx.driver as unknown as { appDataDir?: string | null };
+  const dir = d.appDataDir;
+  if (!dir) return {};
+  const p = join(dir, 'settings.json');
+  if (!existsSync(p)) return {};
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/** Reads the run's persisted settings regardless of lane. */
+export async function persistedSettings(ctx: SimContext): Promise<Record<string, unknown>> {
+  return ctx.driver.kind === 'real' ? readRealSettings(ctx) : readSettingsShim(ctx);
+}
+
+/** Polls persisted settings until `predicate` holds (persistence-settle wait). */
+export async function waitForPersistedSettings(
+  ctx: SimContext,
+  predicate: (settings: Record<string, unknown>) => boolean,
+  timeoutMs = 8_000
+): Promise<Record<string, unknown>> {
+  return pollUntil(() => persistedSettings(ctx), predicate, timeoutMs);
 }
 
 // ── State checkpoints ─────────────────────────────────────────────────────────
@@ -83,6 +143,9 @@ export async function waitForState(ctx: SimContext, state: JourneyState, timeout
         break;
       case 'collector-error-banner':
         await page.locator('[data-testid="collector-error-banner"]').waitFor({ state: 'visible', timeout: timeoutMs });
+        break;
+      case 'collector-recovering-banner':
+        await page.locator('[data-testid="collector-recovering-banner"]').waitFor({ state: 'visible', timeout: timeoutMs });
         break;
       case 'history-error-inline':
         await page.getByText(/Couldn't refresh metrics history/).waitFor({ state: 'visible', timeout: timeoutMs });
@@ -140,10 +203,17 @@ async function openDropdown(ctx: SimContext): Promise<void> {
   const page = ctx.driver.page;
   if (!page) return;
   await page.getByRole('button', { name: /^Metrics \(/ }).click();
-  await page.locator('input[type="checkbox"]').first().waitFor({ state: 'visible' });
+  // Bounded: an unbounded wait here once turned a missing dropdown into a
+  // silent multi-minute journey stall instead of a fast classified failure.
+  await page.locator('input[type="checkbox"]').first().waitFor({ state: 'visible', timeout: 5_000 });
 }
 
-export async function toggleMetric(ctx: SimContext, cardId: string, visible: boolean): Promise<void> {
+export async function toggleMetric(
+  ctx: SimContext,
+  cardId: string,
+  visible: boolean,
+  label?: string
+): Promise<void> {
   const page = ctx.driver.page;
   await sleep(await drawThinkTime(ctx));
   if (!page) return;
@@ -152,16 +222,18 @@ export async function toggleMetric(ctx: SimContext, cardId: string, visible: boo
     await openDropdown(ctx);
     await sleep(await drawDwellTime(ctx));
     await page.keyboard.press('Escape');
-    await page.locator('input[type="checkbox"]').first().waitFor({ state: 'hidden' });
+    await page.locator('input[type="checkbox"]').first().waitFor({ state: 'hidden', timeout: 5_000 });
     ctx.log('action', { kind: 'toggleMetric', cardId, visible, outcome: 'escaped' });
     await openDropdown(ctx);
   } else {
     await openDropdown(ctx);
   }
   await page.waitForTimeout(250);
-  // The checkbox labeled with the card's display label.
-  const label = await cardLabelFor(ctx, cardId);
-  const checkbox = page.locator('label', { hasText: label }).locator('input[type="checkbox"]');
+  // The checkbox labeled with the card's display label. Callers that already
+  // know the label pass it precomputed — a HIDDEN card has no DOM title to
+  // look up, so a hide→restore round-trip must capture the label up front.
+  const resolved = label ?? (await cardLabelFor(ctx, cardId));
+  const checkbox = page.locator('label', { hasText: resolved }).locator('input[type="checkbox"]');
   const isChecked = await checkbox.isChecked();
   if (isChecked !== visible) {
     await checkbox.click();
@@ -171,12 +243,17 @@ export async function toggleMetric(ctx: SimContext, cardId: string, visible: boo
   ctx.log('action', { kind: 'toggleMetric', cardId, visible });
 }
 
-async function cardLabelFor(ctx: SimContext, cardId: string): Promise<string> {
+/** The card's display label as shown in the Metrics dropdown (see
+ *  toggleMetric's `label` param — capture BEFORE hiding the card). */
+export async function cardLabelFor(ctx: SimContext, cardId: string): Promise<string> {
   const page = ctx.driver.page;
   if (!page) return cardId;
   // The card's display title (matches the dropdown's item.label, which App
-  // computes via getCardLabel). Strip trailing whitespace only.
-  const text = await page.locator(`[data-testid="metric-title-${cardId}"]`).innerText();
+  // computes via getCardLabel). Strip trailing whitespace only. Bounded so a
+  // missing title fails fast instead of stalling the journey forever.
+  const text = await page
+    .locator(`[data-testid="metric-title-${cardId}"]`)
+    .innerText({ timeout: 5_000 });
   return text.trim() || cardId;
 }
 
@@ -206,7 +283,19 @@ export async function dragCard(ctx: SimContext, from: string, to: string, via: '
   if (via === 'pointer') {
     const src = page.locator(`${CARD_ID(from)} ${DASH_HANDLE}`);
     const dst = page.locator(`${CARD_ID(to)} ${DASH_HANDLE}`);
-    await src.dragTo(dst);
+    // dnd-kit's PointerSensor tracks intermediate pointer moves — a single
+    // dragTo teleport is ignored, so drive the mouse explicitly (same recipe
+    // as e2e/tests/drag-reorder.spec.ts).
+    const srcBox = await src.boundingBox({ timeout: 5_000 });
+    const dstBox = await dst.boundingBox({ timeout: 5_000 });
+    if (!srcBox || !dstBox) {
+      ctx.assert(`drag:${from}->${to}`, false, 'drag handles not visible for pointer drag');
+      return;
+    }
+    await page.mouse.move(srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height / 2, { steps: 12 });
+    await page.mouse.up();
   } else {
     const handle = page.locator(`${CARD_ID(from)} ${DASH_HANDLE}`);
     await handle.focus();
@@ -225,26 +314,45 @@ export async function dragCard(ctx: SimContext, from: string, to: string, via: '
   ctx.log('action', { kind: 'dragCard', from, to, via });
 }
 
-export async function dragSidebarCard(ctx: SimContext, from: string, to: string): Promise<void> {
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+
+/** Opens the hardware sidebar (idempotent — handles both toggle titles). */
+export async function openSidebar(ctx: SimContext): Promise<void> {
+  const page = ctx.driver.page;
+  if (!page) return;
+  await page
+    .locator('button[title="Show hardware info"], button[title="Hide hardware info"]')
+    .first()
+    .click();
+  await page.locator(SIDEBAR_HANDLE).first().waitFor({ state: 'visible', timeout: 5_000 });
+}
+
+/**
+ * Keyboard-drags the first sidebar card down one slot. REAL LANE ONLY: the
+ * mock harness never has a hardware profile (`useHardwareProfile` bails when
+ * `isTauri()` is false), so sidebar cards — and their drag handles — do not
+ * render in the browser (see e2e/exploratory-register.md).
+ */
+export async function dragSidebarCard(ctx: SimContext): Promise<void> {
   const page = ctx.driver.page;
   await sleep(await drawThinkTime(ctx));
   if (!page) return;
-  await page.locator('button[title="Show hardware info"]').click();
-  await page.waitForTimeout(300);
+  await openSidebar(ctx);
   const handles = page.locator(SIDEBAR_HANDLE);
   const count = await handles.count();
   if (count < 2) {
     ctx.assert('dragSidebarCard', false, 'fewer than 2 sidebar cards to reorder');
     return;
   }
-  const src = handles.nth(0);
-  await src.focus();
+  // Keyboard drag: move the first sidebar card down one slot (dnd-kit
+  // keyboard sensor, same pattern as the dashboard reorder).
+  await handles.nth(0).focus();
   await page.keyboard.press('Space');
   await sleep(150);
   await page.keyboard.press('ArrowDown');
   await sleep(150);
   await page.keyboard.press('Enter');
-  ctx.log('action', { kind: 'dragSidebarCard', from, to });
+  ctx.log('action', { kind: 'dragSidebarCard' });
 }
 
 // ── ErrorBoundary retry ───────────────────────────────────────────────────────

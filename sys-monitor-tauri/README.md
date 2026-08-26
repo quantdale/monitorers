@@ -105,11 +105,21 @@ The canonical gates are shared by local development and CI:
 npm run verify:fast       # frontend + Rust checks, including audits
 npm run verify:full       # fast checks + E2E + mock simulation + Tauri executable
 npm run verify:version    # package/Cargo/Tauri release-version consistency
+npm run verify:packaged   # build the exe, then drive the real app via CDP:
+                          # real IPC history, live collector data, per-run isolated
+                          # settings store, clean exit, no orphan processes
 ```
 
 The MSI/NSIS installer build runs automatically for version tags and manual
-workflow dispatch. The backend is Windows-only; frontend tests and builds can
-run elsewhere.
+workflow dispatch. `.github/workflows/release-qualification.yml` (dispatch/tag
+too) additionally qualifies each installer on a clean Windows runner — silent
+install, registry-verified product/version identity, smoke test of the
+**installed** executable, silent uninstall with removal assertions — and uploads
+installers plus a hashed `release-manifest.json` (version, commit, sizes,
+SHA-256, signing status, qualification result). Installers are unsigned: no code
+signing certificate exists for this project.
+
+The backend is Windows-only; frontend tests and builds can run elsewhere.
 
 ---
 
@@ -119,7 +129,7 @@ run elsewhere.
 |------|-------------|
 | `src/` | React frontend (App, components, hooks, types) |
 | `src-tauri/` | Rust backend (Tauri app, collector, state, main) |
-| `src-tauri/src/` | Rust source (`main.rs`, `state.rs`, `sensor.rs`, `hardware.rs`, `pdh.rs`, `collector/`) |
+| `src-tauri/src/` | Rust source (`main.rs`, `lib.rs`, `state.rs`, `cadence.rs`, `sensor.rs`, `hardware.rs`, `pdh.rs`, `collector/`) |
 | `dist/` | Built frontend (after `npm run build`) |
 | `src-tauri/target/release/` | Built binary and bundle after `npm run tauri build` |
 
@@ -127,6 +137,13 @@ run elsewhere.
 
 ## Notes
 
+- **Collector recovery:** Collection runs as supervised sessions. A panic ends
+  one session; bounded automatic recovery replaces it (staged backoff, healthy-
+  period streak reset) and an exhausted budget surfaces a persistent failure
+  state with a working Retry metrics control — no application restart needed.
+  History survives sessions; downtime stays a truthful timestamp gap, and rate
+  counters are re-baselined so recovery introduces neither fabricated zeros nor
+  spikes.
 - **CPU name:** The app uses sysinfo for the processor name. Optional WMI
   enrichment may be unavailable without hiding core metrics.
 - **Metrics:** Live scalars refresh at roughly 250ms and history commits on

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  CollectorLifecycleState,
+  CollectorStatus,
   DiskHistory,
   GpuHistory,
   HistoryPayload,
@@ -21,10 +23,19 @@ export const MAX_HISTORY = 3600;
  */
 const PRUNE_GRACE_MS = 5000;
 
-export const EXPECTED_SCHEMA_VERSION = 4;
+export const EXPECTED_SCHEMA_VERSION = 5;
 
 export const SCHEMA_MISMATCH_MESSAGE =
   'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
+
+/**
+ * Lifecycle contract version — mirrors `LIFECYCLE_SCHEMA_VERSION`
+ * (src-tauri/src/collector/supervisor.rs). Independent of EXPECTED_SCHEMA_VERSION.
+ */
+export const EXPECTED_LIFECYCLE_SCHEMA_VERSION = 1;
+
+export const LIFECYCLE_SCHEMA_MISMATCH_MESSAGE =
+  'Frontend/backend collector lifecycle schema mismatch. Rebuild the application so both sides use the same version.';
 
 export class SchemaMismatchError extends Error {
   readonly code = 'IPC_SCHEMA_MISMATCH';
@@ -47,6 +58,34 @@ export class SchemaMismatchError extends Error {
 export function assertSchemaVersion(actual: unknown, payloadName: string): void {
   if (actual !== EXPECTED_SCHEMA_VERSION) {
     const error = new SchemaMismatchError(actual, payloadName);
+    console.error(`[IPC] ${error.message}`);
+    throw error;
+  }
+}
+
+export class LifecycleSchemaMismatchError extends Error {
+  readonly code = 'IPC_LIFECYCLE_SCHEMA_MISMATCH';
+  readonly expected: number;
+  readonly actual: unknown;
+
+  constructor(actual: unknown) {
+    super(
+      `${LIFECYCLE_SCHEMA_MISMATCH_MESSAGE} Expected collector-status schema ${EXPECTED_LIFECYCLE_SCHEMA_VERSION}, received ${String(actual)}.`
+    );
+    this.name = 'LifecycleSchemaMismatchError';
+    this.expected = EXPECTED_LIFECYCLE_SCHEMA_VERSION;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Validate and reject incompatible lifecycle payloads before any lifecycle
+ * state is touched. The listener stays attached so a compatible rebuild can
+ * recover without restarting the hook (same discipline as metric payloads).
+ */
+export function assertLifecycleSchemaVersion(status: CollectorStatus): void {
+  if (status?.schema_version !== EXPECTED_LIFECYCLE_SCHEMA_VERSION) {
+    const error = new LifecycleSchemaMismatchError(status?.schema_version);
     console.error(`[IPC] ${error.message}`);
     throw error;
   }
@@ -87,7 +126,6 @@ export function mergeDiskHistory(
         read_mb_s: update.read_mb_s,
         write_mb_s: update.write_mb_s,
         avg_response_ms: update.avg_response_ms,
-        temp_c: update.temp_c ?? disk.temp_c ?? null,
         last_seen_ts: now,
       });
     } else if (now - (disk.last_seen_ts ?? now) <= PRUNE_GRACE_MS) {
@@ -112,7 +150,6 @@ export function mergeDiskHistory(
       read_mb_s: snapshot.read_mb_s,
       write_mb_s: snapshot.write_mb_s,
       avg_response_ms: snapshot.avg_response_ms,
-      temp_c: snapshot.temp_c ?? null,
       last_seen_ts: now,
     });
   }
@@ -125,14 +162,25 @@ export function shouldCommitHistory(onTick: boolean): boolean {
   return onTick;
 }
 
-/** Merge live GPU scalars by stable key, never by display name. */
+/** Merge live GPU scalars by stable key, never by display name.
+ *
+ * Returns `prev` unchanged (same reference) when no util actually differed,
+ * so scalar-only ticks without GPU movement don't invalidate downstream
+ * memos keyed on the latest-GPU map.
+ */
 export function mergeLatestGpu(
   prev: Record<string, number>,
   gpus: Pick<MetricsSnapshot['gpus'][number], 'key' | 'util'>[]
 ): Record<string, number> {
+  let changed = false;
   const next = { ...prev };
-  for (const gpu of gpus) next[gpu.key] = gpu.util;
-  return next;
+  for (const gpu of gpus) {
+    if (next[gpu.key] !== gpu.util) {
+      next[gpu.key] = gpu.util;
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
 }
 
 export function mergeGpuHistory(
@@ -230,6 +278,24 @@ export interface SlicedHistory {
   net_sent: number[];
   gpus: SlicedGpuHistory[];
   collectorError: string | null;
+  /** Supervised-collector lifecycle state (null until first status arrives). */
+  collectorState: CollectorLifecycleState | null;
+}
+
+/**
+ * Slice one channel using a timestamp range that was derived ONCE for the
+ * whole payload (see the windowed-channels memo in useMetrics). Semantics are
+ * identical to `sliceWindow`: a shorter channel is tail-aligned against the
+ * global ring; an empty channel stays empty; a payload without recorded
+ * timestamps returns the channel untouched.
+ */
+function sliceWithRange<T>(arr: T[], timestampCount: number, range: [number, number] | null): T[] {
+  if (arr.length === 0) return [];
+  if (range === null) return arr;
+  const offset = timestampCount - arr.length;
+  const localStart = Math.max(0, range[0] - offset);
+  const localEnd = Math.min(arr.length, range[1] - offset);
+  return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
 }
 
 /** Append a validated full-tick snapshot to a history payload. */
@@ -251,8 +317,8 @@ export function appendSnapshotToHistory(
     cpu_temp_c: snapshot.cpu_temp_c ?? previous.cpu_temp_c ?? null,
     mem: appendToHistory(previous.mem, snapshot.mem, MAX_HISTORY),
     disks: mergeDiskHistory(previous.disks, snapshot.disks, timestampLength),
-    net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kb, MAX_HISTORY),
-    net_sent: appendToHistory(previous.net_sent, snapshot.net_sent_kb, MAX_HISTORY),
+    net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kib_s, MAX_HISTORY),
+    net_sent: appendToHistory(previous.net_sent, snapshot.net_sent_kib_s, MAX_HISTORY),
     gpus: mergeGpuHistory(previous.gpus, snapshot.gpus, timestampLength),
   };
 }
@@ -289,8 +355,8 @@ export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = D
     cpu_temp_c: snapshot.cpu_temp_c ?? null,
     mem: [snapshot.mem],
     disks: mergeDiskHistory([], snapshot.disks, 1),
-    net_recv: [snapshot.net_recv_kb],
-    net_sent: [snapshot.net_sent_kb],
+    net_recv: [snapshot.net_recv_kib_s],
+    net_sent: [snapshot.net_sent_kib_s],
     gpus: mergeGpuHistory([], snapshot.gpus, 1),
   };
 }
@@ -307,7 +373,6 @@ function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
     disks: (payload.disks ?? []).map((disk) => ({
       ...disk,
       values: (disk.values ?? []).map(normalizeMetricValue),
-      temp_c: disk.temp_c ?? null,
       last_seen_ts: now,
     })),
     gpus: (payload.gpus ?? []).map((gpu) => ({
@@ -321,16 +386,45 @@ function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
   };
 }
 
+/**
+ * Live events are replayed into a history response that was in flight while
+ * they arrived. Retention is capped well beyond any plausible get_history
+ * round trip (~2 minutes of 4 Hz ticks): capping bounds worst-case memory
+ * (previously up to MAX_HISTORY retained snapshots when history requests kept
+ * failing) and keeps the buffer append amortized O(1) instead of copying the
+ * whole retained array on every event.
+ */
+const MAX_LIVE_EVENT_RETENTION = 512;
+
 interface LiveEvent {
   sequence: number;
   snapshot: MetricsSnapshot;
   timestamp: number;
 }
 
+/** Append one event with amortized O(1) cost; exposed pure for regression tests. */
+export function appendLiveEvent(buffer: LiveEvent[], event: LiveEvent): LiveEvent[] {
+  buffer.push(event);
+  if (buffer.length >= MAX_LIVE_EVENT_RETENTION * 2) {
+    return buffer.slice(-MAX_LIVE_EVENT_RETENTION);
+  }
+  return buffer;
+}
+
 export interface UseMetricsResult {
   metrics: SlicedHistory | null;
   /** Includes actionable schema mismatch text when an incompatible payload is rejected. */
   historyLoadError: string | null;
+  /** Latest supervised-lifecycle status (null until one arrives). */
+  lifecycle: CollectorStatus | null;
+  /**
+   * Manual retry for an exhausted recovery budget. Resolves to the resulting
+   * lifecycle state — matching `retry_collection` exactly: `'failed'` means
+   * the request WAS honored (supervision was failed; a replacement generation
+   * was signaled), any other state means the click was coalesced into a no-op
+   * because collection was not failed. `null` when no backend was reachable.
+   */
+  retryMetrics: () => Promise<CollectorLifecycleState | null>;
 }
 
 export function useMetrics(windowSeconds: number): UseMetricsResult {
@@ -338,14 +432,44 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
   const [memGb, setMemGb] = useState({ used: 0, total: 0 });
   const [collectorError, setCollectorError] = useState<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<CollectorStatus | null>(null);
   const [latestCpu, setLatestCpu] = useState(0);
   const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
   const historyRef = useRef<HistoryPayload | null>(null);
   const historyRequestError = useRef<string | null>(null);
   const liveSchemaError = useRef<string | null>(null);
+  const lifecycleSchemaError = useRef<string | null>(null);
   const requestGeneration = useRef(0);
   const liveSequence = useRef(0);
   const liveEvents = useRef<LiveEvent[]>([]);
+  /**
+   * Counts every VALID lifecycle status applied to hook state (listener or
+   * bootstrap). The bootstrap fetch uses it as a fence: if any event landed
+   * while the fetch was in flight, the fetched snapshot is necessarily older
+   * than observed reality and is discarded.
+   */
+  const appliedStatusSequence = useRef(0);
+
+  // Single composition point for the actionable error surface: a live metric
+  // schema fault outranks a lifecycle contract fault, which outranks a failed
+  // history request. Each clears only through its own recovery proof.
+  const syncLoadError = () =>
+    setHistoryLoadError(
+      liveSchemaError.current ?? lifecycleSchemaError.current ?? historyRequestError.current
+    );
+
+  /** Manual retry for an exhausted recovery budget (backend coalesces outside failed). */
+  const retryMetrics = useCallback(async (): Promise<CollectorLifecycleState | null> => {
+    if (isTauri()) {
+      try {
+        return await invoke<CollectorLifecycleState>('retry_collection');
+      } catch (error) {
+        console.warn('[useMetrics] retry_collection failed:', error);
+        return null;
+      }
+    }
+    return getSimBackend().retryCollection();
+  }, []);
 
   useEffect(() => {
     const generation = ++requestGeneration.current;
@@ -365,12 +489,12 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         setHistory(next);
         historyRequestError.current = null;
         liveSchemaError.current = null;
-        setHistoryLoadError(null);
+        syncLoadError();
         // The accepted payload now includes every event recorded so far.
         liveEvents.current = liveEvents.current.filter((event) => event.sequence > liveSequence.current);
       } catch (error) {
         historyRequestError.current = error instanceof SchemaMismatchError ? error.message : String(error);
-        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+        syncLoadError();
       }
     };
 
@@ -378,7 +502,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       if (cancelled || generation !== requestGeneration.current) return;
       console.warn('[useMetrics] get_history failed:', error);
       historyRequestError.current = error instanceof Error ? error.message : String(error);
-      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      syncLoadError();
     };
 
     if (isTauri()) {
@@ -404,7 +528,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         // payload. The listener remains attached so a compatible rebuild can
         // recover without restarting the hook.
         liveSchemaError.current = error instanceof SchemaMismatchError ? error.message : String(error);
-        setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+        syncLoadError();
         return;
       }
 
@@ -415,12 +539,9 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       // history response succeeds or a full tick seeds an empty history.
       liveSchemaError.current = null;
       if (snap.on_tick && historyRef.current === null) historyRequestError.current = null;
-      setHistoryLoadError(liveSchemaError.current ?? historyRequestError.current);
+      syncLoadError();
       const sequence = ++liveSequence.current;
-      liveEvents.current = [
-        ...liveEvents.current.slice(-MAX_HISTORY),
-        { sequence, snapshot: snap, timestamp },
-      ];
+      liveEvents.current = appendLiveEvent(liveEvents.current, { sequence, snapshot: snap, timestamp });
       setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
       setLatestCpu(snap.cpu);
       setLatestGpu((previous) => mergeLatestGpu(previous, snap.gpus));
@@ -433,61 +554,159 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       });
     };
 
+    const handleCollectorStatus = (status: CollectorStatus) => {
+      try {
+        assertLifecycleSchemaVersion(status);
+      } catch (error) {
+        // Fail closed on incompatible lifecycle payloads without touching any
+        // lifecycle state; the listener stays attached for a compatible rebuild.
+        lifecycleSchemaError.current =
+          error instanceof LifecycleSchemaMismatchError ? error.message : String(error);
+        syncLoadError();
+        return;
+      }
+      // A valid status proves the lifecycle contract recovered from any earlier
+      // mismatch on this channel.
+      lifecycleSchemaError.current = null;
+      syncLoadError();
+      appliedStatusSequence.current += 1;
+      setLifecycle(status);
+      if (status.state === 'healthy') {
+        // Actual recovery proof: transient failure/recovery UI clears here and
+        // only here (never on unrelated metrics-update events).
+        setCollectorError(null);
+      }
+    };
+
     const handleCollectorError = (message: string) => setCollectorError(message);
 
     if (isTauri()) {
+      let bootstrapCancelled = false;
       const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         handleSnapshot(event.payload);
       });
       const unlistenErrorPromise = listen<string>('collector-error', (event) => {
         handleCollectorError(event.payload);
       });
+      const unlistenStatusPromise = listen<CollectorStatus>('collector-status', (event) => {
+        handleCollectorStatus(event.payload);
+      });
+
+      // Bootstrap the CURRENT managed status on mount/reload so an already-
+      // failed supervisor surfaces its failed UX and Retry action without
+      // waiting for a new transition event or restarting the app. Dispatched
+      // only after the status listener is attached, so a transition racing the
+      // mount can never fall into the gap between fetch and subscribe.
+      const fenceAtDispatch = appliedStatusSequence.current;
+      void unlistenStatusPromise
+        .then(() => invoke<CollectorStatus>('get_collector_status'))
+        .then((bootstrapped) => {
+          if (bootstrapCancelled) return;
+          // Race fence: a collector-status EVENT applied since dispatch means
+          // the managed snapshot this response captured is older than what we
+          // already rendered — discard it instead of regressing the UI.
+          if (appliedStatusSequence.current !== fenceAtDispatch) return;
+          handleCollectorStatus(bootstrapped);
+        })
+        .catch((error) => {
+          if (bootstrapCancelled) return;
+          console.warn('[useMetrics] get_collector_status failed:', error);
+        });
+
       return () => {
+        bootstrapCancelled = true;
         unlistenMetricsPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenErrorPromise.then((unlisten) => unlisten()).catch(() => undefined);
+        unlistenStatusPromise.then((unlisten) => unlisten()).catch(() => undefined);
       };
     }
 
     const backend = getSimBackend();
     backend.onSnapshot(handleSnapshot);
     backend.onCollectorError(handleCollectorError);
+    backend.onCollectorStatus(handleCollectorStatus);
     backend.start();
     return () => {
       backend.stop();
       backend.offSnapshot(handleSnapshot);
       backend.offCollectorError(handleCollectorError);
+      backend.offCollectorStatus(handleCollectorStatus);
     };
   }, []);
 
-  if (!history) return { metrics: null, historyLoadError };
-
-  const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
-  const timestamps = sliceWindow(history.timestamps, history.timestamps, window);
-
-  return {
-    metrics: {
-      timestamps,
-      cpu: sliceWindow(history.cpu, history.timestamps, window),
-      latestCpu,
+  // Heavy windowing pass — recomputed ONLY when the committed history or the
+  // selected window changes (1 Hz at most), never on the ~250ms scalar-only
+  // live events. Derives the elapsed-time window range once instead of
+  // re-scanning the timestamp ring per channel (the previous per-event path
+  // ran sliceWindow nine+ times, each with its own linear cutoff scan), and
+  // precomputes each GPU's newest recorded sample so the scalar merge below
+  // never repeats an O(ring) reverse scan per live tick.
+  const windowed = useMemo(() => {
+    if (!history) return null;
+    const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
+    const tsLen = history.timestamps.length;
+    const range: [number, number] | null =
+      tsLen > 0 && Number.isFinite(window) && window > 0
+        ? timestampWindowRange(history.timestamps, window)
+        : null;
+    const slice = <T>(arr: T[]): T[] => sliceWithRange(arr, tsLen, range);
+    return {
+      timestamps: slice(history.timestamps),
+      cpu: slice(history.cpu),
       cpu_name: history.cpu_name,
       cpu_temp_c: history.cpu_temp_c ?? null,
-      mem: sliceWindow(history.mem, history.timestamps, window),
+      mem: slice(history.mem),
+      disks: history.disks.map((disk) => ({ ...disk, values: slice(disk.values) })),
+      net_recv: slice(history.net_recv),
+      net_sent: slice(history.net_sent),
+      gpus: history.gpus.map((gpu) => {
+        let newest = 0;
+        for (let i = gpu.values.length - 1; i >= 0; i -= 1) {
+          const value = gpu.values[i];
+          if (value != null) {
+            newest = value;
+            break;
+          }
+        }
+        return {
+          key: gpu.key,
+          name: gpu.name,
+          vendor: gpu.vendor,
+          values: slice(gpu.values),
+          temp_c: gpu.temp_c ?? null,
+          nvidia: gpu.nvidia ?? null,
+          newestRecorded: newest,
+        };
+      }),
+    };
+  }, [history, windowSeconds]);
+
+  // Scalar merge — cheap object assembly over the stable windowed channels, so
+  // live scalars (CPU/GPU %, memory GB, error/lifecycle banners) stay fresh at
+  // ~250ms cadence while every heavy slice keeps its identity across the three
+  // non-full ticks between history commits.
+  const metrics = useMemo<SlicedHistory | null>(() => {
+    if (!windowed) return null;
+    return {
+      timestamps: windowed.timestamps,
+      cpu: windowed.cpu,
+      latestCpu,
+      cpu_name: windowed.cpu_name,
+      cpu_temp_c: windowed.cpu_temp_c,
+      mem: windowed.mem,
       mem_used_gb: memGb.used,
       mem_total_gb: memGb.total,
-      disks: history.disks.map((disk) => ({
-        ...disk,
-        values: sliceWindow(disk.values, history.timestamps, window),
-        temp_c: disk.temp_c ?? null,
-      })),
-      net_recv: sliceWindow(history.net_recv, history.timestamps, window),
-      net_sent: sliceWindow(history.net_sent, history.timestamps, window),
-      gpus: history.gpus.map((gpu) => ({
-        ...gpu,
-        values: sliceWindow(gpu.values, history.timestamps, window),
-        latest: latestGpu[gpu.key] ?? [...gpu.values].reverse().find((value) => value != null) ?? 0,
+      disks: windowed.disks,
+      net_recv: windowed.net_recv,
+      net_sent: windowed.net_sent,
+      gpus: windowed.gpus.map(({ newestRecorded, ...channel }) => ({
+        ...channel,
+        latest: latestGpu[channel.key] ?? newestRecorded,
       })),
       collectorError,
-    },
-    historyLoadError,
-  };
+      collectorState: lifecycle?.state ?? null,
+    };
+  }, [windowed, memGb, latestCpu, latestGpu, collectorError, lifecycle]);
+
+  return { metrics, historyLoadError, lifecycle, retryMetrics };
 }
