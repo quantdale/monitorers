@@ -171,6 +171,18 @@ borrowed profile reconciliation read per emitted tick.
 
 ### Final-head validation (2026-08-26)
 
-- Local gates at fix head: pending (appended when the full suite completes).
+Local canonical gates at fix head `0c2425a` — `npm run verify:full` exit 0
+(frontend audits/typecheck/Vitest **240/240**/build; cargo fmt + tests across all
+5 feature lanes + clippy `-D warnings` + audit exit 0; E2E harness green; mock
+sim matrix **16/16** journey runs with the strengthened lifecycle-ordering
+assertions — collector-recovery now 10 asserts/run; Tauri release exe built),
+plus `verify:version`, `sim:typecheck`, `openspec validate --all --strict --no-interactive`
+(16 passed / 0 failed), `git diff --check` clean, and `npm run verify:packaged`
+PASS against that freshly built exe (real IPC schema-5 get_history over
+__TAURI_INTERNALS__, advancing collector data, viewMode write landed only in the
+run-isolated settings store, clean exit, no orphan processes, developer store
+byte-identical). The packaged run also exercised the new policy diagnosability:
+HKLM write refused (non-elevated host) logged explicitly, env-var channel used.
+
 - Hosted CI at final head: pending (run IDs to be recorded).
 - Release qualification (MSI + NSIS + manifest) at final SHA: pending.
