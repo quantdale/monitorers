@@ -1,158 +1,73 @@
 # Progress
 
 ## Current Goal
-Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TS frontend) in
-`sys-monitor-tauri/`, kept in a spec-driven flow (`openspec/`). Current phase:
-NONE — no active implementation or hardening work remains. The 2026-08-26
-`production-persistence-and-operational-hardening` campaign is complete
-(archived under `openspec/changes/archive/`); the repository is in a truthful
-post-campaign steady state. Remaining items are explicitly hardware-bound or
-registered exploratory scenarios, not actionable software TODOs.
+
+Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
+
+**Current phase: ACTIVE — `dependency-runtime-modernization-and-qualification`.**
+
+Planning was produced from `main@46ee499ab934663c4e0807f7ab8e995707b77471` on 2026-08-26 after a fresh repository/dependency audit. The active OpenSpec change is:
+
+`openspec/changes/dependency-runtime-modernization-and-qualification/`
+
+The implementation agent should execute `.agent/EXECUTION_PROMPT.md` on branch `agent/monitorers-dependency-runtime-modernization` (rebasing the start onto the latest `origin/main` if main advanced, with the actual start SHA recorded in evidence).
 
 ## Agent Rules
+
 - Do not ask questions unless truly blocked.
 - Make reasonable assumptions and continue.
-- Work on unfinished TODOs in order.
-- Mark completed TODOs with [x].
-- Add new bugs, ideas, and follow-up work as TODOs.
-- Run tests, lint, or build when available.
-- Do not run destructive commands, force pushes, production deploys, or database resets.
+- Work on active OpenSpec tasks in dependency order.
+- Mark tasks complete only with evidence.
+- Add newly discovered defects/follow-up work to the active change or final backlog.
+- Run the relevant test/lint/build gate after every coherent migration stage.
+- Do not run destructive commands, force pushes, production deploys, secret mutation or database resets.
+- Never weaken tests/security/identity/cadence contracts merely to accept a dependency update.
 
-## Status snapshot (2026-08-26, post-PR #28 hardening)
-- Authoritative quick reference: root `AGENTS.md`. Supervisor lifecycle, recovery
-  policy, status contract (`LIFECYCLE_SCHEMA_VERSION = 1`), retry semantics (honored
-  ONLY while failed — a `Failed` answer never means ignored), and the
-  qualification lanes are documented there; `CLAUDE.md` / `.cursorrules` were
-  re-reconciled on 2026-08-26.
-- PR #28 (supervised recovery, typed lifecycle IPC, packaged qualification,
-  MSI/NSIS release qualification) is COMPLETE: merged, archived, hosted green.
-  Historical evidence lives in its archived change; it is not active work.
-- Safety closure at the post-audit head: typed `StopFlag`/`RetryRequest` managed
-  state (the two raw `Arc<AtomicBool>` registrations used to alias — Retry could
-  hit shutdown), race-fenced `get_collector_status` bootstrap on mount/reload,
-  top-of-loop initial tick deadline, mock healthy-only-after-first-emit + run-token
-  teardown, unconditional WebView2 HKLM policy cleanup with injectable seam,
-  supported download-artifact inputs, corrected retry docs. See tasks.md §10.
-- Collector: supervised sessions (`src-tauri/src/collector/supervisor.rs`). A panic
-  ends one session; bounded automatic recovery replaces it (3 attempts/streak,
-  staged backoff 500ms→8s, healthy ≥30s resets); exhausted budget → persistent
-  `failed` with manual `retry_collection`. Fresh sessions rebuild all OS-facing
-  state and prime rate baselines before waiting out the first deadline
-  (no fabricated post-recovery zeros/spikes).
-  History survives sessions; downtime remains a truthful timestamp gap.
-- Release boundary: `npm run verify:packaged` drives the built exe via CDP (real
-  IPC, isolated real settings store, orphan-process assertions);
-  `.github/workflows/release-qualification.yml` (dispatch/tag) builds MSI+NSIS,
-  qualifies install/run/uninstall per format on clean runners, uploads a hashed
-  release manifest. Installers remain unsigned (no certificate).
+## Status snapshot (2026-08-26, next campaign planned)
+
+- **Latest production baseline:** merge PR #29 at `46ee499ab934663c4e0807f7ab8e995707b77471`. The previous `production-persistence-and-operational-hardening` change is complete/archived; its behavior and hosted evidence are baseline requirements, not active implementation work.
+- **Why work is active again:** the live dependency queue contains broad and/or major upgrades across sysinfo/WMI/windows/NVML/Tauri, React 19, Vite 8, TypeScript 7, jsdom 30 and related tooling. Several generated PRs are non-mergeable, and current Dependabot grouping combines unrelated compatibility domains. This is actionable software maintenance even though the prior campaign had no remaining product-hardening TODO.
+- **Next-campaign decision:** perform controlled dependency/runtime modernization, fix Dependabot grouping, preserve collector/identity/IPC/settings contracts, and qualify through unit/E2E/mock simulation/packaged real-app/hosted Windows release lanes. Do not merge grouped Dependabot PRs wholesale.
+- **Toolchain planning signal:** repository currently pins Rust 1.93.1; the target sysinfo 0.39.x line documents Rust 1.95 MSRV. Execution must re-check the actual selected versions and move the toolchain coherently if adopted.
+- **WMI planning signal:** current collector bootstrap uses the older `COMLibrary` construction path; WMI 0.18 documents `WMIConnection::new()` with connection-managed COM initialization behavior. Migration must preserve collector-thread ownership, non-blocking core startup, bounded retry/backoff and degraded operation.
+- **Frontend planning signal:** React already uses `createRoot`, but React 19/DOM/types must migrate coherently and be qualified separately from Vite/TypeScript/jsdom majors so failures stay attributable.
+- **Dependabot process signal:** current all-Cargo and all-frontend-dev grouping is part of the problem; the active campaign must split future updates by compatibility/risk domain.
+
+### Production contracts that remain mandatory
+
+- Metrics schema 5 and lifecycle schema 1 unless an intentional serialized-contract migration is separately specified/tested.
+- Settings schema 2, one shared store, serialized saves, future-version fail-closed behavior and isolated packaged-simulation store.
+- Supervised collector sessions with typed `StopFlag`/`RetryRequest`, bounded automatic recovery and manual retry from failed state.
+- 250 ms monotonic live schedule, 4:1 full-poll ratio, approximately 1 Hz history commits, elapsed-time rate fidelity and no catch-up burst.
+- Stable disk/GPU identity across history/cards/sidebar/persisted layout; ambiguous Nvidia telemetry remains unavailable instead of guessed.
+- WMI remains optional enrichment; core metrics stay live during WMI failure.
+- Packaged CDP lane proves real Tauri IPC/store/sensors/restart with per-run isolation and orphan-process checks.
+- GitHub Actions remain immutable-SHA pinned; cargo/npm security audits remain mandatory.
 
 ## Active TODO
-- [ ] None in progress.
-## Completed
-- [x] 2026-08-21 hardening pass reconciliation (see git history).
-- [x] 2026-08-25 supervised collector recovery + lifecycle contract + recovery UX.
+
+- [ ] Execute `openspec/changes/dependency-runtime-modernization-and-qualification/tasks.md` end-to-end using `.agent/EXECUTION_PROMPT.md`.
+- [ ] Reconcile every dependency PR in the execution-time queue as Adopted / Superseded / Deferred with exact evidence.
+- [ ] Archive the OpenSpec change only after final local + packaged + hosted qualification and post-migration deep review are truthful and green.
+
+## Recently completed
+
+- [x] 2026-08-25 supervised collector recovery + typed lifecycle contract + recovery UX.
 - [x] 2026-08-25 packaged qualification lane + MSI/NSIS release-qualification CI.
-- [x] 2026-08-26 PR #28 safety closure: typed stop/retry managed state, race-fenced
-      status bootstrap, initial-deadline wait, mock first-emit parity + teardown token,
-      workflow artifact inputs, unconditional WebView2 policy cleanup, retry-doc fix;
-      hosted CI + MSI/NSIS release qualification green at b479409 (run 32922280117);
-      change archived; PR merged.
-- [x] 2026-08-26 deep-audit remediation pass (per root "deep review resolve.txt"):
-      baseline gates re-verified green locally (cargo test 195+5, fmt, clippy -D
-      warnings, cargo audit exit 0; tsc; vitest 240; build; Playwright e2e 14;
-      sim mock lane 16/16). Fixed: .cursorrules schema version 4 → 5 + lifecycle
-      version pointer; .cursorrules probe path bin/ → examples/. Consolidated
-      duplicated code: mockBackend Nvidia-telemetry literal (×2) → nvidiaStatsFor;
-      journeys recovery-probe install (×2) → installRecoveryProbe; useMetrics hook
-      test beforeEach (×2) → freshIpcMock. Removed dead code: drawSessionLength +
-      unused persona field sessionLengthSecs (+ fixture), shouldQuarantine (policy
-      stays documented on FLAKE_BUDGET), assertChartGrowth helper. Verified IPC
-      contract sync: SCHEMA_VERSION 5↔5, LIFECYCLE_SCHEMA_VERSION 1↔1. cadence.rs
-      "dead code" flags confirmed false positives (used by examples/cadence_probe.rs,
-      tests/cadence_hardware.rs, SYSMON_CADENCE_LOG tap).
-- [x] 2026-08-26 performance campaign (repository-wide, evidence-driven):
-      (1) CI rust job now installs pinned cargo-audit@0.22.1 as the official
-      prebuilt release via taiki-e/install-action (SHA-pinned b6ff5808…) instead of
-      `cargo install` recompiling its dependency tree every Windows run — closes
-      the AUDIT_REPORT.md §cache recommendation and this file's old backlog idea.
-      (2) e2e.yml + simulation.yml cache ms-playwright Chromium keyed on the
-      lockfile (install step retained as cold-miss fallback). (3) UI render
-      fan-out: MetricChart wrapped in React.memo with hoisted yDomain constants
-      (MetricCard DEFAULT_Y_DOMAIN, renderCardContent Y_DOMAIN_AUTO) — measured on
-      the Vite mock harness (7 charts, 12s window): chart-body renders 686 → 182
-      (-73%), long-task main-thread time 3.57s → ~1.3s (-62%); live scalars and
-      1 Hz chart growth unchanged. Guard test MetricChart.test.tsx pins the memo
-      contract + commit-skipping semantics. Evaluated and declined with evidence:
-      e2e.yml frontend-build step (deliberate audit-era gate, non-critical-path),
-      incremental tsc (~8s clean typecheck; ≤4s saving; no CI benefit), SIM_SPEED
-      CI tuning (mock lane already defaults to 8× compressed clock), backend
-      micro-allocations (negligible vs PDH/WMI FFI).
-- [x] 2026-08-26 sim journey fix (found by the campaign's validation runs):
-      customization-roundtrip failed deterministically for seeds whose RNG rolls
-      a misdrag at the reorder step (dragCard models seeded mis-drags that cancel;
-      persona misdrag chance 5–10%). The journey asserted "reorder applied"
-      unconditionally, so any misdraw turned into a seed-stable gate failure
-      (CI uses random seeds → intermittent red). dragCard now returns
-      'applied' | 'cancelled' and the journey asserts the matching postcondition
-      (moved vs intentionally unchanged) while still round-tripping persistence
-      from the actual resulting order. Verified: previously-failing seed
-      153885314 passes both personas 9/9; full matrix re-run green.
+- [x] 2026-08-26 PR #28 safety closure: typed stop/retry managed state, race-fenced status bootstrap, initial-deadline wait, mock first-emit parity/teardown, artifact workflow fixes, WebView2 policy cleanup and retry-doc reconciliation; hosted/release qualification green.
+- [x] 2026-08-26 deep-audit remediation/reconciliation: stale schema/probe docs fixed, duplicate helper/test code consolidated, dead code removed, executable schema contracts rechecked.
+- [x] 2026-08-26 performance campaign: prebuilt SHA-pinned cargo-audit install, Playwright Chromium caching, MetricChart memoization/render-fanout reduction, measured release LTO decision, startup enumeration de-duplication and collector snapshot allocation cleanup.
+- [x] 2026-08-26 simulation journey robustness: seeded misdrag outcome modeled truthfully so customization roundtrip no longer fails on an intentional simulated canceled drag.
+- [x] 2026-08-26 PR #29 `production-persistence-and-operational-hardening`: real sidebar persistence across true relaunch, repeated restart soak, destructive sidebar persistence bug fix, drag-time ghost-drop fix, real-app orphan guard, CI efficiency evidence, repository-truth convergence and final hosted MSI/NSIS qualification.
 
-- [x] 2026-08-26 optimization campaign round 2 (evidence-driven, measured):
-      (1) Session bootstrap de-duplication: hardware::detect() re-enumerated
-      the OS per call (fresh sysinfo System for the CPU brand ~2.1ms each,
-      fresh Disks ~0.7ms) and ran twice per session start on top of state
-      CollectorState::new() already holding both — 4 redundant System + 1
-      redundant Disks enumeration per launch AND per supervisor recovery.
-      New CpuIdentity::from_sysinfo/detect_with_cpu reuse held state;
-      startup_probe example added (mechanism: System refresh median 2069us,
-      Disks 646us; profile-discovery phase 4ms → <1ms; total bootstrap
-      dominated by the REQUIRED ~200ms MINIMUM_CPU_UPDATE_INTERVAL baseline,
-      honestly unchanged at ~385ms). Regression pins: CpuIdentity brand
-      semantics, disk_infos_from projection (hardware.rs tests).
-      (2) Release profile: lto=true → "thin" after measuring warm final-crate
-      phase (the part CI re-pays per build): fat 4m45s vs thin+cu=1 3m15s
-      (-32%) vs thin+cu=16 2m22s (+12% exe). Adopted thin+cu=1; full table
-      documented in src-tauri/Cargo.toml. Exe 9.12MB → 9.42MB.
-      (3) build_snapshot tick-path hygiene: per-250ms-tick HashMap<String,String>
-      vendor cache (2 allocs/GPU name + clone/entry under the history lock)
-      → zero-allocation (&str,&'static str) scan.
-      Evaluated and declined: vite reportCompressedSize:false (~1s of a 46s
-      build), vitest node-env split for pure tests (~1-3s of 10.75s, P3),
-      cargo test 5-feature-matrix trim in verify.mjs rust gate (coverage
-      tradeoff, needs CI timing data), frontend history-append copies
-      (deliberate immutability design at 1Hz), get_history lock scope
-      (microseconds).
+Detailed command/run/performance history for completed campaigns is intentionally owned by their archived `openspec/changes/archive/.../evidence.md` plus git history rather than duplicated indefinitely in this live progress file.
 
-- [x] 2026-08-26 production-persistence-and-operational-hardening (PR #29):
-      real-lane `sidebar-relaunch-persistence` journey (true process relaunch,
-      PASS 17/17 hosted) + `restart-soak-durability` (3-cycle soak, 25/25);
-      found+fixed destructive sidebar persistence merge and drag-time ghost
-      drop (production bugs on real hardware); runner-wide orphan-process
-      guard; cargo-audit install 5m14.5s -> ~3.3s per Windows CI run (Rust job
-      10m56s -> ~6m11s), audit still mandatory at pinned 0.22.1 via SHA-pinned
-      prebuilt action; repository truth converged (WebView2 automation claims,
-      progress headers, .cursorrules sim pointer, schema docs verified 5/5 +
-      1/1); hosted final-head gates all green incl. MSI/NSIS release
-      qualification; PR review findings (strip restore, probe totals pairing,
-      restore-contract spec) closed with fixes.
+## Backlog / deliberately deferred
 
-## Backlog Ideas
-- [x] CI efficiency: cargo-audit prebuilt install + Playwright Chromium caching
-      landed 2026-08-26 (see Completed: performance campaign).
-- [x] `.cursorrules` §6 now carries the simulation-platform documentation pointer
-      (production-persistence-and-operational-hardening, 2026-08-26).
-- [x] Real-lane sim journey for sidebar-order persistence across true relaunch:
-      `sidebar-relaunch-persistence` (+ `restart-soak-durability` soak) — found and
-      fixed the destructive sidebar persistence merge on real hardware.
-- [ ] Dual identical-GPU runtime mapping still physically unvalidated (needs
-      qualifying hardware); deterministic fixtures cover identity logic. This
-      workstation's single iGPU exposes multiple PDH LUID nodes but does NOT
-      qualify. Related evidenced behavior: hardware discovery can differ between
-      sessions (lazy GPU Engine counters; disk source pre/post WMI) — the sidebar
-      now tolerates that without losing the user's arrangement.
-- [ ] Free-roam pointer-drag reorder on the real lane remains unproven and stays
-      registered (keyboard drag is the certified interaction).
+- [ ] **Dual identical-GPU runtime mapping — physical proof.** Deterministic fixtures cover identity logic, but a qualifying machine with two identical physical GPUs is still required before claiming physical runtime qualification. A single iGPU exposing multiple PDH LUID nodes does not qualify.
+- [ ] **Free-roam real-lane pointer-drag reorder.** Keyboard drag is the certified deterministic interaction used by persistence journeys. Pointer drag remains registered exploratory behavior and is not a blocker for the active dependency campaign.
+- [ ] **Code signing.** MSI/NSIS installers remain unsigned because no signing certificate/secret is configured. Do not invent credentials inside the dependency campaign.
 
 ## Blocked
-- None.
+
+- None at planning time. Physical-only backlog items are intentionally deferred, not blockers for the active software campaign.

@@ -1,326 +1,355 @@
-# Execution Prompt — Monitorers PR #28 Safety Closure
+# Execution Prompt — Monitorers Dependency Runtime Modernization
 
-## Status
+**Status: ACTIVE — execute the OpenSpec campaign below.**  
+**Planned:** 2026-08-26  
+**Planned-From:** `main@46ee499ab934663c4e0807f7ab8e995707b77471`  
+**Recommended target branch:** `agent/monitorers-dependency-runtime-modernization`  
+**OpenSpec change:** `openspec/changes/dependency-runtime-modernization-and-qualification/`
 
-**COMPLETE** (2026-08-26). All acceptance gates satisfied at final head
-`b479409d941a1cea024b0d92b4dae30d3563f8e3`: typed StopFlag/RetryRequest managed state with
-real-seam regression coverage; race-fenced `get_collector_status` mount bootstrap; initial
-tick deadline honored before first poll; mock healthy-only-after-first-emit + run-token
-teardown; supported download-artifact inputs; unconditional WebView2 HKLM policy cleanup with
-injectable seam and unit coverage; corrected retry contract docs. Local canonical validation
-green (`verify:full` + packaged lane), hosted PR CI green, release qualification run
-32922280117 green (MSI + NSIS install/run/uninstall + hashed manifest, result `passed`),
-review threads closed against code/evidence. See
-`openspec/changes/archive/2026-08-26-production-runtime-recovery-and-release-qualification/evidence.md`
-for run IDs and hashes.
+## Mission
 
-This is a corrective continuation of the existing `production-runtime-recovery-and-release-qualification` campaign. **Do not create a competing campaign. Do not start dependency-major upgrade work.** Resume and finish PR #28 from its actual current repository state.
+Take the current production-hardened Monitorers baseline and perform one controlled, end-to-end **dependency/runtime modernization and compatibility qualification** campaign.
 
-## Planned-From
+Do not interpret this as “merge Dependabot.” The live generated dependency queue contains compiler-floor changes, Windows-native API migrations, Tauri cross-language updates, React 19, and major frontend build/test tooling changes. Your job is to modernize what can be safely qualified, explicitly defer what cannot, repair the Dependabot policy that over-couples migrations, and leave the repository with executable proof that the existing product contracts still hold.
 
-- Repository: `quantdale/monitorers`
-- Default branch observed by planner: `main`
-- Planned-from `main` SHA: `d8ec7f491370552aa60d592f3058f86fd758c852`
-- Existing campaign branch: `agent/monitorers-comprehensive-remediation`
-- Existing PR: **#28 — Production runtime recovery and release qualification**
-- PR head observed by planner: `31f190ce2cf5376388c44a4a45a6ea25d68c1608`
-- PR state observed by planner: open, mergeable, 18 commits, 89 changed files
-- Important topology: the campaign branch was **18 commits ahead and 2 commits behind** the observed `main`; its merge-base was `d1b84c374842ec21dfbe0e4e9ba865f273adf18e`. Reconcile latest `main` safely before finalization and preserve all main-only planner/isolation infrastructure under `.agent/`.
+You are expected to execute the entire campaign autonomously. Do not stop after planning, compilation, or a partial dependency group. Continue until all mandatory completion gates in `tasks.md` are satisfied, or until a genuine external blocker prevents a required gate; if blocked, exhaust all safe software alternatives and leave exact evidence/action required.
 
-## Campaign
+## First actions — do these before editing product code
 
-**PR #28 final safety closure, evidence repair, hosted requalification, and merge integration**
+1. `git fetch --all --prune` and inspect latest `origin/main`.
+2. If `origin/main` is still the planned SHA, branch from it. If main advanced, branch from the latest main, record both the planned SHA and actual start SHA in `evidence.md`, inspect intervening commits, and make sure this OpenSpec campaign is still applicable.
+3. Read in full:
+   - this file;
+   - `openspec/changes/dependency-runtime-modernization-and-qualification/audit.md`;
+   - `proposal.md`, `design.md`, `tasks.md`, `evidence.md` and every delta spec;
+   - root `AGENTS.md`, `progress.md`, `.github/dependabot.yml`;
+   - current `sys-monitor-tauri/package.json`, lockfile role, `src-tauri/Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`;
+   - the latest archived PR #29 OpenSpec change and its evidence so you understand the behavior that must not regress.
+4. Refresh the open dependency PR queue and upstream release/migration notes. Dependabot state may have changed after this prompt was committed.
+5. Run and record the baseline qualification before migrating dependencies.
 
-The campaign implementation is broad and much of it is already landed, but the branch is **not complete** even though `openspec/changes/production-runtime-recovery-and-release-qualification/tasks.md` currently marks tasks 1–9 complete and records green hosted qualification. A fresh planner audit of the current PR head found multiple review findings still present in source, including one **critical runtime wiring defect** that defeats the campaign's manual Retry feature. Treat the current checked task state and prior green evidence as stale until the defects below are fixed and requalified at the final head.
+## The campaign decision is already made
 
-The goal of this continuation is not to add features. It is to make the recovery/release campaign actually true end-to-end, close the newly discovered safety gaps, make tests capable of catching the wiring failures that escaped them, reconcile documentation/evidence with reality, and merge PR #28 only when the implementation is genuinely trustworthy.
+The previous audit/report findings are historical and remediated. Do **not** resurrect old findings just because `AUDIT_REPORT.md` mentions them. Current source and current failing evidence win.
 
-## Repository Ground Truth to Re-read Before Editing
+The next campaign is specifically:
 
-Read and reconcile, in this order:
+> **Dependency Runtime Modernization and Qualification** — modernize the Rust/Windows collector stack, Tauri/store boundary, React framework, frontend tooling and remaining dependency queue in reviewable compatibility domains; redesign Dependabot grouping; prove unchanged behavior through unit, E2E, simulation, packaged-app and hosted Windows/release lanes.
 
-1. `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `CONTEXT.md`, `progress.md`, and `sys-monitor-tauri/README.md`.
-2. `.agent/PLANNER_HANDOFF.md` and this prompt.
-3. PR #28 body, **all current inline review threads**, review submissions, changed files, recent commits, and current hosted check results. The PR body is older than the current head; do not treat its old head SHA or old completion narrative as authoritative.
-4. The full active OpenSpec change:
-   - `openspec/changes/production-runtime-recovery-and-release-qualification/proposal.md`
-   - `design.md`
-   - `tasks.md`
-   - `evidence.md`
-   - all delta specs.
-5. Actual implementations and tests around:
-   - `src-tauri/src/main.rs`
-   - `src-tauri/src/collector/supervisor.rs`
-   - `src-tauri/src/collector/run_loop.rs`
-   - `src/hooks/useMetrics.ts` and hook tests
-   - `src/sim/mockBackend.ts` and mock-backend tests
-   - `e2e/sim/drivers/RealAppDriver.ts`
-   - `e2e/sim/qualify.spec.ts`
-   - `.github/workflows/release-qualification.yml`
-   - simulation/E2E workflows and release scripts.
-6. Re-run a repo-wide impact audit after reading the recent diff, not just the files named in review comments. Trace state ownership, lifecycle transitions, cleanup paths, event ordering, reload/bootstrap behavior, singleton teardown, installer artifact paths, and the test seams that are supposed to prove each contract.
+Do not substitute a UI redesign, another generic performance sweep, or a new product feature.
 
-## Confirmed Live Defects at the Planned PR Head
+## Required workstreams
 
-These were verified against source at PR head `31f190ce2cf5376388c44a4a45a6ea25d68c1608`. Re-check after fetching because the branch may have moved, but do not dismiss them merely because old tasks are checked.
+### Workstream A — baseline + upstream compatibility matrix
 
-### 1. CRITICAL — Retry and stop flags collide in Tauri managed state
+Build an execution-time matrix for every open dependency PR/package:
 
-`sys-monitor-tauri/src-tauri/src/main.rs` manages two independent `Arc<AtomicBool>` values with `app.manage(...)`: one for `stop_flag`, then another for `retry_request`. Tauri managed state is keyed by Rust type, so two values of the same type cannot represent two independent state entries. `retry_collection` requests `State<'_, Arc<AtomicBool>>`, and the exit path also requests `Arc<AtomicBool>`.
+- current version;
+- generated target version;
+- upstream latest target actually evaluated;
+- migration/breaking notes;
+- MSRV/Node/peer requirements;
+- repository files/APIs affected;
+- initial disposition: Adopt / Supersede / Defer.
 
-This can make the Retry command resolve the stop flag instead of the supervisor's retry request. In the failure state, clicking **Retry metrics** can therefore set stop, cause supervision to transition to stopping, and permanently terminate collection until process restart — the opposite of the campaign's primary recovery contract.
+At minimum research the complete skipped-version migrations for `sysinfo`, `wmi`, `windows`, `nvml-wrapper`, React/React DOM, Vite/plugin-react, TypeScript, jsdom and Tauri v2 packages. Save authoritative source URLs in `evidence.md`.
 
-Required closure:
+Known planning-time facts that MUST be rechecked rather than blindly trusted:
 
-- Introduce distinct managed-state types, e.g. explicit `StopFlag` and `RetryRequest` wrappers around `Arc<AtomicBool>` (or an equally strong typed design).
-- Make `retry_collection` depend on the retry-specific type, and make app-exit shutdown depend only on the stop-specific type.
-- Do not rely on insertion order or duplicate same-type `manage` calls.
-- Fail loudly/assert the expected `manage` registration result where appropriate so a dropped managed state cannot silently recur.
-- Add a regression test that exercises the real command/state wiring sufficiently to prove: from `Failed`, Retry signals the supervisor retry path, produces exactly one replacement generation/session, and **does not** set stop or emit/enter `Stopping` as a consequence of the click.
-- Also retain/cohere the existing retry coalescing behavior outside `Failed`.
+- repo Rust pin is 1.93.1;
+- sysinfo 0.39.x upstream currently documents Rust 1.95 MSRV;
+- current code uses `COMLibrary::new().and_then(WMIConnection::new)` while WMI 0.18's normal documented constructor is `WMIConnection::new()` with connection-managed COM initialization behavior;
+- Vite 8 supports Node 24, so Node 24 does not need to move solely for Vite.
 
-### 2. P1 — Tauri frontend mount still misses managed current collector status
+### Workstream B — fix Dependabot grouping before accepting the queue
 
-`sys-monitor-tauri/src/hooks/useMetrics.ts` currently subscribes to future `collector-status` events but does not bootstrap the existing status with `get_collector_status` on mount/reload.
+The existing config groups all Cargo dependencies and all frontend dev dependencies into broad groups. Replace that with reviewable compatibility domains as specified in `design.md`.
 
-Required closure:
+The result should make future PRs approximately follow these boundaries:
 
-- Fetch and validate the managed current status in addition to installing the event listener.
-- Make listener/fetch ordering race-safe: an event that arrives during bootstrap must not be overwritten by an older fetched status.
-- A webview reload while the supervisor is already persistent `failed` must immediately surface the failed UX and Retry action without waiting for a new event or restarting the native app.
-- Add regression coverage for failed-before-mount, event-during-bootstrap, stale fetch vs newer event, schema mismatch/recovery, cleanup/unmount, and normal healthy bootstrap.
+- collector platform/native: sysinfo/WMI/windows/Nvidia bindings;
+- Tauri runtime/build/plugins;
+- Rust foundation/serialization;
+- React framework (React + DOM + matching types together);
+- Tauri JS packages;
+- build tooling (Vite/plugin-react/TypeScript, with majors isolated when possible);
+- test DOM/tooling;
+- UI/data libraries.
 
-### 3. P2 — First recovered collector poll still occurs before the intended initial deadline
+Do not create excessive update noise just to avoid grouping. The goal is fault isolation, not one PR per transitive patch.
 
-`sys-monitor-tauri/src-tauri/src/collector/run_loop.rs` sets `next_deadline = loop_epoch + TICK_INTERVAL`, but the loop enters the poll body before waiting for that deadline. Baselines are therefore primed and then sampled nearly back-to-back on a fresh/recovered session.
+### Workstream C — Rust toolchain + sysinfo
 
-Required closure:
+If the selected sysinfo version requires Rust 1.95+, move `rust-toolchain.toml` deliberately and keep CI/docs/cache truth coherent.
 
-- Actually wait until the initial deadline before the first poll/commit.
-- Preserve immediate/responsive shutdown, bounded-test semantics, missed-deadline rebasing, cadence telemetry, 1 Hz history gating, and the no-catch-up-burst invariant.
-- Add deterministic regression coverage that would fail if first polling happens immediately after priming.
+Migrate sysinfo across every affected use, not only compiler errors:
 
-### 4. P2 — Mock backend still declares `healthy` before the replacement session emits a snapshot
+- CPU list/brand/vendor projection;
+- disk enumeration, kinds, names and stable keys;
+- network refresh/delta behavior;
+- startup/recovery rate baselines;
+- examples/probes/tests;
+- startup enumeration de-duplication introduced by the prior optimization campaign.
 
-`sys-monitor-tauri/src/sim/mockBackend.ts::start()` currently emits `starting` and then `healthy` immediately after scheduling the interval, before a new-generation snapshot is emitted. Automatic recovery also emits `healthy` before calling `start()`.
+Compare startup/cadence behavior to baseline. Do not reintroduce per-tick/per-profile fresh OS enumeration.
 
-Required closure:
+### Workstream D — WMI migration
 
-- A replacement generation reaches `healthy` only after its first successful snapshot/emission, matching the production first-emit contract.
-- Recovery/error UI must not clear merely because a timer was scheduled.
-- Add tests that prove a dead/non-emitting replacement cannot transition healthy and cannot satisfy recovery journeys.
+Migrate the WMI API while preserving app-owned semantics:
 
-### 5. Release workflow still uses unsupported `artifact-name`
+- session-thread ownership;
+- no unsafe Send/Sync workaround;
+- first core snapshot does not wait for WMI;
+- bounded retry/backoff/diagnostics;
+- successful connection remains session-local;
+- session replacement gets a fresh connection;
+- WMI failure still leaves core metrics and conservative PDH GPU identity visible;
+- GPU vendor-map/raw-query enrichment remains correct.
 
-`.github/workflows/release-qualification.yml` still contains `artifact-name: windows-installers` on `actions/download-artifact` steps. The supported input is `name`.
+Do not blindly preserve the old `COMLibrary` shape if the selected WMI version owns initialization differently. Preserve **behavior**, not obsolete syntax.
 
-The prior hosted lane may have succeeded because recursive discovery and the single-artifact shape tolerated the unsupported input, but warnings and accidental behavior are not a release contract.
+### Workstream E — windows-rs / PDH
 
-Required closure:
+Upgrade windows-rs only with a full safety review of affected PDH FFI. Check all unsafe blocks, handles, status codes, buffers and counter-array conversions. Preserve the cadence collection count and no-catch-up/rate-baseline semantics.
 
-- Replace every unsupported `artifact-name` with the supported `name: windows-installers`.
-- Keep action download paths workspace-relative and consistent with subsequent `run` steps under `defaults.run.working-directory: sys-monitor-tauri`.
-- Validate both MSI and NSIS jobs plus manifest layout using the exact final workflow.
+Clippy `-D warnings`, feature-matrix tests and cadence evidence are mandatory here.
 
-### 6. SECURITY/HARDENING — machine-wide WebView2 debug policy cleanup is not unconditional
+### Workstream F — NVML/NVAPI
 
-`sys-monitor-tauri/e2e/sim/drivers/RealAppDriver.ts` correctly applies the elevated-host HKLM `AdditionalBrowserArguments` fallback before spawn, but `close()` can throw on work-directory cleanup before reaching `removeHklmArgsFallback()`.
+Upgrade `nvml-wrapper` and adapt the actual APIs used. Preserve fail-closed per-device telemetry mapping:
 
-That can leave a machine-wide WebView2 policy containing remote-debugging arguments/origin relaxation behind on non-ephemeral/admin developer hosts.
+- UUID/PCI exact identity first;
+- normalized display name only when unique on both sides;
+- duplicate names never get telemetry by index/first-match guessing;
+- NVAPI single-reading fallback never broadcasts to multiple cards;
+- missing NVML/driver remains graceful.
 
-Required closure:
+Keep physical identical-dual-GPU validation explicitly unqualified if the execution host lacks qualifying hardware. Fixtures are not physical proof.
 
-- Make HKLM policy removal unconditional via a `finally`-style structure that cannot be skipped by browser-close, process-close, work-dir cleanup, assertion, or spawn failure paths.
-- Preserve useful error aggregation: cleanup failures still surface, but security cleanup must run regardless.
-- Ensure policy cleanup also executes if spawn itself throws after policy application.
-- Prefer reading back/logging the policy write result when practical so access-denied vs successful application is diagnosable.
-- Add an injectable/testable seam or focused unit coverage for failure paths, including simulated work-dir deletion failure and spawn failure. Do not require a real persistent HKLM mutation in ordinary unit tests.
-- Remove pointless final retry sleeps if encountered, but do not broaden this into unrelated refactoring.
+### Workstream G — Rust foundation + Tauri/store cross-language boundary
 
-### 7. Mock singleton teardown can be resurrected by stale crash timers
+After the low-level collector domain is green, migrate low-risk Rust foundation packages and then align the Tauri stack:
 
-`src/sim/mockBackend.ts::stop()` clears only the active interval. Crash/recovery timeouts are tracked separately and currently survive `stop()`. The mock backend is a module-level singleton, so an old timeout can fire after unmount, call recovery/start logic, resurrect emission, advance generation, and contaminate the next mount/run.
+- Rust Tauri + tauri-build + tauri-plugin-store;
+- JS `@tauri-apps/api` + plugin-store + CLI.
 
-Required closure:
+Prove all critical commands/events and managed-state semantics:
 
-- `stop()` must clear crash/recovery timeouts as part of teardown.
-- Scheduled crash/recovery callbacks must also refuse to mutate/restart a backend that has been stopped or superseded. Use an explicit stopped/run epoch/generation token or an equally clear mechanism.
-- Test teardown during automatic recovery, teardown during exhaustion staging, remount after teardown, and deterministic singleton state.
+- `get_history`;
+- `get_hardware_profile`;
+- `get_collector_status`;
+- `retry_collection`;
+- `sim_store_override`;
+- `metrics-update`;
+- `collector-status`;
+- `collector-error`;
+- `hardware-profile-ready`;
+- typed StopFlag/RetryRequest independence.
 
-### 8. Retry command documentation is backwards
+Prove settings schema 2 migration, serialized save queue, future-version fail-closed behavior, isolated packaged simulation store and true restart persistence.
 
-The `UseMetricsResult.retryMetrics` comment currently says `'failed'` means the retry was coalesced/ignored. The backend contract returns `Failed` on the honored retry path and returns other current states for coalesced no-ops.
+Do not broaden Tauri capabilities because a migration is inconvenient.
 
-Correct the public/internal documentation and any tests or UX assumptions that encoded the reversed interpretation.
+### Workstream H — React 19
 
-## Workstreams — Execute in Order
+Migrate React + React DOM + their matching type packages coherently. Do not leave mismatched majors and do not bury this inside Vite/TS work.
 
-### Workstream A — Reopen truth before changing code
+Audit/qualify:
 
-1. Fetch/prune and inspect current `main`, PR branch, PR reviews, checks, and merge-base.
-2. Reconcile the campaign branch with latest `main` without losing unrelated changes or `.agent/` infrastructure. No force-push.
-3. Update the active OpenSpec task/evidence state to acknowledge the newly discovered defects. Do **not** leave every task checked while known correctness/security defects remain.
-4. If the current OpenSpec design/spec text needs amendments for typed stop/retry state, bootstrap status race semantics, cleanup guarantees, or mock first-emit/teardown semantics, modify the existing active change rather than opening a competing change.
+- StrictMode effect setup/cleanup;
+- Tauri async listener registration/unlisten;
+- status bootstrap race fence;
+- settings provider singleton behavior;
+- simulation backend start/stop;
+- retry pending/coalescing UX;
+- error boundaries;
+- dnd-kit keyboard and pointer reorder;
+- Recharts cards/memoization and absence of render loops.
 
-### Workstream B — Fix lifecycle correctness at the native/frontend boundary
+Do not adopt React 19 features just for churn. Compatibility is the goal.
 
-Implement the typed stop/retry state separation and command wiring first. Then fix frontend current-status bootstrap and race ordering. Audit every lifecycle transition across Rust → IPC → hook → App UX so `starting/recovering/healthy/failed/stopping` semantics remain coherent across app startup, native recovery, frontend reload, retry, and shutdown.
+### Workstream I — Vite / plugin-react / TypeScript / jsdom / Node types
 
-Tests must target real contracts, not local helper reimplementations. A test that merely duplicates `if state == Failed { signal }` is insufficient; exercise the state registration/command path or extract a typed seam that the actual command uses.
+Stage these so failures remain attributable. Preferred order, subject to real peer constraints:
 
-### Workstream C — Restore truthful timing and simulation semantics
+1. Vite + plugin-react compatible pair;
+2. TypeScript 7 and minimal intentional source/config fixes;
+3. jsdom 30 and test-environment fixes;
+4. Node types aligned to the actual Node 24 runtime.
 
-Fix the initial collector deadline and mock first-emit health transition. Then repair singleton teardown/crash timeout cancellation. Audit simulation recovery journeys so they prove data actually resumes rather than accepting a lifecycle label as proof.
+Search every tsconfig and simulation/E2E config. Do not solve TS 7 diagnostics with broad `any`, `@ts-ignore`, disabled strictness, or skipped files.
 
-Preserve determinism, seeded reproduction, settings isolation, and current user-simulation artifact/reporting behavior.
+Node 24 is the current runtime truth. Change it only if an actually selected dependency requires a different supported runtime.
 
-### Workstream D — Harden installed-binary qualification cleanup and workflow correctness
+### Workstream J — remaining UI/data dependencies
 
-Fix `actions/download-artifact` inputs and RealAppDriver policy cleanup. Preserve the elevated-host WebView2 workaround that made hosted installed-binary qualification possible, but make its lifecycle safe on every path.
+Evaluate Recharts, Lucide and every remaining open dependency PR only after the framework/tooling floor is stable. Adopt when behavior is qualified; otherwise record a specific deferral. Do not leave an unexplained generated PR queue.
 
-Do **not** weaken qualification to mock-only, process-launched-only, or frontend-only checks. The final gate must still exercise the **installed production binary + real Tauri IPC + advancing collector data + isolated settings + representative interaction + clean teardown + uninstall/removal/orphan checks** for MSI and NSIS.
+### Workstream K — CI/action maintenance exposed by the migration
 
-### Workstream E — Deep regression audit across the PR, not only review-comment files
+Inspect hosted annotations. If a pinned action (for example artifact download/upload tooling) now uses an unsupported/deprecated Node runtime and a maintained compatible release exists, update it using a **full immutable commit SHA** and re-qualify artifact behavior.
 
-Because this PR changes 89 files and the campaign was previously declared complete while live defects remained, perform a full-system review of the PR diff and affected code paths before sign-off. At minimum inspect:
+Do not perform broad action churn without evidence. Keep `cargo audit` and npm audits mandatory.
 
-- duplicate/same-type Tauri managed states and command state injection;
-- supervisor stop/retry races and session overlap;
-- first-emit lifecycle ordering;
-- history and rate baseline semantics across recovery;
-- event-listener/bootstrap races on reload;
-- all timers/intervals and singleton teardown paths;
-- all RealAppDriver failure/cleanup paths, process/orphan detection, policy writes/removal, work-dir/settings isolation;
-- installer artifact download/layout/manifests;
-- error handling that can skip security/resource cleanup;
-- stale comments/specs/docs that claim behavior the source does not implement;
-- tests that reproduce implementation logic instead of exercising the production seam.
+## Behavioral invariants — these are hard acceptance boundaries
 
-Fix any newly discovered **Critical/High/P1/P2 correctness or security regression** that is in the blast radius of this campaign. Do not broaden into cosmetic redesign or unrelated dependency modernization.
+Unless you first create an explicit spec migration justified by a real product requirement, preserve all of the following:
 
-### Workstream F — Documentation and evidence reconciliation
+1. **Collector cadence** — monotonic 250 ms live target, 4:1 full-poll ratio, ~1 Hz history commits, no catch-up burst.
+2. **Time/rate truth** — no fabricated startup/recovery zeros/spikes; elapsed timestamps and rate denominators remain truthful.
+3. **Metrics IPC** — schema version 5 and payload meaning unchanged.
+4. **Lifecycle IPC** — schema version 1, supervised recovery budget/backoff and manual retry semantics unchanged.
+5. **Typed Tauri state** — StopFlag and RetryRequest remain distinct; Retry can never become shutdown again.
+6. **Hardware identity** — stable disk/GPU keys, no display-name identity, no silent layout reassignment.
+7. **Nvidia association** — ambiguous devices fail closed; no foreign telemetry.
+8. **WMI degradation** — WMI remains optional enrichment, not core-liveness dependency.
+9. **Settings** — version 2, one shared store, serialized saves, future-version fail closed, corrupt-field fallback, real-store isolation.
+10. **Packaged restart** — new process, real IPC/store, settings restore, advancing metrics, no owned orphan.
+11. **Accessibility/reorder** — keyboard drag and existing accessible states remain certified.
+12. **Security/supply chain** — cargo/npm audit mandatory; GitHub Actions full-SHA pinned.
 
-Reconcile all source-of-truth documents against the final implementation. In particular, inspect `AGENTS.md` and related docs for stale claims about WebView2 automation/CDP and the env-only debug-argument path; the current repository has a real packaged-app CDP qualification path and an elevated-host HKLM fallback. Do not leave contradictory statements.
+A dependency upgrade that violates an invariant is not “done.” Fix it, revert that domain, or defer the target with evidence.
 
-Remove tracked raw CI diagnostic dumps from repository root after extracting durable findings into OpenSpec evidence. The planner observed these raw logs in the PR diff and they should not ship as source artifacts:
+## Validation strategy
 
-- `msi-fail.log`
-- `msi-full.log`
-- `msi-rc4.log`
-- `nsis-full.log`
-- `nsis-rc4.log`
+Run tests progressively rather than stacking ten migrations and discovering the first problem at the end.
 
-If any is intentionally retained, justify it in durable documentation; otherwise delete all of them.
+### After each coherent stage
 
-Update `tasks.md` and `evidence.md` only from actual final results. Prior run IDs remain historical evidence, not proof of the final post-fix head.
+Run the cheapest relevant discriminator: Rust targeted tests/fmt/clippy or TS typecheck/Vitest/build. Keep commits coherent enough to bisect.
 
-### Workstream G — Full local validation
+### After each runtime/framework domain
 
-Run focused regression tests immediately after each subsystem fix, then execute the repository's complete canonical gates from `sys-monitor-tauri/` / `src-tauri/` as appropriate. At minimum:
+Run canonical `verify:rust` or `verify:frontend` plus the relevant E2E/simulation/probe set.
 
-- frontend typecheck (`npx tsc --noEmit`)
-- frontend Vitest suite (`npm test -- --run`)
-- frontend build (`npm run build`)
-- Rust formatting (`cargo fmt -- --check`)
-- Rust tests in every feature lane required by repository verification scripts/policy
-- Rust clippy `--all-targets --all-features -- -D warnings`
-- `cargo audit` under repository policy
-- E2E (`npm run verify:e2e` or current canonical equivalent)
-- simulation mock matrix (`npm run verify:sim` or current canonical equivalent)
-- simulation typecheck (`npm run sim:typecheck`)
-- version consistency gate
-- `openspec validate --all --strict --no-interactive`
-- `git diff --check`
-- `npm run verify:tauri`
-- `npm run verify:packaged`
+### Final local qualification
 
-Use the canonical aggregate verification commands in `package.json`/AGENTS when they supersede individual commands. Do not claim success from partial subsets.
+At final candidate head, from a clean dependency install/build state:
 
-### Workstream H — Hosted CI and release requalification at the final head
+- `npm run verify:full`;
+- `npm run verify:packaged`;
+- full mock simulation;
+- packaged real journeys for healthy metrics, customization roundtrip, sidebar relaunch persistence, restart soak, recovery/lifecycle behavior;
+- cadence probe/checker over the documented qualifying interval;
+- startup/identity focused probes/tests;
+- `cargo audit` + npm audit(s);
+- `openspec validate --all --strict --no-interactive` (or repository-equivalent current syntax);
+- `git diff --check`.
 
-Push coherent commits to the existing PR branch and inspect hosted CI. Fix failures; do not merely report them.
+Do not use a stale built executable. The packaged lane must exercise the final candidate.
 
-Because this continuation changes retry wiring, lifecycle semantics, qualification workflow, and RealAppDriver cleanup, dispatch/run the full release-qualification workflow again at the **final branch head** after all fixes. Require green:
+### Hosted qualification
 
-- regular PR Rust/release lane(s)
-- frontend/E2E lane
-- simulation lane
-- packaged/production executable checks that apply
-- MSI build/install/real-IPC smoke/uninstall qualification
-- NSIS build/install/real-IPC smoke/uninstall qualification
-- artifact-integrity/release manifest job
+Push the branch and obtain final-SHA green results for required Rust/frontend/E2E/mock-sim/build jobs. Then trigger the packaged real-app simulation and MSI/NSIS release qualification when available. Inspect annotations and artifacts, not only green badges.
 
-Record exact final run IDs, job outcomes, relevant artifact names/hashes, and any environment-specific facts in `evidence.md`.
+If you fix anything after hosted qualification, rerun every materially affected required workflow at the new final SHA.
 
-### Workstream I — Review closure, OpenSpec archive, and merge
+## Open dependency PR handling
 
-1. Re-read every unresolved PR #28 review thread after fixes.
-2. Resolve/reply only when the actual code and regression evidence address the thread; do not mechanically resolve comments because CI is green.
-3. Ensure no current Critical/High/P1/P2 thread remains substantively open.
-4. Make OpenSpec task/evidence state truthful.
-5. Sync/archive `production-runtime-recovery-and-release-qualification` according to repository policy **only after** all acceptance criteria are met and final evidence is captured.
-6. Reconcile with the latest `main` again immediately before merge. Preserve planner files and unrelated newer main commits.
-7. Merge PR #28 through the normal PR flow once it is genuinely merge-ready and all required hosted qualification is green. Never force-push or overwrite main.
-8. Verify the remote `main` contains the merged/archived campaign, the final commit SHA is known, and the working tree is clean/up-to-date.
-9. Mark this execution prompt **COMPLETE** (or otherwise transition it per the local planner-handoff convention) so a future `/goal continue` does not restart finished work.
-10. Stop. Do not start Dependabot/React/Vite/TypeScript/Rust dependency-major campaigns in the same run.
+At campaign start, refresh the current queue. Planning observed #20–#27 across frontend/Rust domains. Those numbers may change.
 
-## Constraints / Non-Negotiables
+Do not merge the broad generated branches wholesale. Recreate desired version changes intentionally on the campaign branch, or selectively adopt a generated diff only after proving it is coherent.
 
-- Windows-only backend realities remain valid; do not fake host-bound success.
-- Preserve production behavior outside the campaign blast radius.
-- No force-push, destructive history rewrite, or deletion of unrelated work.
-- No blanket `#[allow]`, swallowed exceptions, disabled gates, `continue-on-error`, mock-only substitutions, or timeout inflation to hide deterministic defects.
-- Do not weaken the collector's 250 ms monotonic cadence / 1 Hz history semantics.
-- Do not compromise settings isolation or touch the developer's real settings store during simulation/qualification.
-- Machine-wide HKLM policy mutation, when needed for elevated WebView2 qualification, must be scoped and unconditionally cleaned up.
-- Keep the app's current unsigned release truthfulness unless actual signing infrastructure exists; do not fabricate signing success.
-- Do not absorb open Dependabot major-version PRs unless a verified release blocker makes a specific dependency change unavoidable; if that occurs, justify it narrowly in evidence.
-- Fix introduced Critical/High regressions before moving on.
-- Prefer durable regression tests that fail on the pre-fix code and validate observable contracts.
+At finalization, record every start-of-campaign dependency PR as one of:
 
-## Acceptance / Completion Gates
+- merged by/through the campaign;
+- superseded and should be closed;
+- recreated under the new Dependabot grouping;
+- intentionally deferred with exact reason/revisit trigger;
+- still blocked by a named external condition.
 
-This campaign is complete only when **all** of the following are true:
+Close/supersede stale PRs through available tooling if authorized. If your environment cannot mutate PR state, put a precise maintainer action list in `evidence.md`.
 
-1. Retry and stop are distinct typed managed states; a Retry from `Failed` demonstrably starts exactly one replacement generation and never sets shutdown/stopping.
-2. Frontend Tauri mount/reload bootstraps the current collector status race-safely; already-failed supervisors expose Retry after reload.
-3. Fresh/recovered collector sessions wait for the real initial tick deadline before first polling/commit.
-4. Mock recovery reports `healthy` only after actual replacement-session data emission.
-5. Mock teardown cancels/invalidates crash timers and cannot resurrect the singleton after unmount/stop.
-6. All release workflow download-artifact steps use supported inputs and correct paths.
-7. WebView2 HKLM debug policy cleanup is unconditional across success, spawn failure, browser/process close failure, and temp-dir cleanup failure.
-8. Retry API/documentation semantics are correct everywhere.
-9. A full PR-wide impact audit finds no remaining campaign-related Critical/High/P1/P2 defect.
-10. Root raw diagnostic logs are removed or explicitly justified.
-11. Docs/specs/task state/evidence match source and actual final execution.
-12. Full local canonical verification is green.
-13. Hosted PR CI is green at the final head.
-14. A new final-head MSI + NSIS installed-production-binary release qualification is green with real IPC/settings/collector assertions and clean teardown/uninstall, and final evidence records exact run IDs/artifacts.
-15. Substantive PR #28 review threads are closed/resolved with code/evidence rather than ignored.
-16. The active OpenSpec change is synced/archived only after truthfully satisfying its requirements.
-17. PR #28 is merged to current `main` without losing newer main/planner infrastructure.
-18. Remote main is verified, final SHA reported, and the repository is left clean with no unpushed completed work.
-19. This prompt is transitioned out of ACTIVE state.
+## What you may defer
 
-## Git / Reporting Requirements
+A package target may be deferred when there is **specific evidence**, such as:
 
-- Use coherent, reviewable commits grouped by defect/workstream; avoid a single opaque mega-commit when multiple independent fixes can be separated safely.
-- Push after meaningful completed slices so hosted checks can validate actual branch state.
-- Never force-push.
-- Before completion, fetch/prune, verify branch/main relationship, and confirm remote state rather than assuming local state.
-- Final report must include:
-  - start and final SHAs;
-  - exact defects fixed, including any additional audit findings;
-  - tests/gates run and results;
-  - final hosted CI/release-qualification run IDs;
-  - OpenSpec archive/sync status;
-  - PR #28 merge status and resulting main SHA;
-  - any genuine remaining host-bound limitation (do not list already-solved items as limitations);
-  - confirmation that worktree/remote are clean and synchronized.
+- selected target cannot build on a deliberately supported Windows/Rust/Node floor;
+- upstream regression breaks a required application contract;
+- peer dependency incompatibility has no supported coherent version set;
+- migration would require an unrelated architecture replacement outside this campaign.
 
-## Executor Instruction
+A deferral must record exact current pin, target evaluated, failure/constraint, upstream reference and revisit trigger. “Too hard” is not evidence.
 
-`/goal continue`
+## Explicitly out of scope
 
-Read repository instructions, this prompt, PR #28, the full current review state, the active OpenSpec change, and the actual Git state. Resume the **first genuinely incomplete requirement** above. Do not generate another planning prompt, do not redo already-proven work unnecessarily, and do not begin a different campaign until this one is fully closed.
+- UI redesign/new product features;
+- unrelated refactoring;
+- telemetry/analytics;
+- cross-platform expansion;
+- physical hotplug/lid/power automation fabrication;
+- claiming dual-identical-GPU physical qualification without hardware;
+- code-signing secret/certificate provisioning;
+- weakening tests/security gates to accept a dependency.
+
+The existing real-lane free-roam pointer-drag exploratory gap is not a blocker; keyboard drag remains the certified reorder interaction unless you independently prove pointer behavior without destabilizing the campaign.
+
+## Review discipline
+
+After migrations are green, perform a focused deep review of every changed source/config/test/workflow file plus its immediate behavioral callers/callees. Search for migration residue:
+
+- TODO/FIXME/HACK;
+- new `unwrap`/`expect`/panic in runtime paths;
+- new/changed `unsafe`;
+- TS suppressions/broad `any`;
+- disabled/quarantined/skipped tests;
+- broadened Tauri capabilities;
+- weakened time/identity/assertion thresholds;
+- duplicated dependency majors or unexpected lockfile downgrades;
+- new audit advisories.
+
+Fix every introduced Critical/High/P1/P2 issue with a regression test before completion.
+
+## Git/commit/reporting requirements
+
+- Work on the campaign branch; do not implement directly on `main`.
+- Keep commits coherent by compatibility domain so regressions can be bisected/reverted.
+- No force-push, destructive reset, history rewrite, production deploy, secret mutation or database reset.
+- Push all work; no local-only evidence.
+- Keep `evidence.md` updated during execution rather than reconstructing everything from memory at the end.
+- At completion, update `progress.md` and only the tracked docs whose version/test/runtime truth changed.
+- Sync/archive OpenSpec through the repository's standard OpenSpec workflow only when tasks and evidence are truthful.
+
+## Completion gates
+
+Do not declare success until all of these are true:
+
+- [ ] actual execution baseline and dependency queue recorded;
+- [ ] Dependabot grouping no longer creates unrelated catch-all major migrations;
+- [ ] selected Rust toolchain satisfies all adopted Rust dependencies;
+- [ ] sysinfo/WMI/windows/NVML migrations preserve collector/time/identity contracts;
+- [ ] all Rust feature combinations remain green;
+- [ ] Tauri Rust+JS/store/CLI versions are coherent and real IPC/settings/restart are proven;
+- [ ] React/DOM/types are coherent and hook/listener/reorder/chart behavior remains green;
+- [ ] Vite/TypeScript/jsdom/tooling migration passes type/unit/build/E2E/simulation gates;
+- [ ] every remaining dependency PR has Adopt/Supersede/Defer disposition;
+- [ ] final clean `verify:full` green;
+- [ ] final `verify:packaged` green;
+- [ ] final mock + packaged real simulation evidence green;
+- [ ] cadence/startup/identity evidence green;
+- [ ] cargo/npm security audits green with no hidden skip;
+- [ ] hosted required workflows green at the final candidate SHA;
+- [ ] MSI/NSIS release qualification green when the mandatory workflow is available;
+- [ ] post-migration deep review found no unresolved introduced Critical/High/P1/P2 issue;
+- [ ] OpenSpec strict validation + `git diff --check` green;
+- [ ] docs/progress/evidence/PR queue tell one final coherent truth;
+- [ ] branch clean and fully pushed.
+
+## Final report format
+
+Your final commit/report must be detailed enough for another agent to audit without rerunning your reasoning. Include:
+
+1. planned baseline → actual start SHA → final SHA;
+2. before/after dependency + Rust/Node version matrix;
+3. Dependabot policy changes;
+4. each compatibility-domain migration and important source adaptations;
+5. regressions/defects found and how each was fixed/pinned by tests;
+6. exact local validation results;
+7. hosted workflow run IDs/results/artifacts;
+8. packaged real-app/restart/cadence evidence;
+9. security audit results;
+10. every Dependabot PR disposition;
+11. intentional deferrals and exact revisit triggers;
+12. physical/external limitations that remain unqualified.
+
+Then push, leave the branch clean, and stop. Do not invent a follow-up feature campaign inside this execution.
