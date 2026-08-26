@@ -277,6 +277,16 @@ export class MockBackend {
   };
   private generation = 0;
   private crashTimeouts: ReturnType<typeof setTimeout>[] = [];
+  /**
+   * Bumped by `stop()` and by every (re)start so scheduled crash/recovery
+   * callbacks can detect they belong to a superseded run. A stale callback
+   * must never mutate or resurrect the singleton — the module-level backend
+   * outlives individual mounts, so an uncancelled timeout could otherwise
+   * restart emission after unmount and contaminate the next run.
+   */
+  private runToken = 0;
+  /** True from a replacement generation's start until its FIRST snapshot emission. */
+  private awaitingFirstEmit = false;
 
   private disks: SimDiskSpec[];
   private gpus: SimGpuSpec[];
@@ -319,31 +329,42 @@ export class MockBackend {
     return this.freezeRemaining > 0;
   }
 
-  /** Starts the emission loop. Idempotent; restarts adjust to the new speed. */
+  /** Starts the emission loop as a NEW generation. Idempotent; halted backends stay halted. */
   start(): void {
     if (this.halted || this.timer !== null) return;
-    const period = timerPeriodMs(this.speed);
-    this.timer = setInterval(() => this.advance(), period);
-    // First live emission marks the synthesized session healthy, mirroring
-    // the supervisor's first-emit transition.
+    this.runToken += 1;
     this.generation += 1;
-    this.emitStatus({ ...this.lifecycle, state: 'starting', generation: this.generation });
+    this.awaitingFirstEmit = true;
     this.emitStatus({
       schema_version: LIFECYCLE_SCHEMA_VERSION,
-      state: 'healthy',
+      state: 'starting',
       generation: this.generation,
       attempt: 0,
       max_attempts: SIM_MAX_ATTEMPTS,
       reason: null,
       timestamp_ms: Date.now(),
     });
+    this.armTimer();
+  }
+
+  /** (Re)arms the interval clock only — no lifecycle transitions. */
+  private armTimer(): void {
+    if (this.timer !== null) return;
+    const period = timerPeriodMs(this.speed);
+    this.timer = setInterval(() => this.advance(), period);
   }
 
   stop(): void {
+    // Invalidate every pending crash/recovery callback BEFORE clearing them,
+    // then clear both the active interval and all staged timers: teardown must
+    // cancel anything capable of restarting the backend.
+    this.runToken += 1;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.clearCrashTimeouts();
+    this.awaitingFirstEmit = false;
   }
 
   onSnapshot(listener: (snap: MetricsSnapshot) => void): void {
@@ -402,6 +423,21 @@ export class MockBackend {
   }
 
   /**
+   * Schedules a crash/recovery callback bound to the current run token. If
+   * `stop()`/`start()` supersedes the run before the delay elapses, the
+   * callback is a verified no-op even if it somehow still fires.
+   */
+  private scheduleCrashCallback(callback: () => void, delayMs: number): void {
+    const token = this.runToken;
+    this.crashTimeouts.push(
+      setTimeout(() => {
+        if (token !== this.runToken) return; // stale callback from a dead run
+        callback();
+      }, delayMs)
+    );
+  }
+
+  /**
    * Synthesizes a session panic with bounded automatic recovery: emissions
    * stop, status walks recovering → healthy, then ticks resume truthfully
    * (the gap between remains a real gap — no fabricated samples).
@@ -419,20 +455,15 @@ export class MockBackend {
       reason,
       timestamp_ms: Date.now(),
     });
-    this.crashTimeouts.push(
-      setTimeout(() => {
+    this.scheduleCrashCallback(
+      () => {
         this.halted = false;
-        this.emitStatus({
-          schema_version: LIFECYCLE_SCHEMA_VERSION,
-          state: 'healthy',
-          generation: this.generation,
-          attempt: 0,
-          max_attempts: SIM_MAX_ATTEMPTS,
-          reason: null,
-          timestamp_ms: Date.now(),
-        });
+        // The replacement generation reports healthy only after its first
+        // successful snapshot (start() arms awaitingFirstEmit), exactly like
+        // the production supervisor's first-emit transition.
         this.start();
-      }, recoverAfterMs)
+      },
+      recoverAfterMs
     );
   }
 
@@ -455,8 +486,8 @@ export class MockBackend {
       timestamp_ms: Date.now(),
     });
     for (let i = 2; i <= attempts; i += 1) {
-      this.crashTimeouts.push(
-        setTimeout(() => {
+      this.scheduleCrashCallback(
+        () => {
           this.generation += 1;
           this.emitStatus({
             schema_version: LIFECYCLE_SCHEMA_VERSION,
@@ -467,14 +498,14 @@ export class MockBackend {
             reason,
             timestamp_ms: Date.now(),
           });
-        }, stageMs * (i - 1))
+        },
+        stageMs * (i - 1)
       );
     }
-    this.crashTimeouts.push(
-      setTimeout(
-        () => {
-          this.halted = true;
-          this.generation += 1;
+    this.scheduleCrashCallback(
+      () => {
+        this.halted = true;
+        this.generation += 1;
           this.emitStatus({
             schema_version: LIFECYCLE_SCHEMA_VERSION,
             state: 'failed',
@@ -487,9 +518,8 @@ export class MockBackend {
           for (const listener of [...this.errorListeners]) {
             listener(`metrics collection failed after ${attempts} recovery attempts — ${reason}`);
           }
-        },
-        stageMs * attempts
-      )
+      },
+      stageMs * attempts
     );
   }
 
@@ -562,12 +592,13 @@ export class MockBackend {
     }
   }
 
-  /** Sets the clock speed factor (restarts the emission timer). */
+  /** Sets the clock speed factor without churning lifecycle state. */
   setSpeed(factor: number): void {
     this.speed = validateSimSpeed(factor);
     if (this.timer !== null) {
-      this.stop();
-      this.start();
+      clearInterval(this.timer);
+      this.timer = null;
+      this.armTimer();
     }
   }
 
@@ -592,7 +623,24 @@ export class MockBackend {
     }
     this.tick += 1;
     this.applyTimeline(this.tick);
+    // A timeline fault may have stopped/halted the loop mid-tick; emitting a
+    // frame afterwards would fake data flowing through a dead session.
+    if (this.halted || this.timer === null) return;
     this.emitSnapshot();
+    if (this.awaitingFirstEmit) {
+      // First successful snapshot of this generation → Healthy. A replacement
+      // that never emits never becomes healthy (timer-scheduled != Healthy).
+      this.awaitingFirstEmit = false;
+      this.emitStatus({
+        schema_version: LIFECYCLE_SCHEMA_VERSION,
+        state: 'healthy',
+        generation: this.generation,
+        attempt: 0,
+        max_attempts: SIM_MAX_ATTEMPTS,
+        reason: null,
+        timestamp_ms: Date.now(),
+      });
+    }
   }
 
   private applyTimeline(tick: number): void {

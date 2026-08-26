@@ -141,6 +141,22 @@ const faultResponse: Journey = {
       return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
     };
 
+    // Probe: record every status/snapshot in order so the journey can prove
+    // healthy is never reported before replacement data actually flows.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __SIM__?: { backend: {
+          onCollectorStatus(cb: (s: { state: string }) => void): void;
+          onSnapshot(cb: () => void): void;
+        } };
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      const log: Array<{ kind: string; state?: string }> = [];
+      w.__recoveryProbe = log;
+      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
+      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
+    });
+
     // Repeated failures exhaust the budget: interruption is reported
     // immediately, then the persistent alert appears with the failure message
     // and an accessible Retry control.
@@ -163,6 +179,12 @@ const faultResponse: Journey = {
     await new Promise((r) => setTimeout(r, 1_500));
     ctx.assert('no-auto-restart', (await page.locator('[data-testid="collector-error-banner"]').count()) === 1, 'failed state persists without automatic restart');
 
+    // Anchor: where the persistent failure was first reported in the probe.
+    const faultIdx = await page.evaluate(() => {
+      const w = window as unknown as { __recoveryProbe?: Array<{ kind: string; state?: string }> };
+      return (w.__recoveryProbe ?? []).findIndex((e) => e.kind === 'status' && e.state === 'failed');
+    });
+
     // Manual retry: one click leaves Failed and live collection resumes.
     await retry.click();
     const cleared = await S.pollUntil(
@@ -173,6 +195,28 @@ const faultResponse: Journey = {
     ctx.assert('retry-clears-failure', cleared, 'failure UI cleared after manual retry');
     const resumed = await S.pollUntil(cpuValue, (v) => v !== held, 15_000);
     ctx.assert('values-resume-after-retry', resumed !== held, `cpu value resumed (${resumed.slice(0, 40)})`);
+
+    // Lifecycle ordering proof: healthy may only be reported AFTER the
+    // replacement generation actually emitted data (timer-scheduled !=
+    // Healthy). The probe log must show starting → snapshot(s) → healthy.
+    const probe = await page.evaluate(() => {
+      const w = window as unknown as {
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      return w.__recoveryProbe ?? [];
+    });
+    const startingIdx = probe.findIndex((e) => e.kind === 'status' && e.state === 'starting');
+    const postRetryHealthy = probe.findIndex(
+      (e, i) => i > Math.max(faultIdx, startingIdx) && e.kind === 'status' && e.state === 'healthy'
+    );
+    const snapsBeforeHealthy = probe
+      .slice(Math.max(faultIdx, startingIdx), postRetryHealthy)
+      .filter((e) => e.kind === 'snapshot').length;
+    ctx.assert(
+      'healthy-only-after-replacement-data',
+      postRetryHealthy > 0 && snapsBeforeHealthy >= 1,
+      `healthy followed actual replacement emission (${snapsBeforeHealthy} snapshots before it)`
+    );
   },
 };
 
@@ -195,6 +239,22 @@ const collectorRecovery: Journey = {
       const text = await page.locator('[data-testid="metric-card-cpu"]').innerText();
       return (text.match(/\d+(?:\.\d+)?%/) ?? [''])[0];
     };
+
+    // Probe: record every status/snapshot in order so the journey can prove
+    // the automatic recovery reports healthy only after real replacement data.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __SIM__?: { backend: {
+          onCollectorStatus(cb: (s: { state: string }) => void): void;
+          onSnapshot(cb: () => void): void;
+        } };
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      const log: Array<{ kind: string; state?: string }> = [];
+      w.__recoveryProbe = log;
+      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
+      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
+    });
 
     // Session panic: emissions stop, recovering status drives the polite banner.
     await S.injectFault(ctx, { kind: 'collector-crash', reason: 'journey synthetic panic', recoverAfterMs: 2_500 });
@@ -222,6 +282,28 @@ const collectorRecovery: Journey = {
     // Live values resume moving after the gap.
     const resumed = await S.pollUntil(cpuValue, (v) => v !== beforeInterruption, 15_000);
     ctx.assert('values-resume-after-recovery', resumed !== beforeInterruption, `cpu value resumed (${resumed.slice(0, 40)})`);
+
+    // Lifecycle ordering proof (automatic path): healthy only AFTER the
+    // replacement generation's first snapshot — never merely because a timer
+    // was scheduled. The probe shows …recovering → starting → snapshot → healthy.
+    const probe = await page.evaluate(() => {
+      const w = window as unknown as {
+        __recoveryProbe?: Array<{ kind: string; state?: string }>;
+      };
+      return w.__recoveryProbe ?? [];
+    });
+    const recoveringIdx = probe.findIndex((e) => e.kind === 'status' && e.state === 'recovering');
+    const autoHealthyIdx = probe.findIndex(
+      (e, i) => i > recoveringIdx && e.kind === 'status' && e.state === 'healthy'
+    );
+    const snapsBeforeAutoHealthy = probe
+      .slice(recoveringIdx + 1, autoHealthyIdx)
+      .filter((e) => e.kind === 'snapshot').length;
+    ctx.assert(
+      'healthy-only-after-replacement-data',
+      recoveringIdx >= 0 && autoHealthyIdx > recoveringIdx && snapsBeforeAutoHealthy >= 1,
+      `automatic healthy followed ${snapsBeforeAutoHealthy} replacement snapshots`
+    );
 
     // The app remains fully usable afterwards: a settings interaction lands and
     // persists through the normal path.
