@@ -162,14 +162,25 @@ export function shouldCommitHistory(onTick: boolean): boolean {
   return onTick;
 }
 
-/** Merge live GPU scalars by stable key, never by display name. */
+/** Merge live GPU scalars by stable key, never by display name.
+ *
+ * Returns `prev` unchanged (same reference) when no util actually differed,
+ * so scalar-only ticks without GPU movement don't invalidate downstream
+ * memos keyed on the latest-GPU map.
+ */
 export function mergeLatestGpu(
   prev: Record<string, number>,
   gpus: Pick<MetricsSnapshot['gpus'][number], 'key' | 'util'>[]
 ): Record<string, number> {
+  let changed = false;
   const next = { ...prev };
-  for (const gpu of gpus) next[gpu.key] = gpu.util;
-  return next;
+  for (const gpu of gpus) {
+    if (next[gpu.key] !== gpu.util) {
+      next[gpu.key] = gpu.util;
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
 }
 
 export function mergeGpuHistory(
@@ -271,6 +282,22 @@ export interface SlicedHistory {
   collectorState: CollectorLifecycleState | null;
 }
 
+/**
+ * Slice one channel using a timestamp range that was derived ONCE for the
+ * whole payload (see the windowed-channels memo in useMetrics). Semantics are
+ * identical to `sliceWindow`: a shorter channel is tail-aligned against the
+ * global ring; an empty channel stays empty; a payload without recorded
+ * timestamps returns the channel untouched.
+ */
+function sliceWithRange<T>(arr: T[], timestampCount: number, range: [number, number] | null): T[] {
+  if (arr.length === 0) return [];
+  if (range === null) return arr;
+  const offset = timestampCount - arr.length;
+  const localStart = Math.max(0, range[0] - offset);
+  const localEnd = Math.min(arr.length, range[1] - offset);
+  return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
+}
+
 /** Append a validated full-tick snapshot to a history payload. */
 export function appendSnapshotToHistory(
   previous: HistoryPayload | null,
@@ -359,10 +386,29 @@ function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
   };
 }
 
+/**
+ * Live events are replayed into a history response that was in flight while
+ * they arrived. Retention is capped well beyond any plausible get_history
+ * round trip (~2 minutes of 4 Hz ticks): capping bounds worst-case memory
+ * (previously up to MAX_HISTORY retained snapshots when history requests kept
+ * failing) and keeps the buffer append amortized O(1) instead of copying the
+ * whole retained array on every event.
+ */
+const MAX_LIVE_EVENT_RETENTION = 512;
+
 interface LiveEvent {
   sequence: number;
   snapshot: MetricsSnapshot;
   timestamp: number;
+}
+
+/** Append one event with amortized O(1) cost; exposed pure for regression tests. */
+export function appendLiveEvent(buffer: LiveEvent[], event: LiveEvent): LiveEvent[] {
+  buffer.push(event);
+  if (buffer.length >= MAX_LIVE_EVENT_RETENTION * 2) {
+    return buffer.slice(-MAX_LIVE_EVENT_RETENTION);
+  }
+  return buffer;
 }
 
 export interface UseMetricsResult {
@@ -373,8 +419,10 @@ export interface UseMetricsResult {
   lifecycle: CollectorStatus | null;
   /**
    * Manual retry for an exhausted recovery budget. Resolves to the resulting
-   * lifecycle state ('failed' means the request was coalesced/ignored), or
-   * null when no backend was reachable.
+   * lifecycle state — matching `retry_collection` exactly: `'failed'` means
+   * the request WAS honored (supervision was failed; a replacement generation
+   * was signaled), any other state means the click was coalesced into a no-op
+   * because collection was not failed. `null` when no backend was reachable.
    */
   retryMetrics: () => Promise<CollectorLifecycleState | null>;
 }
@@ -394,6 +442,13 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const requestGeneration = useRef(0);
   const liveSequence = useRef(0);
   const liveEvents = useRef<LiveEvent[]>([]);
+  /**
+   * Counts every VALID lifecycle status applied to hook state (listener or
+   * bootstrap). The bootstrap fetch uses it as a fence: if any event landed
+   * while the fetch was in flight, the fetched snapshot is necessarily older
+   * than observed reality and is discarded.
+   */
+  const appliedStatusSequence = useRef(0);
 
   // Single composition point for the actionable error surface: a live metric
   // schema fault outranks a lifecycle contract fault, which outranks a failed
@@ -486,10 +541,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       if (snap.on_tick && historyRef.current === null) historyRequestError.current = null;
       syncLoadError();
       const sequence = ++liveSequence.current;
-      liveEvents.current = [
-        ...liveEvents.current.slice(-MAX_HISTORY),
-        { sequence, snapshot: snap, timestamp },
-      ];
+      liveEvents.current = appendLiveEvent(liveEvents.current, { sequence, snapshot: snap, timestamp });
       setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
       setLatestCpu(snap.cpu);
       setLatestGpu((previous) => mergeLatestGpu(previous, snap.gpus));
@@ -517,6 +569,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       // mismatch on this channel.
       lifecycleSchemaError.current = null;
       syncLoadError();
+      appliedStatusSequence.current += 1;
       setLifecycle(status);
       if (status.state === 'healthy') {
         // Actual recovery proof: transient failure/recovery UI clears here and
@@ -528,6 +581,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     const handleCollectorError = (message: string) => setCollectorError(message);
 
     if (isTauri()) {
+      let bootstrapCancelled = false;
       const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
         handleSnapshot(event.payload);
       });
@@ -537,7 +591,30 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       const unlistenStatusPromise = listen<CollectorStatus>('collector-status', (event) => {
         handleCollectorStatus(event.payload);
       });
+
+      // Bootstrap the CURRENT managed status on mount/reload so an already-
+      // failed supervisor surfaces its failed UX and Retry action without
+      // waiting for a new transition event or restarting the app. Dispatched
+      // only after the status listener is attached, so a transition racing the
+      // mount can never fall into the gap between fetch and subscribe.
+      const fenceAtDispatch = appliedStatusSequence.current;
+      void unlistenStatusPromise
+        .then(() => invoke<CollectorStatus>('get_collector_status'))
+        .then((bootstrapped) => {
+          if (bootstrapCancelled) return;
+          // Race fence: a collector-status EVENT applied since dispatch means
+          // the managed snapshot this response captured is older than what we
+          // already rendered — discard it instead of regressing the UI.
+          if (appliedStatusSequence.current !== fenceAtDispatch) return;
+          handleCollectorStatus(bootstrapped);
+        })
+        .catch((error) => {
+          if (bootstrapCancelled) return;
+          console.warn('[useMetrics] get_collector_status failed:', error);
+        });
+
       return () => {
+        bootstrapCancelled = true;
         unlistenMetricsPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenErrorPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenStatusPromise.then((unlisten) => unlisten()).catch(() => undefined);
@@ -557,39 +634,79 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     };
   }, []);
 
-  // Derived windowed slice, memoized so the returned `metrics` object (and
-  // every channel array inside it) keeps a stable identity across renders
-  // that don't change the underlying data — drag start/stop, sidebar
-  // toggles, selector open/close — so downstream chart cards only recompute
-  // when a tick actually landed.
-  const metrics = useMemo<SlicedHistory | null>(() => {
+  // Heavy windowing pass — recomputed ONLY when the committed history or the
+  // selected window changes (1 Hz at most), never on the ~250ms scalar-only
+  // live events. Derives the elapsed-time window range once instead of
+  // re-scanning the timestamp ring per channel (the previous per-event path
+  // ran sliceWindow nine+ times, each with its own linear cutoff scan), and
+  // precomputes each GPU's newest recorded sample so the scalar merge below
+  // never repeats an O(ring) reverse scan per live tick.
+  const windowed = useMemo(() => {
     if (!history) return null;
     const window = Math.max(1, Math.min(MAX_HISTORY, Math.floor(windowSeconds)));
-    const timestamps = sliceWindow(history.timestamps, history.timestamps, window);
+    const tsLen = history.timestamps.length;
+    const range: [number, number] | null =
+      tsLen > 0 && Number.isFinite(window) && window > 0
+        ? timestampWindowRange(history.timestamps, window)
+        : null;
+    const slice = <T>(arr: T[]): T[] => sliceWithRange(arr, tsLen, range);
     return {
-      timestamps,
-      cpu: sliceWindow(history.cpu, history.timestamps, window),
-      latestCpu,
+      timestamps: slice(history.timestamps),
+      cpu: slice(history.cpu),
       cpu_name: history.cpu_name,
       cpu_temp_c: history.cpu_temp_c ?? null,
-      mem: sliceWindow(history.mem, history.timestamps, window),
+      mem: slice(history.mem),
+      disks: history.disks.map((disk) => ({ ...disk, values: slice(disk.values) })),
+      net_recv: slice(history.net_recv),
+      net_sent: slice(history.net_sent),
+      gpus: history.gpus.map((gpu) => {
+        let newest = 0;
+        for (let i = gpu.values.length - 1; i >= 0; i -= 1) {
+          const value = gpu.values[i];
+          if (value != null) {
+            newest = value;
+            break;
+          }
+        }
+        return {
+          key: gpu.key,
+          name: gpu.name,
+          vendor: gpu.vendor,
+          values: slice(gpu.values),
+          temp_c: gpu.temp_c ?? null,
+          nvidia: gpu.nvidia ?? null,
+          newestRecorded: newest,
+        };
+      }),
+    };
+  }, [history, windowSeconds]);
+
+  // Scalar merge — cheap object assembly over the stable windowed channels, so
+  // live scalars (CPU/GPU %, memory GB, error/lifecycle banners) stay fresh at
+  // ~250ms cadence while every heavy slice keeps its identity across the three
+  // non-full ticks between history commits.
+  const metrics = useMemo<SlicedHistory | null>(() => {
+    if (!windowed) return null;
+    return {
+      timestamps: windowed.timestamps,
+      cpu: windowed.cpu,
+      latestCpu,
+      cpu_name: windowed.cpu_name,
+      cpu_temp_c: windowed.cpu_temp_c,
+      mem: windowed.mem,
       mem_used_gb: memGb.used,
       mem_total_gb: memGb.total,
-      disks: history.disks.map((disk) => ({
-        ...disk,
-        values: sliceWindow(disk.values, history.timestamps, window),
-      })),
-      net_recv: sliceWindow(history.net_recv, history.timestamps, window),
-      net_sent: sliceWindow(history.net_sent, history.timestamps, window),
-      gpus: history.gpus.map((gpu) => ({
-        ...gpu,
-        values: sliceWindow(gpu.values, history.timestamps, window),
-        latest: latestGpu[gpu.key] ?? [...gpu.values].reverse().find((value) => value != null) ?? 0,
+      disks: windowed.disks,
+      net_recv: windowed.net_recv,
+      net_sent: windowed.net_sent,
+      gpus: windowed.gpus.map(({ newestRecorded, ...channel }) => ({
+        ...channel,
+        latest: latestGpu[channel.key] ?? newestRecorded,
       })),
       collectorError,
       collectorState: lifecycle?.state ?? null,
     };
-  }, [history, memGb, latestCpu, latestGpu, collectorError, lifecycle, windowSeconds]);
+  }, [windowed, memGb, latestCpu, latestGpu, collectorError, lifecycle]);
 
   return { metrics, historyLoadError, lifecycle, retryMetrics };
 }

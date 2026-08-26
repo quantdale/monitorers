@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   appendToHistory,
+  appendLiveEvent,
   sliceWindow,
   mergeDiskHistory,
   mergeGpuHistory,
@@ -9,7 +10,7 @@ import {
   assertSchemaVersion,
   EXPECTED_SCHEMA_VERSION,
 } from './useMetrics';
-import type { DiskHistory, GpuHistory } from '../types/metrics';
+import type { DiskHistory, GpuHistory, MetricsSnapshot } from '../types/metrics';
 
 // --- appendToHistory ---
 
@@ -35,6 +36,52 @@ describe('appendToHistory', () => {
 
   it('works on an empty array', () => {
     expect(appendToHistory([], 42, MAX_HISTORY)).toEqual([42]);
+  });
+});
+
+// --- sliceWindow ---
+
+// --- appendLiveEvent (bounded live-event retention) ---
+
+function fakeEvent(sequence: number): Parameters<typeof appendLiveEvent>[1] {
+  return {
+    sequence,
+    snapshot: { schema_version: EXPECTED_SCHEMA_VERSION } as MetricsSnapshot,
+    timestamp: sequence,
+  };
+}
+
+describe('appendLiveEvent', () => {
+  it('appends without copying while under the compaction threshold', () => {
+    const buffer = [fakeEvent(1), fakeEvent(2)];
+    const next = appendLiveEvent(buffer, fakeEvent(3));
+    expect(next).toBe(buffer);
+    expect(buffer.map((e) => e.sequence)).toEqual([1, 2, 3]);
+  });
+
+  it('compacts to the newest retention window once past twice the cap', () => {
+    const cap = 512;
+    let buffer: ReturnType<typeof appendLiveEvent> = [];
+    for (let i = 0; i < cap * 2; i += 1) {
+      buffer = appendLiveEvent(buffer, fakeEvent(i));
+    }
+    // At the moment the threshold trips the buffer holds exactly `cap` events...
+    expect(buffer.length).toBe(cap);
+    expect(buffer[0].sequence).toBe(cap);
+    expect(buffer[buffer.length - 1].sequence).toBe(cap * 2 - 1);
+    // ...and continues appending afterwards without further growth.
+    buffer = appendLiveEvent(buffer, fakeEvent(-1));
+    expect(buffer.length).toBe(cap + 1);
+    expect(buffer[buffer.length - 1].sequence).toBe(-1);
+  });
+
+  it('never exceeds a small bounded size regardless of event count', () => {
+    let buffer: ReturnType<typeof appendLiveEvent> = [];
+    for (let i = 0; i < 5000; i += 1) {
+      buffer = appendLiveEvent(buffer, fakeEvent(i));
+    }
+    expect(buffer.length).toBeLessThanOrEqual(1024);
+    expect(buffer[buffer.length - 1].sequence).toBe(4999);
   });
 });
 

@@ -11,6 +11,11 @@ const listeners = new Map<string, (event: { payload: unknown }) => void>();
 let deferredHistory = false;
 let retryInvocations = 0;
 let retryResult: string | null = null;
+// get_collector_status bootstrap controls (null = reject, 'defer' = park).
+type StatusAnswer = { status: CollectorStatus } | { error: Error } | 'defer' | 'unset';
+let collectorStatusAnswer: StatusAnswer = 'unset';
+let collectorStatusRequests: Array<{ resolve: (s: CollectorStatus) => void; reject: (e: Error) => void }> = [];
+let collectorStatusInvokeCount = 0;
 const historyRequests: Array<{ resolve: (payload: HistoryPayload) => void; reject: (error: Error) => void }> = [];
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -44,6 +49,19 @@ vi.mock('@tauri-apps/api/core', () => ({
       retryInvocations += 1;
       if (retryResult !== null) return Promise.resolve(retryResult);
       return Promise.resolve('failed');
+    }
+    if (command === 'get_collector_status') {
+      collectorStatusInvokeCount += 1;
+      if (collectorStatusAnswer === 'unset') {
+        return Promise.reject(new Error('collector status not configured by test'));
+      }
+      if (collectorStatusAnswer === 'defer') {
+        return new Promise<CollectorStatus>((resolve, reject) =>
+          collectorStatusRequests.push({ resolve, reject })
+        );
+      }
+      if ('error' in collectorStatusAnswer) return Promise.reject(collectorStatusAnswer.error);
+      return Promise.resolve(collectorStatusAnswer.status);
     }
     if (deferredHistory) {
       return new Promise<HistoryPayload>((resolve, reject) => historyRequests.push({ resolve, reject }));
@@ -141,6 +159,9 @@ describe('useMetrics (Tauri event wiring)', () => {
     retryInvocations = 0;
     retryResult = null;
     historyRequests.length = 0;
+    collectorStatusAnswer = 'unset';
+    collectorStatusRequests = [];
+    collectorStatusInvokeCount = 0;
   });
 
   afterEach(() => {
@@ -489,6 +510,177 @@ describe('useMetrics (Tauri event wiring)', () => {
       await Promise.resolve();
     });
     expect(result().cpu.at(-1)).toBe(42);
+    unmount();
+  });
+});
+
+// --- Lifecycle bootstrap (get_collector_status on mount/reload) ---
+//
+// Regression coverage for the P1 finding: the Tauri branch used to install
+// listeners without ever fetching the CURRENT managed status, so a webview
+// that mounted/reloaded while supervision was already `failed` showed nothing
+// until the next transition event.
+
+describe('useMetrics lifecycle bootstrap', () => {
+  beforeEach(() => {
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    listeners.clear();
+    historyInvokeError = null;
+    historySchemaVersion = null;
+    deferredHistory = false;
+    retryInvocations = 0;
+    retryResult = null;
+    historyRequests.length = 0;
+    collectorStatusAnswer = 'unset';
+    collectorStatusRequests = [];
+    collectorStatusInvokeCount = 0;
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  /** Drain the microtask queue enough times for listen→invoke→apply chains. */
+  async function flush(times = 6): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < times; i += 1) await Promise.resolve();
+    });
+  }
+
+  it('bootstraps a healthy-before-mount supervisor without any event', async () => {
+    collectorStatusAnswer = { status: status('healthy', { generation: 7 }) };
+    const { lifecycle, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(collectorStatusInvokeCount).toBe(1);
+    expect(lifecycle()?.state).toBe('healthy');
+    expect(lifecycle()?.generation).toBe(7);
+    unmount();
+  });
+
+  it('bootstraps failed-before-mount so the Retry UX is available immediately', async () => {
+    collectorStatusAnswer = {
+      status: status('failed', { generation: 4, attempt: 4, reason: 'budget exhausted' }),
+    };
+    const { lifecycle, result, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(lifecycle()?.state).toBe('failed');
+    expect(lifecycle()?.reason).toBe('budget exhausted');
+    expect(result().collectorState).toBe('failed');
+    unmount();
+  });
+
+  it('bootstraps recovering-before-mount with attempt metadata intact', async () => {
+    collectorStatusAnswer = {
+      status: status('recovering', { generation: 2, attempt: 2, reason: 'tick panicked' }),
+    };
+    const { lifecycle, result, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(lifecycle()?.state).toBe('recovering');
+    expect(result().collectorState).toBe('recovering');
+    unmount();
+  });
+
+  it('an event applied during bootstrap wins over the older fetched status', async () => {
+    collectorStatusAnswer = 'defer';
+    const { lifecycle, unmount } = renderUseMetrics(60);
+    await flush();
+
+    // A live transition lands while the fetch is still in flight.
+    act(() => emit('collector-status', status('healthy', { generation: 9 })));
+    expect(lifecycle()?.generation).toBe(9);
+
+    // The slower fetch resolves with an OLDER managed snapshot — it must be
+    // discarded, not overwrite the newer observed state.
+    await act(async () => {
+      collectorStatusRequests[0].resolve(status('starting', { generation: 8 }));
+      await Promise.resolve();
+    });
+    expect(lifecycle()?.state).toBe('healthy');
+    expect(lifecycle()?.generation).toBe(9);
+    unmount();
+  });
+
+  it('applies the fetched status when no event raced the bootstrap', async () => {
+    collectorStatusAnswer = 'defer';
+    const { lifecycle, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(lifecycle()).toBeNull(); // nothing applied yet
+    await act(async () => {
+      collectorStatusRequests[0].resolve(status('healthy', { generation: 3 }));
+      await Promise.resolve();
+    });
+    expect(lifecycle()?.state).toBe('healthy');
+    expect(lifecycle()?.generation).toBe(3);
+    unmount();
+  });
+
+  it('a malformed bootstrapped lifecycle payload fails visibly and recovers on a valid event', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    collectorStatusAnswer = {
+      status: { ...status('failed'), schema_version: 99 },
+    };
+    const { lifecycle, historyLoadError, unmount } = renderUseMetrics(60);
+    await flush();
+
+    // Fail closed: no lifecycle state, actionable mismatch surfaced.
+    expect(lifecycle()).toBeNull();
+    expect(historyLoadError()).toMatch(/lifecycle schema mismatch/i);
+
+    // Later valid recovery through the still-attached listener.
+    act(() => emit('collector-status', status('recovering', { generation: 5 })));
+    expect(lifecycle()?.state).toBe('recovering');
+    expect(historyLoadError()).toBeNull();
+
+    errorSpy.mockRestore();
+    unmount();
+  });
+
+  it('unmount during bootstrap never applies the late response', async () => {
+    collectorStatusAnswer = 'defer';
+    const { lifecycle, unmount } = renderUseMetrics(60);
+    await flush();
+    unmount();
+    await flush(2);
+    expect(listeners.size).toBe(0); // all listeners detached
+    await act(async () => {
+      collectorStatusRequests[0].resolve(status('failed', { generation: 4 }));
+      await Promise.resolve();
+    });
+    // No crash, no state resurrection — the harness cannot observe stale
+    // updates because the hook instance is gone; assert via listener teardown.
+    expect(lifecycle()).toBeNull();
+  });
+
+  it('remount after failure re-bootstraps the current failed status', async () => {
+    collectorStatusAnswer = {
+      status: status('failed', { generation: 4, attempt: 4, reason: 'exhausted' }),
+    };
+    const first = renderUseMetrics(60);
+    await flush();
+    expect(first.lifecycle()?.state).toBe('failed');
+    first.unmount();
+
+    collectorStatusInvokeCount = 0;
+    const second = renderUseMetrics(60);
+    await flush();
+    expect(collectorStatusInvokeCount).toBe(1); // fresh bootstrap per mount
+    expect(second.lifecycle()?.state).toBe('failed');
+    second.unmount();
+  });
+
+  it('a rejected bootstrap fetch degrades gracefully and events keep working', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    collectorStatusAnswer = { error: new Error('IPC channel closed') };
+    const { lifecycle, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(lifecycle()).toBeNull(); // no bogus state invented
+    expect(warnSpy).toHaveBeenCalled();
+
+    // The listener remains authoritative.
+    act(() => emit('collector-status', status('healthy', { generation: 2 })));
+    expect(lifecycle()?.state).toBe('healthy');
+
+    warnSpy.mockRestore();
     unmount();
   });
 });
