@@ -126,12 +126,19 @@ without gate reduction.
 ## Backlog Ideas
 - [x] CI efficiency: cargo-audit prebuilt install + Playwright Chromium caching
       landed 2026-08-26 (see Completed: performance campaign).
-- [ ] `.cursorrules` §6 could gain a pointer to the simulation platform docs once
-      specs settle further.
-- [ ] Real-lane sim journey for sidebar-order persistence across true relaunch
-      (needs built exe).
+- [x] `.cursorrules` §6 now carries the simulation-platform documentation pointer
+      (production-persistence-and-operational-hardening, 2026-08-26).
+- [x] Real-lane sim journey for sidebar-order persistence across true relaunch:
+      `sidebar-relaunch-persistence` (+ `restart-soak-durability` soak) — found and
+      fixed the destructive sidebar persistence merge on real hardware.
 - [ ] Dual identical-GPU runtime mapping still physically unvalidated (needs
-      qualifying hardware); deterministic fixtures cover identity logic.
+      qualifying hardware); deterministic fixtures cover identity logic. This
+      workstation's single iGPU exposes multiple PDH LUID nodes but does NOT
+      qualify. Related evidenced behavior: hardware discovery can differ between
+      sessions (lazy GPU Engine counters; disk source pre/post WMI) — the sidebar
+      now tolerates that without losing the user's arrangement.
+- [ ] Free-roam pointer-drag reorder on the real lane remains unproven and stays
+      registered (keyboard drag is the certified interaction).
 
 ## Blocked
 - None.

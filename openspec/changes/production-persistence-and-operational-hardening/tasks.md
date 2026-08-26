@@ -17,7 +17,7 @@
 - [x] 3.1 Add `data-sb-id` to `SortableSidebarCard` root (stable semantic ids).
 - [x] 3.2 Add engine steps: `readSidebarIds` (DOM order via `[data-sb-id]`), `waitForSidebarCards(minCount)` (hardware-profile-settled poll).
 - [x] 3.3 Implement real-only journey `sidebar-relaunch-persistence` per the §6 contract: fresh isolated store → settled discovery → record initial ids → keyboard drag reorder → UI order changed → write landed in real settings.json → clean shutdown → new process → discovery settles → order restored exactly → unrelated settings coherent → metrics advancing → close; orphan + isolation guarantees enforced by runner/driver. (Restore contract split into store NON-DESTRUCTION + order-preserving rendered subset after real-hardware discovery variance was observed; see design note.)
-- [ ] 3.4 Local real-lane run against a built exe; capture artifacts (run.jsonl, stderr) proving true relaunch (distinct processes/ports, empty history after relaunch). (In progress: two diagnostic runs done; final green run pending rebuilt exe with drag-ghost fix.)
+- [x] 3.4 Local real-lane run against a built exe; capture artifacts (run.jsonl, stderr) proving true relaunch (distinct processes/ports, empty history after relaunch). Final: **PASS 16/16**; three diagnostic runs documented the production defect + journey fixes above.
 
 ## 4. Restart/settings durability soak (Workstream C)
 
@@ -32,21 +32,21 @@
 
 ## 6. Focused hardening audit (Workstream E)
 
-- [ ] 6.1 Settings/persistence deep review: useSettings paths, plugin-store init, save queue concurrency, corrupt/future-version handling, shutdown-during-write, relaunch loading.
-- [ ] 6.2 Real-app driver review: launch ownership, CDP discovery, process identity, user-data isolation, cleanup ordering, HKLM fallback, repeated use, relaunch semantics.
-- [ ] 6.3 Post-relaunch lifecycle review: status bootstrap ordering, stale event fencing, generation semantics, metrics advancement.
-- [ ] 6.4 CI/supply-chain review: action pins, download verification, cache keys, untrusted-PR implications.
-- [ ] 6.5 Fix any found Critical/High/P1/P2 in-scope defects with regression tests; document findings that are non-issues.
+- [x] 6.1 Settings/persistence deep review: useSettings paths, plugin-store init, save queue concurrency, corrupt/future-version handling, shutdown-during-write (empirical via soak strict-JSON), relaunch loading.
+- [x] 6.2 Real-app driver review: launch ownership, CDP discovery, process identity, user-data isolation, cleanup ordering, HKLM fallback, repeated use, relaunch semantics.
+- [x] 6.3 Post-relaunch lifecycle review: status bootstrap ordering, stale event fencing, generation semantics, metrics advancement (exercised end-to-end by both journeys).
+- [x] 6.4 CI/supply-chain review: action pins (43/43 full-SHA), download verification, cache keys, untrusted-PR implications.
+- [x] 6.5 Found and fixed: destructive sidebar persistence merge (production bug, P2) + drag-time ghost drop — regression-pinned ×7 unit tests; journey-side races hardened. No other Critical/High/P1/P2 defects found in blast radius.
 
 ## 7. Register reconciliation and docs sync
 
-- [ ] 7.1 Update exploratory register: sidebar entry now names the certifying journey; keep/adjust free-roam pointer-drag caveat honestly; preserve hardware-only entries.
-- [ ] 7.2 Reconcile progress.md backlog (sidebar item done; dual-GPU limitation restated truthfully).
+- [x] 7.1 Update exploratory register: sidebar entry now names the certifying journey; keep/adjust free-roam pointer-drag caveat honestly; preserve hardware-only entries.
+- [x] 7.2 Reconcile progress.md backlog (sidebar item done; dual-GPU limitation restated truthfully).
 
 ## 8. Canonical validation and qualification
 
-- [ ] 8.1 Full local gate at final head: `verify:full`, `verify:packaged`, targeted `sim:real` sidebar journey, `verify:version`, `openspec validate --all --strict --no-interactive`, `git diff --check`.
-- [ ] 8.2 Push branch; obtain hosted Windows gates green at final head (rust/frontend/e2e/simulation); release qualification rerun if shared release surfaces changed.
+- [x] 8.1 Full local gate at final head: `verify:full` exit 0; `verify:packaged` PASS; targeted + full `sim:real` green (sidebar 16/16, soak 25/25); `verify:version` consistent; `openspec validate --all --strict --no-interactive` 17/17; `git diff --check` clean.
+- [ ] 8.2 Push branch; obtain hosted Windows gates green at final head (rust/frontend/e2e/simulation); release qualification rerun if shared release surfaces changed. (PR #29 opened; packaged sim dispatch run 32952215490; release-qual dispatch run 32952259607.)
 - [ ] 8.3 Review full diff, hosted annotations, and any PR review threads; fix valid findings with regression coverage.
 
 ## 9. Completion
