@@ -98,7 +98,7 @@ monitorers/
     │   ├── hooks/useMetrics.ts     ← Tauri IPC + state (single source of truth)
     │   ├── hooks/useSettings.ts    ← plugin-store persistence (cardOrder/viewMode/windowSecs…)
     │   ├── hooks/useHardwareProfile.ts, useCardOrderInitialization.ts
-    │   ├── sim/mockBackend.ts      ← scriptable browser mock backend (sine script, __SIM__ faults)
+    │   ├── sim/mockBackend.ts      ← scriptable browser mock backend (sine script, __SIM__ faults; healthy only after a generation's first snapshot; stop() invalidates crash/recovery timers via a run token)
     │   └── components/
     │       ├── MetricCard.tsx       ← main card (default/tile/list views, Recharts AreaChart)
     │       ├── SortableCard.tsx     ← dnd-kit useSortable wrapper around MetricCard
@@ -173,6 +173,10 @@ monitorers/
   2. Lock → `collector::commit()` (pure memory writes, microseconds) → `build_snapshot()` → Unlock
   3. `app_handle.emit("metrics-update", snapshot)` — NOT emit_all (removed in Tauri v2). The loop runs inside a supervised session (`collector/supervisor.rs`): a panic ends the session with `LoopOutcome::Panicked` and bounded automatic recovery replaces it (3 attempts/streak, staged backoff, healthy-reset); `failed` exposes a manual `retry_collection` command.
 
+**Supervised lifecycle — DO NOT violate:**
+- The loop waits at the TOP of each iteration: fresh/recovered sessions prime rate baselines, then wait out the initial tick deadline BEFORE the first poll/commit (never move the wait below the tick body).
+- Tauri managed state is keyed by Rust TYPE. The stop/retry flags are distinct newtypes (`StopFlag`, `RetryRequest` in `main.rs`) registered via `register_lifecycle_flags` (asserts each registration). Two raw `Arc<AtomicBool>` values would alias into one managed value — a Retry click could then set the shutdown flag.
+
 **Violating this by holding the lock during PDH/WMI calls will cause UI jank.**
 
 **PDH handles opened once**: `PdhHandles` created in `CollectorState::new()`, never recreated. Recreating resets rate-counter baselines (first reading always 0%).
@@ -190,6 +194,7 @@ monitorers/
 `useMetrics(windowSeconds)` is the **single source of truth**:
 - `invoke("get_history", { windowSecs })` on mount and on window change → full history snapshot
 - `listen("metrics-update")` → incremental appends via `appendToHistory` / `mergeDiskHistory` / `mergeGpuHistory`
+- On mount/reload it ALSO bootstraps the current managed status via `invoke("get_collector_status")` (after the status listener attaches; an applied-status sequence fence discards fetch responses older than an already-observed event), so an already-failed supervisor shows its failed UX + Retry immediately
 - Returns `SlicedHistory` (windowed view) or `null` while loading
 - `sliceWindow()` clips to the active time range before returning
 

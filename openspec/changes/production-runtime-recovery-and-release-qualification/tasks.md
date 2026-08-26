@@ -59,6 +59,60 @@
 - [x] 9.2 Watch hosted runs; fix failures; capture run IDs/job outcomes/artifacts as evidence below.
 - [x] 9.3 Dispatch release-qualification workflow when permissions permit; attach MSI/NSIS qualification evidence.
 
+## 10. Safety closure (2026-08-26 — reopened by fresh audit + PR review threads)
+
+A planner audit and the hosted review bots found live defects at head `31f190c` despite
+sections 1–9 being checked; the checks below track their actual closure.
+Historical green runs above remain valid evidence FOR THE HEADS THEY RAN AGAINST only.
+
+- [x] 10.1 CRITICAL: retry/stop managed-state collision. Two raw `Arc<AtomicBool>` values were
+      passed to `app.manage()`; Tauri keys state by type, so the second registration was refused
+      silently and BOTH `retry_collection` and the exit path resolved the STOP flag — a Retry
+      click from Failed could stop collection permanently. Fixed with distinct newtype managed
+      state (`StopFlag`, `RetryRequest`) plus a loud-failing `register_lifecycle_flags` seam;
+      regression tests exercise the real MockRuntime command/state seam (distinct resolution,
+      registration-order independence, honored-vs-coalesced contract, and the full Failed → Retry
+      → exactly one replacement generation → first data → Healthy path with stop-flag-stays-false
+      and no Stopping transition).
+- [x] 10.2 P1: frontend mount/reload now bootstraps the CURRENT managed status via
+      `get_collector_status` (dispatched after the status listener attaches), fenced against
+      stale-fetch-overwrites-newer-event races via an applied-status sequence counter; malformed
+      bootstrapped lifecycle payloads fail closed/visibly; cleanup covers unmount-during-bootstrap;
+      remount re-bootstraps. Nine hook-level regression cases added (healthy/failed/recovering
+      before mount, event during bootstrap, stale fetch, schema mismatch + later valid recovery,
+      unmount during bootstrap, remount after failure, rejected fetch degradation).
+- [x] 10.3 P2: `run_collector_loop` now waits until the initial tick deadline BEFORE the first
+      poll/commit (fresh/recovered sessions produced near-zero-delta first readings); regression
+      test fails on pre-fix code (~60–70 ms to first emit) and passes post-fix (≥ 3/4 tick);
+      shutdown responsiveness, rebasing, cadence and telemetry preserved.
+- [x] 10.4 P2: mock backend parity — `healthy` is emitted only AFTER a generation's first
+      successful snapshot (timer-scheduled != healthy), for initial start, automatic recovery and
+      manual retry alike; a dead/non-emitting replacement can never reach healthy; mid-tick fault
+      injection no longer emits a frame through the dead session.
+- [x] 10.5 HIGH: mock singleton teardown — `stop()` cancels the active interval AND all staged
+      crash/recovery timers, and bumps a run token that invalidates any stale callback
+      (defense-in-depth); covered by tests for stop during recovery, stop during exhaustion
+      staging, remount after stop, stale-timeout-after-remount generation ownership.
+- [x] 10.6 P1: release workflow `download-artifact` steps use the supported `name:` input
+      (unsupported `artifact-name:` ignored by the action and only worked by accident of layout).
+- [x] 10.7 SECURITY/HIGH: RealAppDriver HKLM WebView2 debug-policy removal is now unconditional —
+      close() aggregates process-close/work-dir/policy-removal failures instead of letting an
+      earlier failure skip the security cleanup; policy write result is logged (access-denied vs
+      applied diagnosable); injected `HklmPolicyOps` seam enables hive-free unit coverage of write
+      success/access-denied/spawn-failure-after-policy/process-close failure/work-dir deletion
+      failure/normal success. Journey runner surfaces aggregated close failures as run failures.
+- [x] 10.8 DOC: `retryMetrics` contract comment reversed honored/coalesced semantics — corrected;
+      UX/tests audited for inherited assumptions (none found; App.tsx ignores the return value).
+- [x] 10.9 Recovery journeys strengthened with in-page lifecycle probes proving healthy follows
+      actual replacement emission on both the automatic and manual-retry paths.
+- [x] 10.10 Hygiene: tracked raw CI diagnostic dumps removed from the repository root after
+      durable findings were recorded in evidence.md; untracked `msi-rc5.log` deleted.
+- [ ] 10.11 Full local canonical validation green at the fix head (all gates, not a subset).
+- [ ] 10.12 Hosted PR CI green at the final head; full release qualification (MSI + NSIS +
+      manifest) dispatched and green at the final SHA; final run IDs/hashes recorded in evidence.md.
+- [ ] 10.13 PR #28 review threads re-verified at final head and closed against real code/evidence;
+      change archived/synced only after all gates pass.
+
 ## Evidence
 
 Local (2026-08-25, this machine):

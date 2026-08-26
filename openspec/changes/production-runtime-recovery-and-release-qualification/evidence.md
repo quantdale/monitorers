@@ -124,3 +124,53 @@
 - `b919973` docs+test: reconcile instruction files with supervised runtime; de-flake budget tests
 - `be2c109` fix(harness): manifest hashes only the current release version; packaged-lane fixes
 - `120c591` chore: ignore generated release manifest; record local gate evidence in OpenSpec tasks
+
+## Safety closure (2026-08-26) — defects found after the runs above
+
+The green runs recorded above are **historical evidence for the heads they ran
+against only** (`aa36e2f` and earlier). A fresh planner audit plus the PR review
+threads found live defects at head `31f190c`; they were fixed on this date and
+the affected gates are being re-run at the final head (results appended below
+as they land):
+
+1. CRITICAL — retry/stop managed-state collision in main.rs: two raw
+   `Arc<AtomicBool>` values managed by type; the second `manage` was refused
+   silently so `retry_collection` resolved the STOP flag. A Retry click from
+   `failed` could stop collection permanently. Fixed with distinct
+   `StopFlag`/`RetryRequest` newtypes + asserting `register_lifecycle_flags`;
+   regression tests exercise the real MockRuntime command/state seam including
+   the full Failed → Retry → one replacement generation → first data → Healthy
+   path with stop-flag-false and no Stopping transition.
+2. P1 — frontend mount/reload never fetched the current managed status; fixed
+   with a race-fenced `get_collector_status` bootstrap (9 hook regression cases).
+3. P2 — first collector poll fired before the initial tick deadline; loop now
+   waits at the top of every iteration; regression fails pre-fix (~60ms first
+   emit), passes post-fix.
+4. P2 — mock backend reported healthy before any replacement data; parity
+   restored (healthy strictly after first emit) + singleton teardown token;
+   journeys assert the ordering via in-page probes.
+5. HIGH — RealAppDriver could skip machine-wide WebView2 debug-policy removal
+   when work-dir cleanup failed; cleanup now unconditional with aggregated
+   errors and an injectable registry seam covered by unit tests. Journey-runner
+   diagnostics turn any close failure into run failure.
+6. P1 — release workflow download steps used unsupported `artifact-name:`
+   inputs; replaced with supported `name:` everywhere.
+7. DOC — `retryMetrics` contract comment reversed honored/coalesced semantics;
+   corrected across AGENTS.md / CLAUDE.md / .cursorrules / useMetrics.ts.
+8. Hygiene — tracked raw CI diagnostic dumps removed from repo root
+   (msi-fail.log, msi-full.log, msi-rc4.log, nsis-full.log, nsis-rc4.log);
+   their durable findings remain this section + the hosted-validation history
+   below (CDP-unreachable-on-elevated-hosts root cause → HKLM policy channel
+   written before spawn; NSIS dir resolution hardening). Untracked
+   msi-rc5.log deleted.
+
+Also landed en route (found during the audit, same blast radius): reusable PDH
+counter-array scratch buffer + memoized chart/window pipelines (per-tick CPU
+churn), CPU-only startup probe instead of a throwaway full CollectorState,
+borrowed profile reconciliation read per emitted tick.
+
+### Final-head validation (2026-08-26)
+
+- Local gates at fix head: pending (appended when the full suite completes).
+- Hosted CI at final head: pending (run IDs to be recorded).
+- Release qualification (MSI + NSIS + manifest) at final SHA: pending.
