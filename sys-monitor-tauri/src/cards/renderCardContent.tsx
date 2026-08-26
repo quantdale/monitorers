@@ -23,6 +23,10 @@ import {
 const DISK_COLORS = ['#e88246', '#c46be8', '#e8d446', '#46e8d4'];
 const GPU_COLORS = ['#64b4ff', '#78c888', '#e8a050', '#c080e0'];
 
+/** Hoisted so the network card passes an identity-stable yDomain to the
+ * memoized MetricChart (see MetricChart.tsx for why this matters). */
+const Y_DOMAIN_AUTO: [number, 'auto'] = [0, 'auto'];
+
 export interface RenderCardContentParams {
   id: string;
   metrics: SlicedHistory;
@@ -122,7 +126,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         timestamps={metrics.timestamps}
         color="#50d8f0"
         secondaryColor="#e88a50"
-        yDomain={[0, 'auto']}
+        yDomain={Y_DOMAIN_AUTO}
         badge={
           <>
             <span style={{ ...badgeStyle, border: '1px solid rgba(80, 216, 240, 0.55)' }}>↓ {formatThroughput(recv)}</span>

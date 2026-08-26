@@ -149,20 +149,23 @@ function renderUseMetrics(windowSecs: number): RenderResult {
   };
 }
 
+/** Resets every harness knob so a test starts from a pristine IPC mock. */
+function freshIpcMock(): void {
+  (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  listeners.clear();
+  historyInvokeError = null;
+  historySchemaVersion = null;
+  deferredHistory = false;
+  retryInvocations = 0;
+  retryResult = null;
+  historyRequests.length = 0;
+  collectorStatusAnswer = 'unset';
+  collectorStatusRequests = [];
+  collectorStatusInvokeCount = 0;
+}
+
 describe('useMetrics (Tauri event wiring)', () => {
-  beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    listeners.clear();
-    historyInvokeError = null;
-    historySchemaVersion = null;
-    deferredHistory = false;
-    retryInvocations = 0;
-    retryResult = null;
-    historyRequests.length = 0;
-    collectorStatusAnswer = 'unset';
-    collectorStatusRequests = [];
-    collectorStatusInvokeCount = 0;
-  });
+  beforeEach(freshIpcMock);
 
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -522,19 +525,7 @@ describe('useMetrics (Tauri event wiring)', () => {
 // until the next transition event.
 
 describe('useMetrics lifecycle bootstrap', () => {
-  beforeEach(() => {
-    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
-    listeners.clear();
-    historyInvokeError = null;
-    historySchemaVersion = null;
-    deferredHistory = false;
-    retryInvocations = 0;
-    retryResult = null;
-    historyRequests.length = 0;
-    collectorStatusAnswer = 'unset';
-    collectorStatusRequests = [];
-    collectorStatusInvokeCount = 0;
-  });
+  beforeEach(freshIpcMock);
 
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;

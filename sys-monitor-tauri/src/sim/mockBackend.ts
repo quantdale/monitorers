@@ -194,6 +194,23 @@ function gpuKey(gpu: SimGpuSpec, index: number): string {
   return gpu.key ?? `sim_gpu_${hashKey(`${gpu.name}:${index}`).toString(16)}`;
 }
 
+/**
+ * Deterministic Nvidia telemetry for a GPU fixture, honoring explicit
+ * scenario overrides; non-Nvidia fixtures report no Nvidia stats.
+ */
+function nvidiaStatsFor(gpu: SimGpuSpec, index: number): NvidiaTelemetry | null {
+  if (gpu.vendor !== 'nvidia') return null;
+  const id = hashKey(gpuKey(gpu, index));
+  return {
+    temp_c: gpu.nvidia?.temp_c ?? (id % 20) + 50,
+    power_w: gpu.nvidia?.power_w ?? (id % 80) + 40,
+    mem_used_mb: gpu.nvidia?.mem_used_mb ?? 2048,
+    mem_total_mb: gpu.nvidia?.mem_total_mb ?? 6144,
+    fan_speed_pct: gpu.nvidia?.fan_speed_pct ?? 35,
+    clock_mhz: gpu.nvidia?.clock_mhz ?? 2100,
+  };
+}
+
 /** 300-point seed kept identical to the pre-bridge mock (chart cap parity). */
 const MOCK_SEED_POINTS = 300;
 
@@ -700,16 +717,7 @@ export class MockBackend {
         vendor: g.vendor ?? ('unknown' as GpuVendor),
         util: Math.max(0, sinAt(wave, t)),
         temp_c: (hashKey(g.name) % 25) + 40,
-        nvidia: g.vendor === 'nvidia'
-          ? {
-              temp_c: g.nvidia?.temp_c ?? (hashKey(gpuKey(g, index)) % 20) + 50,
-              power_w: g.nvidia?.power_w ?? (hashKey(gpuKey(g, index)) % 80) + 40,
-              mem_used_mb: g.nvidia?.mem_used_mb ?? 2048,
-              mem_total_mb: g.nvidia?.mem_total_mb ?? 6144,
-              fan_speed_pct: g.nvidia?.fan_speed_pct ?? 35,
-              clock_mhz: g.nvidia?.clock_mhz ?? 2100,
-            }
-          : null,
+        nvidia: nvidiaStatsFor(g, index),
       };
     });
 
@@ -782,16 +790,7 @@ export class MockBackend {
           vendor: g.vendor ?? 'unknown',
           values: Array.from({ length: n }, (_, i) => Math.max(0, sinAt(wave, i * dt))),
           temp_c: (hashKey(g.name) % 25) + 40,
-          nvidia: g.vendor === 'nvidia'
-            ? {
-                temp_c: g.nvidia?.temp_c ?? (hashKey(gpuKey(g, index)) % 20) + 50,
-                power_w: g.nvidia?.power_w ?? (hashKey(gpuKey(g, index)) % 80) + 40,
-                mem_used_mb: g.nvidia?.mem_used_mb ?? 2048,
-                mem_total_mb: g.nvidia?.mem_total_mb ?? 6144,
-                fan_speed_pct: g.nvidia?.fan_speed_pct ?? 35,
-                clock_mhz: g.nvidia?.clock_mhz ?? 2100,
-              }
-            : null,
+          nvidia: nvidiaStatsFor(g, index),
           last_seen_ts: now,
         };
       }),
