@@ -184,5 +184,22 @@ run-isolated settings store, clean exit, no orphan processes, developer store
 byte-identical). The packaged run also exercised the new policy diagnosability:
 HKLM write refused (non-elevated host) logged explicitly, env-var channel used.
 
-- Hosted CI at final head: pending (run IDs to be recorded).
-- Release qualification (MSI + NSIS + manifest) at final SHA: pending.
+- Hosted CI at final head `b479409d941a1cea024b0d92b4dae30d3563f8e3` — ALL GREEN:
+  - Rust — verify ✓ + Frontend — verify ✓ + Windows production executable ✓
+    (run 32921490820)
+  - E2E — mock-data harness ✓ (run 32921490844)
+  - Simulation — config lint ✓ + mock lane 16/16 journey runs ✓ (run 32921490834)
+  - Kilo Code review pass at the final head with no new findings;
+    security/snyk pass (2 security tests).
+- Release qualification at the SAME final SHA — run **32922280117** success
+  (workflow_dispatch on the PR branch): Build MSI+NSIS ✓, Qualify MSI
+  (silent install → registry/version verification → installed-binary real-IPC
+  CDP smoke → silent uninstall → clean-removal/orphan assertions) ✓, Qualify NSIS
+  ✓, artifact-integrity manifest ✓. Manifest (downloaded and verified):
+  commitSha b479409d…f8e3, applicationVersion 0.1.4, qualification result
+  `passed`, truthful unsigned status,
+  `System Monitor_0.1.4_x64_en-US.msi` sha256
+  `3168ab193a5b12cd9d97f56727fa7a2db5a85bb63736bcac1e3dcff052aadfe2`,
+  `System Monitor_0.1.4_x64-setup.exe` sha256
+  `e1be8f791e8afed50470e6079a9b316036d14f96bd2e456a4cadb51499845ec3`.
+  Historical run 32867950233 (aa36e2f) remains forensic evidence only.

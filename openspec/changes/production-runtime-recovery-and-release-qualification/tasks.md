@@ -108,9 +108,9 @@ Historical green runs above remain valid evidence FOR THE HEADS THEY RAN AGAINST
 - [x] 10.10 Hygiene: tracked raw CI diagnostic dumps removed from the repository root after
       durable findings were recorded in evidence.md; untracked `msi-rc5.log` deleted.
 - [x] 10.11 Full local canonical validation green at the fix head (all gates, not a subset).
-- [ ] 10.12 Hosted PR CI green at the final head; full release qualification (MSI + NSIS +
+- [x] 10.12 Hosted PR CI green at the final head; full release qualification (MSI + NSIS +
       manifest) dispatched and green at the final SHA; final run IDs/hashes recorded in evidence.md.
-- [ ] 10.13 PR #28 review threads re-verified at final head and closed against real code/evidence;
+- [x] 10.13 PR #28 review threads re-verified at final head and closed against real code/evidence;
       change archived/synced only after all gates pass.
 
 ## Evidence

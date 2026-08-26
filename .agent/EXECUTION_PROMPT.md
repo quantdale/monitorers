@@ -2,7 +2,17 @@
 
 ## Status
 
-**ACTIVE**
+**COMPLETE** (2026-08-26). All acceptance gates satisfied at final head
+`b479409d941a1cea024b0d92b4dae30d3563f8e3`: typed StopFlag/RetryRequest managed state with
+real-seam regression coverage; race-fenced `get_collector_status` mount bootstrap; initial
+tick deadline honored before first poll; mock healthy-only-after-first-emit + run-token
+teardown; supported download-artifact inputs; unconditional WebView2 HKLM policy cleanup with
+injectable seam and unit coverage; corrected retry contract docs. Local canonical validation
+green (`verify:full` + packaged lane), hosted PR CI green, release qualification run
+32922280117 green (MSI + NSIS install/run/uninstall + hashed manifest, result `passed`),
+review threads closed against code/evidence. See
+`openspec/changes/archive/2026-08-26-production-runtime-recovery-and-release-qualification/evidence.md`
+for run IDs and hashes.
 
 This is a corrective continuation of the existing `production-runtime-recovery-and-release-qualification` campaign. **Do not create a competing campaign. Do not start dependency-major upgrade work.** Resume and finish PR #28 from its actual current repository state.
 
