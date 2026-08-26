@@ -297,6 +297,18 @@ export class RealAppDriver implements SimDriver {
     return this.workDir ? join(this.workDir, 'appdata') : null;
   }
 
+  /** The CDP debug port allocated for the CURRENT app process (null pre-launch).
+   *  Freshly allocated per launch, so two launches of one driver instance never
+   *  share a port — journeys use this to prove a genuine second process. */
+  get cdpPort(): number | null {
+    return this.port;
+  }
+
+  /** Path of the executable this driver launches (for process-table assertions). */
+  get appExePath(): string {
+    return this.appExe;
+  }
+
   get appTempRoot(): string | null {
     return this.workDir;
   }

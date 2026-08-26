@@ -104,9 +104,31 @@ export function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
  * discarded and the current stable ids are appended in deterministic profile
  * order rather than attaching an old position to a different device.
  */
-export function migrateLegacySidebarCardOrder(current: string[], profile: HardwareProfile): string[] {
+export function migrateLegacySidebarCardOrder(current: string[], profile?: HardwareProfile): string[] {
   void profile;
   return current.filter((id) => !/^sb_(?:gpu|disk)_\d+$/.test(id));
+}
+
+/**
+ * Non-destructive PERSISTED merge (mirror of the dashboard's
+ * `mergeNewCardIds`): migrates legacy positional ids away and appends newly
+ * discovered ids, but KEEPS saved stable ids that the current discovery pass
+ * did not enumerate. Rendering filters by what is actually present; the
+ * store must not, or a transient discovery gap (e.g. Windows materializes
+ * GPU Engine counters lazily) would permanently rewrite the user's
+ * arrangement out of settings.json.
+ */
+export function persistSidebarCardOrder(current: string[], defaultIds: string[]): string[] {
+  const migrated = migrateLegacySidebarCardOrder(current);
+  const seen = new Set(migrated);
+  const merged = [...migrated];
+  for (const id of defaultIds) {
+    if (!seen.has(id)) {
+      merged.push(id);
+      seen.add(id);
+    }
+  }
+  return merged;
 }
 
 export function mergeSidebarCardOrder(
@@ -158,9 +180,9 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
     if (!profile) return;
     const defaultIds = defaultSidebarCardOrder(profile);
     if (defaultIds.length > 0) {
-      const migrated = migrateLegacySidebarCardOrder(settings.sidebarCardOrder ?? [], profile);
-      const next = mergeSidebarCardOrder(migrated, defaultIds);
-      if (settings.sidebarCardOrder === null || next.join('|') !== settings.sidebarCardOrder.join('|')) {
+      const saved = settings.sidebarCardOrder ?? [];
+      const next = persistSidebarCardOrder(saved, defaultIds);
+      if (settings.sidebarCardOrder === null || next.join('|') !== saved.join('|')) {
         save({ sidebarCardOrder: next });
       }
     }

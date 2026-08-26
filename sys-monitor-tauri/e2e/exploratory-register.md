@@ -52,7 +52,7 @@ The simulation platform (`e2e/sim/`) revisits this register:
 | Battery state change (laptop unplugged / plugged in) | Requires physical power source change; can be simulated at the OS level on some platforms but not deterministically from a webview harness |
 | Lid close/open (laptop sleep/wake) | Requires physical hardware action; cannot be triggered from a webview test |
 | Multi-process launch (run a second instance of the app) | The app has no single-instance guard; a second process would launch a second window. This is testable but was deemed low-value since the app doesn't enforce single-instance behavior |
-| Sidebar card reorder on the mock lane (dashboard reorder is drivable) | The browser harness has no hardware profile, so sidebar cards never render; sidebar reorder stays real-lane-only (see the 2026-08-21 update above) |
+| Sidebar card reorder on the mock lane (dashboard reorder is drivable) | The browser harness has no hardware profile, so sidebar cards never render there; the REAL lane certifies ordering across a true relaunch via the automated `sidebar-relaunch-persistence` journey (see the 2026-08-26 update above) |
 
 ## Scenarios converted to driven E2E (see e2e/tests/)
 

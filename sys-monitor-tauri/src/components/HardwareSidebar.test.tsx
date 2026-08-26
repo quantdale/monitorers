@@ -7,6 +7,7 @@ import {
   defaultSidebarCardOrder,
   mergeSidebarCardOrder,
   migrateLegacySidebarCardOrder,
+  persistSidebarCardOrder,
 } from './HardwareSidebar';
 import type { HardwareProfile } from '../hooks/useHardwareProfile';
 
@@ -71,6 +72,31 @@ describe('mergeSidebarCardOrder', () => {
   it('leaves order untouched when nothing changed', () => {
     const current = ['sb_cpu', 'sb_memory', 'sb_network'];
     expect(mergeSidebarCardOrder(current, ['sb_cpu', 'sb_memory', 'sb_network'])).toEqual(current);
+  });
+});
+
+// --- persistSidebarCardOrder (non-destructive store merge) ---
+
+describe('persistSidebarCardOrder', () => {
+  it('keeps saved stable ids the current discovery pass did not enumerate', () => {
+    // Regression pin: Windows materializes GPU Engine counters lazily, so a
+    // session can legitimately discover fewer adapters than the previous one.
+    // Rendering hides absent cards, but the STORE must retain them or a
+    // transient discovery gap permanently rewrites the user's arrangement.
+    const saved = ['sb_cpu', 'sb_gpu_0x1', 'sb_memory', 'sb_disk_c', 'sb_network'];
+    const nowDiscovered = ['sb_cpu', 'sb_memory', 'sb_network'];
+    expect(persistSidebarCardOrder(saved, nowDiscovered)).toEqual(saved);
+  });
+
+  it('appends newly discovered ids and still drops legacy positional ids once', () => {
+    const saved = ['sb_cpu', 'sb_gpu_3', 'sb_memory']; // sb_gpu_3 is legacy positional
+    const discovered = ['sb_cpu', 'sb_gpu_0xa', 'sb_memory'];
+    expect(persistSidebarCardOrder(saved, discovered)).toEqual(['sb_cpu', 'sb_memory', 'sb_gpu_0xa']);
+  });
+
+  it('persists the full default set on first run (null-equivalent empty saved)', () => {
+    const defaults = ['sb_cpu', 'sb_gpu_a', 'sb_memory', 'sb_network'];
+    expect(persistSidebarCardOrder([], defaults)).toEqual(defaults);
   });
 });
 
@@ -144,6 +170,33 @@ describe('HardwareSidebar (render)', () => {
     expect(container.textContent).toContain('Intel Core i7');
     expect(container.textContent).toContain('GeForce RTX 4050');
     expect(container.textContent).toContain('Samsung SSD 970');
+  });
+
+  it('exposes stable semantic ids in rendered order via [data-sb-id]', () => {
+    // Regression pin for the real-lane sidebar-relaunch journey: the sim
+    // engine reads this attribute to assert RENDERED ordering (and its
+    // restoration across a true process relaunch) — if the attribute drifts,
+    // that journey fails blind and this pin explains why.
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    const p = profile({
+      gpus: [{ key: 'gpu-nvidia', name: 'GeForce RTX 4050', vendor: 'Nvidia', kind: 'Discrete' }],
+      disks: [{ key: 'disk-c', name: 'C:', kind: 'Ssd' }],
+    });
+
+    act(() => {
+      root = createRoot(container);
+      root.render(React.createElement(HardwareSidebar, { open: true, profile: p, memTotalGb: null }));
+    });
+
+    const ids = Array.from(container.querySelectorAll('[data-sb-id]')).map((n) => n.getAttribute('data-sb-id'));
+    expect(ids).toEqual([
+      'sb_cpu',
+      'sb_gpu_gpu-nvidia',
+      'sb_memory',
+      'sb_disk_disk-c',
+      'sb_network',
+    ]);
   });
 
   it('shows "Detecting hardware…" while profile is null', () => {

@@ -7,7 +7,6 @@ import type { Persona } from '../types';
 export const GLANCER: Persona = {
   id: 'glancer',
   description: 'Quick looks: short sessions, defaults, minimal interaction, occasionally mis-clicks.',
-  sessionLengthSecs: [30, 90],
   thinkTimeMs: [250, 900],
   dwellTimeMs: [1200, 4000],
   actionPreference: {
@@ -28,7 +27,6 @@ export const GLANCER: Persona = {
 export const CUSTOMIZER: Persona = {
   id: 'customizer',
   description: 'Personalizes the dashboard and verifies persistence across relaunches.',
-  sessionLengthSecs: [120, 420],
   thinkTimeMs: [400, 1400],
   dwellTimeMs: [1800, 6000],
   actionPreference: {
@@ -49,7 +47,6 @@ export const CUSTOMIZER: Persona = {
 export const SENTINEL: Persona = {
   id: 'sentinel',
   description: 'Long watch: minutes-long sessions, wide windows, tolerant of faults (retry).',
-  sessionLengthSecs: [600, 1800],
   thinkTimeMs: [800, 2500],
   dwellTimeMs: [8000, 30000],
   actionPreference: {

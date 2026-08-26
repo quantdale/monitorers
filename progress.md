@@ -3,8 +3,10 @@
 ## Current Goal
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TS frontend) in
 `sys-monitor-tauri/`, kept in a spec-driven flow (`openspec/`). Current phase:
-production-runtime-recovery-and-release-qualification — supervised collector recovery,
-typed lifecycle IPC, packaged-app qualification, and MSI/NSIS install qualification.
+post-feature hardening (`production-persistence-and-operational-hardening`) —
+repository-truth convergence, real-lane sidebar relaunch persistence
+certification, bounded restart/settings durability soak, and CI efficiency
+without gate reduction.
 
 ## Agent Rules
 - Do not ask questions unless truly blocked.
@@ -15,12 +17,15 @@ typed lifecycle IPC, packaged-app qualification, and MSI/NSIS install qualificat
 - Run tests, lint, or build when available.
 - Do not run destructive commands, force pushes, production deploys, or database resets.
 
-## Status snapshot (2026-08-26, PR #28 safety closure in progress)
+## Status snapshot (2026-08-26, post-PR #28 hardening)
 - Authoritative quick reference: root `AGENTS.md`. Supervisor lifecycle, recovery
   policy, status contract (`LIFECYCLE_SCHEMA_VERSION = 1`), retry semantics (honored
   ONLY while failed — a `Failed` answer never means ignored), and the
   qualification lanes are documented there; `CLAUDE.md` / `.cursorrules` were
   re-reconciled on 2026-08-26.
+- PR #28 (supervised recovery, typed lifecycle IPC, packaged qualification,
+  MSI/NSIS release qualification) is COMPLETE: merged, archived, hosted green.
+  Historical evidence lives in its archived change; it is not active work.
 - Safety closure at the post-audit head: typed `StopFlag`/`RetryRequest` managed
   state (the two raw `Arc<AtomicBool>` registrations used to alias — Retry could
   hit shutdown), race-fenced `get_collector_status` bootstrap on mount/reload,

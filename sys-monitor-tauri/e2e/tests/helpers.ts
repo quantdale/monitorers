@@ -61,19 +61,6 @@ export async function chartLatestTimestamp(page: Page, id: string): Promise<numb
   return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-latest-ts'));
 }
 
-/**
- * Asserts a card's chart keeps growing at ~1 point per second (the 1 Hz
- * history commit cadence), with generous tolerance for render timing.
- */
-export async function assertChartGrowth(page: Page, id: string, seconds = 6): Promise<void> {
-  const before = await chartPointCount(page, id);
-  await page.waitForTimeout(seconds * 1000);
-  const after = await chartPointCount(page, id);
-  const expected = seconds; // 1 Hz commits
-  const tolerance = Math.max(2, Math.ceil(expected * 0.5));
-  expect(Math.abs(after - before - expected)).toBeLessThanOrEqual(tolerance);
-}
-
 /** Asserts a card's displayed value changes at least `minChanges` times. */
 export async function assertUpdatesAtLeast(
   page: Page,

@@ -16,12 +16,9 @@
  */
 import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { RealAppDriver } from './drivers/RealAppDriver';
-
-const execFileAsync = promisify(execFile);
+import { assertNoOrphanProcesses } from './drivers/processGuard';
 
 const APP_EXE =
   process.env.SIM_APP_EXE ?? 'src-tauri/target/release/sys-monitor-tauri.exe';
@@ -35,20 +32,9 @@ function assertBuiltExe(): string {
   return APP_EXE;
 }
 
-async function assertNoOrphanProcesses(): Promise<void> {
-  const exeName = join(APP_EXE).replace(/\\/g, '/').split('/').pop() ?? '';
-  const { stdout } = await execFileAsync('tasklist', [
-    '/FI',
-    `IMAGENAME eq ${exeName}`,
-    '/FO',
-    'CSV',
-    '/NH',
-  ]);
-  const rows = stdout.trim();
-  expect(
-    rows.includes(exeName),
-    `orphaned packaged-app processes must not survive the run:\n${rows}`
-  ).toBe(false);
+async function assertNoOrphanAppProcesses(): Promise<void> {
+  // Shared with the simulation runner's real-lane teardown guard.
+  await assertNoOrphanProcesses(APP_EXE);
 }
 
 test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) => {
@@ -181,7 +167,7 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
 
     // ── 5. Clean exit; no orphaned processes; real store untouched ──
     await driver.close();
-    await assertNoOrphanProcesses();
+    await assertNoOrphanAppProcesses();
     await driver.selfTest();
 
     console.log('[qualify] PASS: real IPC, live data, isolated settings, clean exit');

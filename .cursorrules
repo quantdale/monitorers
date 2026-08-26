@@ -325,6 +325,13 @@ workflow covers all supported feature combinations plus a Windows no-bundle
 Tauri build; E2E and mock simulation are required PR checks, and MSI/NSIS
 bundles run for tags/manual dispatch.
 
+### Simulation platform pointer
+
+The user-simulation platform (personas × journeys × drivers, mock + packaged
+CDP lanes, exploratory-register discipline) is specified in
+`openspec/specs/user-simulation-platform/spec.md` with runner knobs documented
+in root `AGENTS.md`; this file intentionally does not duplicate it.
+
 ---
 
 ## 7. Build, Dev & Deployment
