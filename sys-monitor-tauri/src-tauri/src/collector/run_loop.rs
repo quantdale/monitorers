@@ -98,7 +98,14 @@ impl WmiBootstrap {
             && Instant::now() >= self.next_attempt
         {
             self.attempts += 1;
-            match wmi::COMLibrary::new().and_then(wmi::WMIConnection::new) {
+            // wmi 0.18 removed `COMLibrary`: `WMIConnection::new()` initializes
+            // COM itself (CoIncrementMTAUsage, MTA) when needed and never
+            // uninitializes COM on drop. The app-level semantics are unchanged:
+            // construction still happens here on the collector session thread,
+            // the !Send connection never leaves it, core PDH/sysinfo metrics do
+            // not wait for this call (poll() runs between ticks), failures stay
+            // bounded by the attempt budget + exponential backoff below.
+            match wmi::WMIConnection::new() {
                 Ok(connection) => {
                     eprintln!("[WMI] Background thread connection initialized (MTA).");
                     self.connection = Some(connection);
