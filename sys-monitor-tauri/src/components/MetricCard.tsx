@@ -1,8 +1,8 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
-import { computeChartPoints } from '../chartPoints';
+import { computeChartPoints, type ChartPoint } from '../chartPoints';
 import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
@@ -72,21 +72,49 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
-  const data = hasChart
-    ? computeChartPoints({
-        history: history!,
-        timestamps,
-        secondaryHistory: hasSecondary ? secondaryHistory : undefined,
-        maxPoints: MAX_CHART_POINTS,
-      })
-    : [];
-  const chartMetadata = {
-    'data-chart-point-count': data.length,
-    'data-chart-gap-count': data.filter((point) => point.v == null).length,
-    'data-chart-start-ts': data[0]?.t ?? '',
-    'data-chart-latest-ts': data[data.length - 1]?.t ?? '',
-    'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
-  };
+
+  // Resampling a full ring (up to MAX_HISTORY=3600 samples) down to chart
+  // points runs per card on every render. The channel arrays keep stable
+  // identities across scalar-only live ticks (see useMetrics' windowed
+  // memo), so keying this memo on them skips the extrema resample for the
+  // three non-full ticks between history commits and after unrelated
+  // re-renders (drag, sidebar toggles) — it only recomputes when that
+  // series' data or alignment actually changed.
+  const chart = useMemo(() => {
+    if (!hasChart) {
+      return {
+        data: [] as ChartPoint[],
+        metadata: {
+          'data-chart-point-count': 0,
+          'data-chart-gap-count': 0,
+          'data-chart-start-ts': '' as string | number,
+          'data-chart-latest-ts': '' as string | number,
+          'data-chart-span-ms': 0,
+        },
+      };
+    }
+    const data = computeChartPoints({
+      history: history!,
+      timestamps,
+      secondaryHistory: hasSecondary ? secondaryHistory : undefined,
+      maxPoints: MAX_CHART_POINTS,
+    });
+    return {
+      data,
+      metadata: {
+        'data-chart-point-count': data.length,
+        'data-chart-gap-count': data.filter((point) => point.v == null).length,
+        'data-chart-start-ts': data[0]?.t ?? '',
+        'data-chart-latest-ts': data[data.length - 1]?.t ?? '',
+        'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- secondaryHistory only participates when hasSecondary is true
+  }, [history, hasSecondary ? secondaryHistory : undefined, timestamps]);
+  const { data, metadata: chartMetadata } = chart;
+
+  // List-view min/max scans the whole window per render; same identity-based skip.
+  const listMinMax = useMemo(() => historyMinMax(history ?? []), [history]);
 
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
@@ -106,7 +134,7 @@ export function MetricCard({
   );
 
   if (viewMode === 'list') {
-    const { min, max } = historyMinMax(history ?? []);
+    const { min, max } = listMinMax;
     const displayValue = listViewValue ?? value;
     const displayMinMax = listViewMinMax ?? `Min: ${min.toFixed(1)}%  Max: ${max.toFixed(1)}%`;
 
