@@ -1,4 +1,6 @@
 [toolchain]
-channel = "1.93.1"
+# 1.95 is the MSRV of sysinfo 0.39.x (adopted by the
+# dependency-runtime-modernization campaign); keep components minimal.
+channel = "1.95.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
