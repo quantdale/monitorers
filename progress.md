@@ -47,6 +47,11 @@ typed lifecycle IPC, packaged-app qualification, and MSI/NSIS install qualificat
 - [x] 2026-08-21 hardening pass reconciliation (see git history).
 - [x] 2026-08-25 supervised collector recovery + lifecycle contract + recovery UX.
 - [x] 2026-08-25 packaged qualification lane + MSI/NSIS release-qualification CI.
+- [x] 2026-08-26 PR #28 safety closure: typed stop/retry managed state, race-fenced
+      status bootstrap, initial-deadline wait, mock first-emit parity + teardown token,
+      workflow artifact inputs, unconditional WebView2 policy cleanup, retry-doc fix;
+      hosted CI + MSI/NSIS release qualification green at b479409 (run 32922280117);
+      change archived; PR merged.
 
 ## Backlog Ideas
 - [ ] CI efficiency: `rust.yml` compiles `cargo-audit` from source every Windows

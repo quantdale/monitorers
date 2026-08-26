@@ -1,4 +1,9 @@
-## MODIFIED Requirements
+## REMOVED Requirements
+
+### Requirement: Collector panic halts metrics permanently until relaunch
+**Reason**: Superseded by supervised bounded recovery (`collector-supervision`): a panic ends one session, not collection. Fail-stop behavior no longer exists in production or documentation.
+
+## ADDED Requirements
 
 ### Requirement: Collector panic triggers supervised recovery instead of permanent halt
 When a collector session's tick body (or its bootstrap) panics, the application SHALL surface exactly one legacy `collector-error` event for diagnostics, end that session, and the supervisor SHALL replace it per the bounded recovery policy (`collector-supervision`). The frontend SHALL keep last-known card values visible during automatic recovery, SHALL show the transient recovering state, and SHALL clear failure UI only on actual recovery proof (a `healthy` status) or via the manual Retry metrics control after budget exhaustion.
