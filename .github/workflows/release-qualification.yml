@@ -125,7 +125,7 @@ jobs:
       - name: Download installers
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          artifact-name: windows-installers
+          name: windows-installers
           # download-artifact resolves relative to the workspace root while job
           # steps run inside sys-monitor-tauri/; land it inside the default cwd.
           path: sys-monitor-tauri/installers
@@ -228,7 +228,7 @@ jobs:
       - name: Download installers
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          artifact-name: windows-installers
+          name: windows-installers
           # download-artifact resolves relative to the workspace root while job
           # steps run inside sys-monitor-tauri/; land it inside the default cwd.
           path: sys-monitor-tauri/installers
@@ -379,7 +379,7 @@ jobs:
       - name: Download installers
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          artifact-name: windows-installers
+          name: windows-installers
           path: sys-monitor-tauri/bundle-artifacts
 
       - name: Generate signed-hash manifest
