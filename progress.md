@@ -3,10 +3,11 @@
 ## Current Goal
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TS frontend) in
 `sys-monitor-tauri/`, kept in a spec-driven flow (`openspec/`). Current phase:
-post-feature hardening (`production-persistence-and-operational-hardening`) —
-repository-truth convergence, real-lane sidebar relaunch persistence
-certification, bounded restart/settings durability soak, and CI efficiency
-without gate reduction.
+NONE — no active implementation or hardening work remains. The 2026-08-26
+`production-persistence-and-operational-hardening` campaign is complete
+(archived under `openspec/changes/archive/`); the repository is in a truthful
+post-campaign steady state. Remaining items are explicitly hardware-bound or
+registered exploratory scenarios, not actionable software TODOs.
 
 ## Agent Rules
 - Do not ask questions unless truly blocked.
@@ -122,6 +123,19 @@ without gate reduction.
       tradeoff, needs CI timing data), frontend history-append copies
       (deliberate immutability design at 1Hz), get_history lock scope
       (microseconds).
+
+- [x] 2026-08-26 production-persistence-and-operational-hardening (PR #29):
+      real-lane `sidebar-relaunch-persistence` journey (true process relaunch,
+      PASS 17/17 hosted) + `restart-soak-durability` (3-cycle soak, 25/25);
+      found+fixed destructive sidebar persistence merge and drag-time ghost
+      drop (production bugs on real hardware); runner-wide orphan-process
+      guard; cargo-audit install 5m14.5s -> ~3.3s per Windows CI run (Rust job
+      10m56s -> ~6m11s), audit still mandatory at pinned 0.22.1 via SHA-pinned
+      prebuilt action; repository truth converged (WebView2 automation claims,
+      progress headers, .cursorrules sim pointer, schema docs verified 5/5 +
+      1/1); hosted final-head gates all green incl. MSI/NSIS release
+      qualification; PR review findings (strip restore, probe totals pairing,
+      restore-contract spec) closed with fixes.
 
 ## Backlog Ideas
 - [x] CI efficiency: cargo-audit prebuilt install + Playwright Chromium caching

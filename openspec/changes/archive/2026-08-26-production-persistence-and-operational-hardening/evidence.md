@@ -139,8 +139,15 @@ Recorded after the full gate completed — see §9 for hosted results.
 | rust.yml — Rust / Frontend / Windows production executable | `32956962281` | success (6m11s / 29s / 7m38s) |
 | e2e.yml — mock-data harness | `32956962288` | success |
 | simulation.yml — config lint + mock lane (PR) | `32956962301` | success (16 journeys green) |
-| simulation.yml — packaged lane (dispatch) | `32956986920` | success — real-lane journeys on windows-latest: first-launch-onboarding glancer 9/9, customizer 16/16; customization-roundtrip both personas 9/9; **sidebar-relaunch-persistence 16/16**; **restart-soak-durability 25/25** |
-| release-qualification.yml (dispatch) | `32956990487` | success — MSI install/run/uninstall, NSIS install/run/uninstall, signed-hash manifest |
+| simulation.yml — packaged lane (dispatch) | `32959735876` @ `30d3dba` | success — real-lane journeys on windows-latest: first-launch-onboarding glancer 7/7, customizer 14/14; customization-roundtrip both personas 9/9; **sidebar-relaunch-persistence 17/17** (exact-equality branch exercised); **restart-soak-durability 25/25** |
+| release-qualification.yml (dispatch) | `32959741283` @ `30d3dba` | success — MSI install/run/uninstall, NSIS install/run/uninstall, signed-hash manifest |
+
+PR #29 required checks at final head `a72a8d0`: Rust verify 5m19s, Frontend verify,
+Windows production executable 7m18s, E2E mock harness, Simulation lint+mock lane,
+Kilo Code Review, Snyk — ALL PASS (`gh pr checks 29`). The `a72a8d0` delta is
+test-file-only (no packaged-app or installer input), so the `30d3dba`
+dispatch evidence remains valid for the shipped artifact; PR-triggered gates
+re-ran at the true final head.
 
 ### Hosted-run defect loop (fixed within this campaign)
 

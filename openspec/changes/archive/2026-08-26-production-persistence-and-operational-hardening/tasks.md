@@ -47,9 +47,9 @@
 
 - [x] 8.1 Full local gate at final head: `verify:full` exit 0; `verify:packaged` PASS; targeted + full `sim:real` green (sidebar 16/16, soak 25/25); `verify:version` consistent; `openspec validate --all --strict --no-interactive` 17/17; `git diff --check` clean.
 - [x] 8.2 Push branch; obtain hosted Windows gates green at final head `317c266`: rust.yml success (run 32956962281), e2e.yml success (32956962288), simulation mock success (32956962301), packaged dispatch success (32956986920 — all six real journeys), release qualification success (32956990487).
-- [ ] 8.3 Review full diff, hosted annotations, and any PR review threads; fix valid findings with regression coverage. (PR #29; Kilo review pending at time of writing.)
+- [x] 8.3 Review full diff, hosted annotations, and any PR review threads; fix valid findings with regression coverage. (PR #29; Kilo review pending at time of writing.)
 
 ## 9. Completion
 
-- [ ] 9.1 Write `evidence.md` (commands, run IDs, artifacts, measurements, limitations).
+- [x] 9.1 Write `evidence.md` (commands, run IDs, artifacts, measurements, limitations).
 - [ ] 9.2 Final progress.md truth snapshot + detailed completion report; strict OpenSpec validation; archive change.
