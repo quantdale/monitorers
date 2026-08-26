@@ -43,6 +43,29 @@ import { ClassifiedSimulationError } from '../errors';
 export const APP_IDENTIFIER = 'com.quantdale.systemmonitor';
 
 /**
+ * Injectable seam for the machine-wide WebView2 args policy so unit tests can
+ * exercise every failure path WITHOUT touching a real HKLM hive.
+ */
+export interface HklmPolicyOps {
+  /** Applies the value; throws on failure (e.g. access denied). */
+  write(key: string, valueName: string, data: string): void;
+  /** Removes the value; throws on failure. */
+  remove(key: string, valueName: string): void;
+}
+
+/** Production registry channel via reg.exe (synchronous, stdio captured). */
+export const RegHklmPolicyOps: HklmPolicyOps = {
+  write(key, valueName, data) {
+    execFileSync('reg.exe', ['add', key, '/v', valueName, '/t', 'REG_SZ', '/d', data, '/f'], {
+      stdio: 'pipe',
+    });
+  },
+  remove(key, valueName) {
+    execFileSync('reg.exe', ['delete', key, '/v', valueName, '/f'], { stdio: 'pipe' });
+  },
+};
+
+/**
  * WebView2 Runtime ≥150 ignores `WEBVIEW2_*` environment variables when the
  * host app process runs elevated (High IL) — a documented security hardening
  * (MicrosoftEdge/WebView2Feedback #5640/#5645; GitHub-hosted Windows runners
@@ -63,6 +86,8 @@ export interface RealDriverOptions {
   extraEnv?: Record<string, string>;
   /** Keep the temp work dir after close (for triage). Debug helper. */
   keepWorkDir?: boolean;
+  /** Registry seam override (tests only). Defaults to RegHklmPolicyOps. */
+  hklmOps?: HklmPolicyOps;
 }
 
 export function resolveAppExe(explicit?: string): string {
@@ -255,6 +280,7 @@ export class RealAppDriver implements SimDriver {
   private port: number | null = null;
   private appStderrPath: string | null = null;
   private hklmArgsValueWritten = false;
+  private readonly hklmOps: HklmPolicyOps;
   private lastExitInfo: string | null = null;
   private realSettingsPath: string | null = null;
   private realSettingsBefore: FileState | null = null;
@@ -262,6 +288,7 @@ export class RealAppDriver implements SimDriver {
 
   constructor(options: RealDriverOptions = {}) {
     this.options = options;
+    this.hklmOps = options.hklmOps ?? RegHklmPolicyOps;
     this.appExe = resolveAppExe(options.appExe);
   }
 
@@ -371,35 +398,47 @@ export class RealAppDriver implements SimDriver {
   /**
    * Elevated-host channel for the debug switches (see WV2_ARGS_POLICY_KEY).
    * Best-effort: access denied on non-admin hosts is fine because there the
-   * WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable is honored. The value name
-   * `*` applies to every WebView2 host on the machine, which is acceptable for
-   * an ephemeral runner and bounded here by removal in close().
+   * WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable is honored. The write is
+   * logged either way so access-denied vs successful application is
+   * diagnosable from run output. The value name `*` applies to every WebView2
+   * host on the machine, which is acceptable for an ephemeral runner and
+   * bounded by UNCONDITIONAL removal in close().
+   *
+   * MUST be called before spawn: if the value lands after the WebView2 loader
+   * has created its environment, runtime ≥150 restarts the browser process
+   * over the flag change and tears down the just-established debug server.
    */
-  private applyHklmArgsFallback(): void {
-    if (process.platform !== 'win32') return;
+  private applyHklmArgsFallback(): boolean {
+    if (process.platform !== 'win32') return false;
     const args = this.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
-    if (!args) return;
+    if (!args) return false;
     try {
-      execFileSync(
-        'reg.exe',
-        ['add', WV2_ARGS_POLICY_KEY, '/v', '*', '/t', 'REG_SZ', '/d', args, '/f'],
-        { stdio: 'pipe' },
-      );
+      this.hklmOps.write(WV2_ARGS_POLICY_KEY, '*', args);
       this.hklmArgsValueWritten = true;
-    } catch {
+      console.log('[RealAppDriver] HKLM WebView2 args policy applied before spawn');
+    } catch (error) {
       this.hklmArgsValueWritten = false;
+      console.warn(
+        `[RealAppDriver] HKLM WebView2 args policy not applied (${String(error)}); relying on WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+      );
     }
+    return this.hklmArgsValueWritten;
   }
 
+  /**
+   * SECURITY-CRITICAL teardown: removes the machine-wide debug/origin policy.
+   * Called from close() OUTSIDE every fallible path so neither process-close,
+   * work-directory, nor assertion failures can skip it; its own failure is
+   * returned to the caller for aggregation, never swallowed.
+   */
   private removeHklmArgsFallback(): void {
     if (!this.hklmArgsValueWritten) return;
     try {
-      execFileSync('reg.exe', ['delete', WV2_ARGS_POLICY_KEY, '/v', '*', '/f'], { stdio: 'pipe' });
-    } catch {
-      // Ephemeral runners make a failed cleanup harmless; never mask close()
-      // errors over it either.
+      this.hklmOps.remove(WV2_ARGS_POLICY_KEY, '*');
+    } finally {
+      // One removal attempt per written value; never re-enter on retry loops.
+      this.hklmArgsValueWritten = false;
     }
-    this.hklmArgsValueWritten = false;
   }
 
   /** How the spawned app process ended so far, for failure diagnostics. */
@@ -436,7 +475,8 @@ export class RealAppDriver implements SimDriver {
     await this.launch(runId, { version: 1 }, outDir);
   }
 
-  private async closeProcess(): Promise<void> {
+  /** Protected so tests can simulate process-close failures. */
+  protected async closeProcess(): Promise<void> {
     let closeError: unknown = null;
     if (this.browser) {
       try {
@@ -469,43 +509,66 @@ export class RealAppDriver implements SimDriver {
     if (closeError) throw new Error(`RealAppDriver: browser close failed: ${String(closeError)}`);
   }
 
+  /**
+   * Removes the run's temp work dir. Protected so tests can simulate Windows
+   * file-locking failures without real WebView2 handles.
+   */
+  protected async cleanupWorkDir(): Promise<void> {
+    if (!this.workDir || !this.ownsWorkDir || this.options.keepWorkDir) return;
+    // WebView2 may still hold handles for a while after process death
+    // (icon DB, cache flushes, GPU process teardown); a short bounded
+    // retry loop absorbs Windows file locking without leaking temp dirs.
+    let removed = false;
+    let lastCleanupError: unknown = null;
+    for (const delayMs of [250, 500, 1_000, 2_000, 4_000]) {
+      try {
+        rmSync(this.workDir, { recursive: true, force: true });
+        removed = true;
+        break;
+      } catch (error) {
+        lastCleanupError = error;
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    if (!removed && lastCleanupError !== null) {
+      throw lastCleanupError;
+    }
+    this.workDir = null;
+    this.ownsWorkDir = false;
+  }
+
+  /**
+   * Full teardown, structured as a resource lifecycle with AGGREGATED errors:
+   *
+   *   apply temporary policy (launch) → qualify → remove policy (always)
+   *
+   * The machine-wide HKLM debug/origin policy is removed on EVERY path —
+   * success, spawn failure, browser/process close failure, work-directory
+   * deletion failure — because it runs outside those fallible steps and its
+   * own failure is aggregated rather than allowed to mask or skip the rest.
+   */
   async close(): Promise<void> {
-    let closeError: unknown = null;
+    const failures: string[] = [];
     try {
       await this.closeProcess();
     } catch (error) {
-      closeError = error;
+      failures.push(`process close failed: ${String(error)}`);
     }
     try {
-      if (this.workDir && this.ownsWorkDir && !this.options.keepWorkDir) {
-        // WebView2 may still hold handles for a while after process death
-        // (icon DB, cache flushes, GPU process teardown); a short bounded
-        // retry loop absorbs Windows file locking without leaking temp dirs.
-        let removed = false;
-        let lastCleanupError: unknown = null;
-        for (const delayMs of [250, 500, 1_000, 2_000, 4_000]) {
-          try {
-            rmSync(this.workDir, { recursive: true, force: true });
-            removed = true;
-            break;
-          } catch (error) {
-            lastCleanupError = error;
-            await new Promise((r) => setTimeout(r, delayMs));
-          }
-        }
-        if (!removed && lastCleanupError !== null) {
-          throw lastCleanupError;
-        }
-        this.workDir = null;
-        this.ownsWorkDir = false;
-      }
+      await this.cleanupWorkDir();
+    } catch (error) {
+      failures.push(`work directory cleanup failed: ${String(error)}`);
+    }
+    try {
+      // Security cleanup LAST so nothing above can skip it; a failure here
+      // still surfaces in the aggregated error below.
       this.removeHklmArgsFallback();
     } catch (error) {
-      closeError = closeError
-        ? new Error(`${String(closeError)}; work directory cleanup failed: ${String(error)}`)
-        : error;
+      failures.push(`WebView2 debug-policy removal failed: ${String(error)}`);
     }
-    if (closeError) throw closeError;
+    if (failures.length > 0) {
+      throw new Error(`RealAppDriver: close completed with failures — ${failures.join('; ')}`);
+    }
   }
 
   /**
