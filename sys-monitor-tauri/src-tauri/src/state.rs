@@ -130,8 +130,18 @@ impl CollectorState {
         #[cfg(feature = "nvml")]
         let nvml = crate::collector::nvidia::init_nvml();
 
+        // Degraded startup profile built WITHOUT any extra OS enumeration: the
+        // CPU identity comes from the System refreshed above and the disk list
+        // from the Disks enumerated above (the old path re-probed both via
+        // hardware::detect(None, None, None), adding ~5ms of duplicate OS work
+        // per session start). GPU discovery is empty here because PDH-based
+        // detection runs in run_session_body once physical disks are resolved;
+        // that call now REUSES this CPU identity instead of re-enumerating.
+        let cpu_identity = crate::hardware::CpuIdentity::from_sysinfo(&system);
+        let disk_infos = crate::hardware::disk_infos_from(&disks);
+
         CollectorState {
-            profile: crate::hardware::detect(None, None, None),
+            profile: crate::hardware::detect_with_cpu(None, None, Some(disk_infos), &cpu_identity),
             pdh,
             system,
             sysinfo_disks: disks,

@@ -40,6 +40,16 @@ nvml = ["nvml-wrapper"]
 
 [profile.release]
 opt-level = 3
-lto = true
+# Thin local LTO instead of fat: the poller's hot path is PDH/WMI/NVML FFI
+# bound and gains nothing user-observable from cross-crate inlining, while fat
+# LTO's serial whole-crate codegen dominated every release build. Measured on
+# the dev workstation (warm dependency cache; "Compiling sys-monitor-tauri" →
+# Finished wall time, which is exactly the phase CI re-pays per build):
+#   lto=true,  codegen-units=1    4m45s   exe 9,122,816 B
+#   lto="thin", codegen-units=1   3m15s   exe 9,419,776 B   ← adopted (-32%)
+#   lto="thin", codegen-units=16  2m22s   exe 10,225,152 B  (+12% size)
+# codegen-units stays 1: cu=16 saves another ~50s per build but grows the
+# shipped binary another ~800KB with no runtime benefit — flip only if release
+# build minutes ever outweigh artifact size for this app.
+lto = "thin"
 codegen-units = 1
-strip = true

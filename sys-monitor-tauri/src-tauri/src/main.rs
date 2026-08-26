@@ -6,9 +6,7 @@ use std::sync::Arc;
 use sys_monitor_tauri::collector::{
     physical_disk_list, run_collector_loop, LoopOutcome, MetricsSnapshot, WmiBootstrap,
 };
-use sys_monitor_tauri::hardware::{
-    classify_gpu, detect, DiskInfo, DiskKind, GpuInfo, HardwareProfile,
-};
+use sys_monitor_tauri::hardware::{classify_gpu, DiskInfo, DiskKind, GpuInfo, HardwareProfile};
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use sys_monitor_tauri::{
@@ -284,7 +282,15 @@ fn run_session_body(
                 .collect(),
         )
     };
-    collector_state.profile = detect(Some(&collector_state.pdh), None, disk_infos.clone());
+    // Re-detect with PDH-derived GPUs, reusing the CPU identity the fresh
+    // CollectorState already resolved (no second CPU enumeration) and the
+    // physical-disk list resolved above.
+    collector_state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
+        Some(&collector_state.pdh),
+        None,
+        disk_infos.clone(),
+        &collector_state.profile.cpu_identity(),
+    );
     let profile = &collector_state.profile;
     println!(
         "[HardwareProfile] CPU: {:?} — {}",
@@ -332,7 +338,12 @@ fn run_session_body(
             // WMI enrichment becomes available independently of the core loop.
             // The connection remains on this session MTA thread for all future
             // polls.
-            state.profile = detect(Some(&state.pdh), Some(wmi), disk_infos.clone());
+            state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
+                Some(&state.pdh),
+                Some(wmi),
+                disk_infos.clone(),
+                &state.profile.cpu_identity(),
+            );
             let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
             shared.profile = Some(state.profile.clone());
             drop(shared);

@@ -18,7 +18,7 @@ use sys_monitor_tauri::cadence::{check_records, parse_jsonl, CadenceRecord};
 use sys_monitor_tauri::collector::{
     physical_disk_list, run_collector_loop, LoopLimit, WmiBootstrap,
 };
-use sys_monitor_tauri::hardware::{detect, DiskInfo, DiskKind};
+use sys_monitor_tauri::hardware::{DiskInfo, DiskKind};
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeHistoryStore};
 
@@ -104,7 +104,12 @@ fn main() {
                     .collect(),
             )
         };
-        collector_state.profile = detect(Some(&collector_state.pdh), None, disk_infos.clone());
+        collector_state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
+            Some(&collector_state.pdh),
+            None,
+            disk_infos.clone(),
+            &collector_state.profile.cpu_identity(),
+        );
 
         let store = SafeHistoryStore::new(HistoryStore::new(&cpu_name));
         let mut registry = SensorRegistry::new();
