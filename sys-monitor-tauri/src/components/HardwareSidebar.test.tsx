@@ -5,6 +5,7 @@ import { act } from 'react-dom/test-utils';
 import { HardwareSidebar } from './HardwareSidebar';
 import {
   defaultSidebarCardOrder,
+  mergeDraggedSidebarOrder,
   mergeSidebarCardOrder,
   migrateLegacySidebarCardOrder,
   persistSidebarCardOrder,
@@ -97,6 +98,29 @@ describe('persistSidebarCardOrder', () => {
   it('persists the full default set on first run (null-equivalent empty saved)', () => {
     const defaults = ['sb_cpu', 'sb_gpu_a', 'sb_memory', 'sb_network'];
     expect(persistSidebarCardOrder([], defaults)).toEqual(defaults);
+  });
+});
+
+// --- mergeDraggedSidebarOrder (drag keeps ghost devices) ---
+
+describe('mergeDraggedSidebarOrder', () => {
+  it('appends saved-but-undiscovered ids instead of dropping them on drag', () => {
+    // Regression pin: dragging while a device is transiently absent must not
+    // shrink the store — ghosts reappear when discovery recovers.
+    const moved = ['sb_memory', 'sb_cpu', 'sb_network'];
+    const previouslySaved = ['sb_cpu', 'sb_gpu_x', 'sb_memory', 'sb_network'];
+    const renderedBefore = ['sb_cpu', 'sb_memory', 'sb_network'];
+    expect(mergeDraggedSidebarOrder(moved, previouslySaved, renderedBefore)).toEqual([
+      'sb_memory',
+      'sb_cpu',
+      'sb_network',
+      'sb_gpu_x',
+    ]);
+  });
+
+  it('adds nothing when every saved id was rendered', () => {
+    const moved = ['sb_memory', 'sb_cpu'];
+    expect(mergeDraggedSidebarOrder(moved, ['sb_cpu', 'sb_memory'], ['sb_cpu', 'sb_memory'])).toEqual(moved);
   });
 });
 

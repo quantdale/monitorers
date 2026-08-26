@@ -151,6 +151,21 @@ export function mergeSidebarCardOrder(
   return merged;
 }
 
+/**
+ * Merge a drag result with the previously-saved order WITHOUT dropping ids
+ * that were temporarily undiscovered at drag time (ghost devices): the moved
+ * rendered sequence wins for present devices, ghosts keep their store
+ * presence appended so the arrangement survives transient discovery gaps.
+ */
+export function mergeDraggedSidebarOrder(
+  movedRendered: string[],
+  previouslySaved: string[],
+  renderedBefore: string[]
+): string[] {
+  const ghosts = previouslySaved.filter((id) => !renderedBefore.includes(id));
+  return [...movedRendered, ...ghosts];
+}
+
 interface Props {
   open: boolean;
   profileState?: HardwareProfileState;
@@ -199,7 +214,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
       const oldIndex = cardOrder.indexOf(active.id as string);
       const newIndex = cardOrder.indexOf(over.id as string);
       if (oldIndex >= 0 && newIndex >= 0) {
-        save({ sidebarCardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
+        const moved = arrayMove(cardOrder, oldIndex, newIndex);
+        save({
+          sidebarCardOrder: mergeDraggedSidebarOrder(moved, settings.sidebarCardOrder ?? [], cardOrder),
+        });
       }
     }
   }

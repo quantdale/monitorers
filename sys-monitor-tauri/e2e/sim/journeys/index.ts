@@ -645,18 +645,26 @@ const sidebarRelaunchPersistence: Journey = {
     ctx.assert('reorder-applied-in-ui', JSON.stringify(reordered) !== JSON.stringify(initial),
       `rendered order changed ${initial.join(',')} -> ${reordered.join(',')}`);
 
-    // The new order must land in the run-isolated REAL settings store.
-    await S.waitForPersistedSettings(ctx, (s) => JSON.stringify(s.sidebarCardOrder) === JSON.stringify(reordered), 10_000);
-    const persisted = await S.persistedSettings(ctx);
-    const savedOrder = persisted.sidebarCardOrder as string[];
-    ctx.assert('persisted-sidebar-order', JSON.stringify(savedOrder) === JSON.stringify(reordered),
-      'sidebarCardOrder written to the isolated settings.json');
+    // The rendered order must land in the run-isolated REAL settings store.
+    // Consistency is checked against the LIVE DOM, not a one-shot snapshot:
+    // WMI/PDH enrichment can append newly discovered ids milliseconds after
+    // the drag, so store-vs-stale-snapshot equality would race (observed on
+    // real hardware). Once DOM and store agree, capture the saved order for
+    // the post-relaunch non-destruction check.
+    const settled = await S.pollUntil(async () => {
+      const domNow = await S.readSidebarIds(ctx);
+      const storeNow = await S.persistedSettings(ctx);
+      return { dom: domNow, store: storeNow.sidebarCardOrder };
+    }, ({ dom, store }) => JSON.stringify(store) === JSON.stringify(dom), 12_000, 400);
+    const savedOrder = Array.isArray(settled.store) ? (settled.store as string[]) : null;
+    ctx.assert('persisted-sidebar-order',
+      !!savedOrder && JSON.stringify(savedOrder) === JSON.stringify(settled.dom),
+      `store ${JSON.stringify(settled.store)} matches rendered ${settled.dom.join(',')}`);
 
     const portBefore = driver.cdpPort ?? -1;
 
     // ── True relaunch: driver kills the process and spawns a NEW one ──
     await S.restartApp(ctx);
-
     ctx.assert('first-process-exited', !!driver.appExitInfo && /exited/.test(driver.appExitInfo),
       String(driver.appExitInfo));
     ctx.assert('fresh-cdp-port-after-relaunch', (driver.cdpPort ?? -1) !== portBefore,
@@ -686,21 +694,22 @@ const sidebarRelaunchPersistence: Journey = {
     //       (a filtered subset must never be written back over it);
     //   (2) ORDER PRESERVATION: rendered ids are a relative-order-preserving
     //       subset of the saved order (equal discovery reduces to equality).
+    const refOrder = savedOrder ?? reordered;
     const storeAfter = S.readRealStoreFile(ctx);
     const storedOrder = (storeAfter.parsed?.sidebarCardOrder as string[] | undefined) ?? null;
     ctx.assert('restored-store-non-destructive',
-      Array.isArray(storedOrder) && JSON.stringify(storedOrder) === JSON.stringify(savedOrder),
-      `store kept ${JSON.stringify(storedOrder)} should equal pre-restart ${JSON.stringify(savedOrder)}`);
+      Array.isArray(storedOrder) && JSON.stringify(storedOrder) === JSON.stringify(refOrder),
+      `store kept ${JSON.stringify(storedOrder)} should equal pre-restart ${JSON.stringify(refOrder)}`);
 
     let cursor = 0;
     const orderPreserved = restoredDom.every((id) => {
-      const at = savedOrder.indexOf(id, cursor);
+      const at = refOrder.indexOf(id, cursor);
       if (at < 0) return false;
       cursor = at + 1;
       return true;
     });
     ctx.assert('restored-sidebar-order-preserved', orderPreserved && restoredDom.length >= 3,
-      `rendered ${restoredDom.join(',')} is an order-preserving subset of saved ${savedOrder.join(',')}`);
+      `rendered ${restoredDom.join(',')} is an order-preserving subset of saved ${refOrder.join(',')}`);
 
     // Unrelated persisted settings remain coherent.
     const storeFile = S.readRealStoreFile(ctx);
