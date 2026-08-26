@@ -53,8 +53,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Install pinned cargo-audit
-        run: cargo install cargo-audit --version 0.22.1 --locked --quiet
+      # Prebuilt official rustsec release instead of `cargo install` — installing
+      # from source recompiled cargo-audit's whole dependency tree on every run of
+      # this job (~minutes of pure compilation); the download takes seconds.
+      # Version stays pinned at 0.22.1 exactly as before.
+      # v2.86.7 — b6ff580856c41316412a0b9b60540fbc6f8c82cc
+      - name: Install pinned cargo-audit (prebuilt)
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
+        with:
+          tool: cargo-audit@0.22.1
 
       - name: Run canonical Rust gate
         run: npm run verify:rust

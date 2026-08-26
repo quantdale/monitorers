@@ -38,6 +38,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Reuse the downloaded Chromium across runs; the lockfile key captures the
+      # pinned @playwright/test version (and with it the browser build). On a
+      # miss the install step below repopulates the cache as before.
+      # v6.1.0 — 55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('sys-monitor-tauri/package-lock.json') }}
+
       - name: Install Playwright browsers (chromium)
         run: npx playwright install chromium
 
