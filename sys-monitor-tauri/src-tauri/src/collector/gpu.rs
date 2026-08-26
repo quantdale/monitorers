@@ -20,10 +20,9 @@ pub enum GpuClass {
 pub fn extract_luid_from_name(name: &str) -> Option<String> {
     let after_luid = if let Some(pos) = name.find("_luid_") {
         &name[pos + 6..]
-    } else if let Some(stripped) = name.strip_prefix("luid_") {
-        stripped
     } else {
-        return None;
+        // `strip_prefix` yields None for names without the legacy prefix.
+        name.strip_prefix("luid_")?
     };
 
     let parts: Vec<&str> = after_luid.splitn(3, '_').collect();
