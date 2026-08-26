@@ -517,17 +517,21 @@ export class RealAppDriver implements SimDriver {
     if (!this.workDir || !this.ownsWorkDir || this.options.keepWorkDir) return;
     // WebView2 may still hold handles for a while after process death
     // (icon DB, cache flushes, GPU process teardown); a short bounded
-    // retry loop absorbs Windows file locking without leaking temp dirs.
+    // retry ladder absorbs Windows file locking without leaking temp dirs.
+    // Delays sit BETWEEN attempts — a hard failure pays no trailing sleep.
     let removed = false;
     let lastCleanupError: unknown = null;
-    for (const delayMs of [250, 500, 1_000, 2_000, 4_000]) {
+    const delays = [250, 500, 1_000, 2_000, 4_000];
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
       try {
         rmSync(this.workDir, { recursive: true, force: true });
         removed = true;
         break;
       } catch (error) {
         lastCleanupError = error;
-        await new Promise((r) => setTimeout(r, delayMs));
+        if (attempt < delays.length - 1) {
+          await new Promise((r) => setTimeout(r, delays[attempt]));
+        }
       }
     }
     if (!removed && lastCleanupError !== null) {
