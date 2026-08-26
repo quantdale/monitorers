@@ -7,6 +7,10 @@ import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
 
+/** Shared identity for the default y-domain — a fresh `[0, 100]` literal per
+ * render would defeat MetricChart's prop-level memo. */
+const DEFAULT_Y_DOMAIN: [number, number | 'auto'] = [0, 100];
+
 // Recharts (with its d3 tree) is the heaviest dependency: load the chart
 // body off the critical path. Titles, values, badges and the data-chart-*
 // metadata attributes stay synchronous so tests and E2E never wait on this
@@ -60,7 +64,7 @@ export function MetricCard({
   history,
   timestamps,
   color,
-  yDomain = [0, 100],
+  yDomain = DEFAULT_Y_DOMAIN,
   badge,
   viewMode,
   isDragging,

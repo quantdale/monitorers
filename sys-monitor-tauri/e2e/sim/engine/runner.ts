@@ -23,6 +23,7 @@ import type { SimScenario } from '../../../src/sim/mockBackend';
 import { mulberry32 } from './prng';
 import { thinkWait, dwellWait } from './behavior';
 import { ClassifiedSimulationError } from '../errors';
+import { assertNoOrphanProcesses } from '../drivers/processGuard';
 import {
   classifyFailure,
   writeJsonl,
@@ -332,9 +333,27 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
       }
     }
 
+    // Real-lane orphan guard: after close(), no process of the launched exe
+    // may survive. Same guarantee the packaged qualification asserts; applied
+    // here so EVERY real-driver journey (including relaunch journeys) carries it.
+    if (selection.driver.kind === 'real') {
+      const exePath = (selection.driver as unknown as { appExePath?: string }).appExePath;
+      if (exePath) {
+        try {
+          await assertNoOrphanProcesses(exePath);
+        } catch (e) {
+          setPrimaryFailure('harness-defect', `orphan-process guard failed: ${String(e)}`, currentStep);
+        }
+      }
+    }
+
     if (diagnostics.length > 0) {
       if (passed) {
-        setPrimaryFailure('harness-defect', 'harness cleanup/isolation diagnostics failed', currentStep);
+        setPrimaryFailure(
+          'harness-defect',
+          `harness cleanup/isolation diagnostics failed: ${diagnostics.join(' | ')}`,
+          currentStep,
+        );
       } else if (failureMessage) {
         failureMessage = `${failureMessage}; diagnostics: ${diagnostics.join(' | ')}`;
       }

@@ -5,9 +5,30 @@
  * lane drives the packaged app and leaves unsupported steps registered (see
  * the register discipline in e2e/exploratory-register.md).
  */
-import type { Journey } from '../types';
+import type { Page } from '@playwright/test';
+import type { Journey, SimContext } from '../types';
 import * as S from '../engine/steps';
 import { freeRoam } from '../engine/freeroam';
+
+/**
+ * Installs an in-page ordered probe of collector statuses and snapshots so a
+ * journey can assert lifecycle ordering against actual data flow.
+ */
+async function installRecoveryProbe(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __SIM__?: { backend: {
+        onCollectorStatus(cb: (s: { state: string }) => void): void;
+        onSnapshot(cb: () => void): void;
+      } };
+      __recoveryProbe?: Array<{ kind: string; state?: string }>;
+    };
+    const log: Array<{ kind: string; state?: string }> = [];
+    w.__recoveryProbe = log;
+    w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
+    w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
+  });
+}
 
 // ── 1. First-launch onboarding ────────────────────────────────────────────────
 
@@ -54,11 +75,20 @@ const customizationRoundtrip: Journey = {
       return;
     }
 
-    // Reorder: move the first card down one slot.
+    // Reorder: move the first card down one slot. dragCard models seeded
+    // mis-drag mistakes — a cancelled drag must leave the order untouched,
+    // an applied one must move the card. Either way the round-trip continues
+    // from the actual resulting order, so persistence is always exercised.
     const target = before[1];
-    await S.dragCard(ctx, before[0], target, 'keyboard');
+    const applied = await S.dragCard(ctx, before[0], target, 'keyboard');
     const afterDrag = await S.readCardIds(ctx);
-    ctx.assert('reorder-applied', afterDrag[0] !== before[0], 'reorder applied');
+    // NOTE: strict equality — 'cancelled' is a truthy string.
+    const reordered = applied === 'applied';
+    ctx.assert(
+      'reorder-applied',
+      reordered ? afterDrag[0] !== before[0] : afterDrag[0] === before[0],
+      reordered ? 'reorder applied' : 'misdrag cancelled — order intentionally unchanged'
+    );
 
     // Hide the second card (was first, now anywhere).
     const toHide = afterDrag[1];
@@ -143,19 +173,7 @@ const faultResponse: Journey = {
 
     // Probe: record every status/snapshot in order so the journey can prove
     // healthy is never reported before replacement data actually flows.
-    await page.evaluate(() => {
-      const w = window as unknown as {
-        __SIM__?: { backend: {
-          onCollectorStatus(cb: (s: { state: string }) => void): void;
-          onSnapshot(cb: () => void): void;
-        } };
-        __recoveryProbe?: Array<{ kind: string; state?: string }>;
-      };
-      const log: Array<{ kind: string; state?: string }> = [];
-      w.__recoveryProbe = log;
-      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
-      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
-    });
+    await installRecoveryProbe(page);
 
     // Repeated failures exhaust the budget: interruption is reported
     // immediately, then the persistent alert appears with the failure message
@@ -242,19 +260,7 @@ const collectorRecovery: Journey = {
 
     // Probe: record every status/snapshot in order so the journey can prove
     // the automatic recovery reports healthy only after real replacement data.
-    await page.evaluate(() => {
-      const w = window as unknown as {
-        __SIM__?: { backend: {
-          onCollectorStatus(cb: (s: { state: string }) => void): void;
-          onSnapshot(cb: () => void): void;
-        } };
-        __recoveryProbe?: Array<{ kind: string; state?: string }>;
-      };
-      const log: Array<{ kind: string; state?: string }> = [];
-      w.__recoveryProbe = log;
-      w.__SIM__?.backend.onCollectorStatus((s) => log.push({ kind: 'status', state: s.state }));
-      w.__SIM__?.backend.onSnapshot(() => log.push({ kind: 'snapshot' }));
-    });
+    await installRecoveryProbe(page);
 
     // Session panic: emissions stop, recovering status drives the polite banner.
     await S.injectFault(ctx, { kind: 'collector-crash', reason: 'journey synthetic panic', recoverAfterMs: 2_500 });
@@ -579,6 +585,272 @@ const personaFreeRoam: Journey = {
   },
 };
 
+// ── 9. Sidebar ordering across a TRUE process relaunch (real lane only) ─────
+
+/**
+ * Waits for the CPU chart's latest committed timestamp to advance past `since`.
+ * Semantic "live metrics keep flowing" checkpoint (no fixed sleeps).
+ */
+async function waitForChartAdvance(ctx: SimContext, since: number, timeoutMs = 20_000): Promise<number> {
+  const page = ctx.driver.page;
+  if (!page) return -1;
+  const read = async (): Promise<number> => {
+    const attr = await page.locator('[data-testid="metric-chart-cpu"]').getAttribute('data-chart-latest-ts');
+    return attr === null ? -1 : Number(attr);
+  };
+  const value = await S.pollUntil(read, (ts) => ts > since, timeoutMs, 500);
+  return value;
+}
+
+const sidebarRelaunchPersistence: Journey = {
+  id: 'sidebar-relaunch-persistence',
+  title: 'Sidebar ordering persists across a true packaged-app process relaunch',
+  supportedDrivers: ['real'],
+  personaIds: ['customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    const page = ctx.driver.page;
+    if (!page) {
+      ctx.assert('page-available', false, 'sidebar journey requires a page');
+      return;
+    }
+    const driver = ctx.driver as unknown as { cdpPort?: number | null; appExitInfo?: string | null };
+
+    // ── Launch #1: discovery settles, record the initial rendered order ──
+    await S.openSidebar(ctx); // sidebar mounts closed; this launch it opens
+    const initial = await S.waitForSidebarSettled(ctx, 3);
+    ctx.log('observation', { kind: 'initial-sidebar-order', ids: initial });
+
+    // Baseline history depth (in-memory, Rust-side): wait until the collector
+    // has actually committed (history builds at 1 Hz after session bootstrap),
+    // then remember the depth — a genuine relaunch must come back EMPTY (a
+    // page reload would preserve the backend buffers). Always resolved against
+    // the CURRENT driver page.
+    const pointsBefore = await S.pollUntil(
+      () => S.invokeHistoryPointCount(ctx, 60),
+      (n) => n > 0,
+      20_000,
+      500
+    );
+    ctx.assert('history-buffered-before-restart', pointsBefore > 0,
+      `${pointsBefore} buffered points before restart`);
+
+    // Reorder two valid items via the app's supported keyboard drag.
+    await S.keyboardMoveFirstSidebarCardDown(ctx);
+    const reordered = await S.pollUntil(
+      () => S.readSidebarIds(ctx),
+      (ids) => ids.length === initial.length && ids[0] !== initial[0] && JSON.stringify(ids) !== JSON.stringify(initial),
+      8_000
+    );
+    ctx.assert('reorder-applied-in-ui', JSON.stringify(reordered) !== JSON.stringify(initial),
+      `rendered order changed ${initial.join(',')} -> ${reordered.join(',')}`);
+
+    // Persistence contract under ghost-aware semantics: the store may be a
+    // SUPERSET of the rendered cards (transiently undiscovered devices stay
+    // saved), but restricted to currently rendered ids it must equal them in
+    // exact order — which is exactly what the drag write produces. Poll until
+    // that consistency holds (i.e., the drag's store write has landed).
+    const settled = await S.pollUntil(async () => {
+      const domNow = await S.readSidebarIds(ctx);
+      const storeNow = await S.persistedSettings(ctx);
+      const arr = Array.isArray(storeNow.sidebarCardOrder) ? (storeNow.sidebarCardOrder as string[]) : null;
+      if (!arr || domNow.length === 0) return { dom: domNow, arr: null, ok: false };
+      const restricted = arr.filter((id) => domNow.includes(id));
+      return {
+        dom: domNow,
+        arr,
+        ok: arr.length >= domNow.length && JSON.stringify(restricted) === JSON.stringify(domNow),
+      };
+    }, (s) => s.ok, 12_000, 400);
+    const savedOrder = settled.arr;
+    ctx.assert('persisted-sidebar-order', !!savedOrder,
+      `dragged order persisted (${(savedOrder ?? []).join(',')})`);
+    ctx.assert('persisted-keeps-seen-devices',
+      !!savedOrder && initial.every((id) => savedOrder.includes(id)) && reordered.every((id) => savedOrder.includes(id)),
+      `store retains every id seen this session (${(savedOrder ?? []).join(',')})`);
+
+    // History depth right before the kill: the old process keeps committing
+    // at 1 Hz during the interaction phase, which gives the post-relaunch
+    // emptiness comparison a real margin.
+    const pointsAtKill = await S.invokeHistoryPointCount(ctx, 60);
+
+    const portBefore = driver.cdpPort ?? -1;
+
+    // ── True relaunch: driver kills the process and spawns a NEW one ──
+    await S.restartApp(ctx);
+    ctx.assert('first-process-exited', !!driver.appExitInfo && /exited/.test(driver.appExitInfo),
+      String(driver.appExitInfo));
+    ctx.assert('fresh-cdp-port-after-relaunch', (driver.cdpPort ?? -1) !== portBefore,
+      `port ${portBefore} -> ${driver.cdpPort} (a reused port would mean no new browser target)`);
+
+    // ── Launch #2: native discovery settles again ──
+    await S.waitForState(ctx, 'live', 30_000);
+
+    // Sample the NEW process IMMEDIATELY at live — before any settle waits —
+    // so the fresh in-memory buffer cannot accumulate many commits.
+    const pointsAfter = await S.invokeHistoryPointCount(ctx, 60);
+    const statusAfter = await S.invokeCollectorStatus(ctx);
+
+    // In-memory history did NOT survive the process boundary: the fresh
+    // buffer, sampled seconds earlier in its life than the old one was at
+    // kill time, must hold strictly fewer points.
+    ctx.assert('history-rebuilt-empty-after-relaunch',
+      pointsAfter >= 0 && pointsAfter < Math.max(pointsAtKill, pointsBefore),
+      `buffered points old=${Math.max(pointsAtKill, pointsBefore)} -> new@live=${pointsAfter}`);
+
+    // Native supervisor re-bootstrapped in the NEW process (generation reset
+    // to 1, contract version intact). Freshness itself is proven by the
+    // empty-history comparison above plus the fresh CDP port and recorded
+    // first-process exit — status.timestamp_ms is wall-clock epoch, not age.
+    ctx.assert('native-status-rebootstrapped',
+      !!statusAfter && statusAfter.schema_version === 1 && statusAfter.generation === 1
+      && typeof statusAfter.state === 'string' && ['starting', 'healthy'].includes(statusAfter.state),
+      `status=${JSON.stringify(statusAfter)}`);
+
+    await S.openSidebar(ctx);
+    const restoredDom = await S.waitForSidebarSettled(ctx, 3);
+
+    // Restored EXACTLY as far as discovery allows. Real hardware discovery
+    // legitimately varies between processes in BOTH directions (Windows
+    // materializes GPU Engine counters lazily; hosted runners surface extra
+    // ephemeral disks after relaunch), so the honest invariants are:
+    //   (1) APPEND-ONLY NON-DESTRUCTION: every pre-restart saved id survives
+    //       with its relative order intact — new discoveries may append, but
+    //       nothing may be dropped or reordered;
+    //   (2) ORDER PRESERVATION of the rendered subset (equal discovery set +
+    //       no appends reduces to exact equality).
+    const refOrder = savedOrder ?? reordered;
+    const storeAfter = S.readRealStoreFile(ctx);
+    const storedOrder = (storeAfter.parsed?.sidebarCardOrder as string[] | undefined) ?? null;
+    let preservedCursor = 0;
+    const appendOnlyPreserved = Array.isArray(storedOrder)
+      && refOrder.every((id) => {
+        const at = storedOrder.indexOf(id, preservedCursor);
+        if (at < 0) return false;
+        preservedCursor = at + 1;
+        return true;
+      });
+    ctx.assert('restored-store-non-destructive', appendOnlyPreserved,
+      `store [${(storedOrder ?? []).join(',')}] preserves pre-restart [${refOrder.join(',')}] as an ordered prefix-subsequence`);
+
+    let cursor = 0;
+    const orderPreserved = restoredDom.every((id) => {
+      const at = refOrder.indexOf(id, cursor);
+      if (at < 0) return false;
+      cursor = at + 1;
+      return true;
+    });
+    ctx.assert('restored-sidebar-order-preserved', orderPreserved && restoredDom.length >= 3,
+      `rendered ${restoredDom.join(',')} is an order-preserving subset of saved ${refOrder.join(',')}`);
+
+    // When the relaunch discovers the SAME device set as the first process,
+    // the restore contract tightens to EXACT order equality; under discovery
+    // variance the subset semantics above are the honest contract (the OpenSpec
+    // delta defines both branches).
+    const sameDiscovery =
+      JSON.stringify([...restoredDom].sort()) === JSON.stringify([...initial].sort());
+    if (sameDiscovery) {
+      ctx.assert('restored-order-exact-when-discovery-matches', JSON.stringify(restoredDom) === JSON.stringify(reordered),
+        `exact restored order with identical discovery: ${restoredDom.join(',')}`);
+    } else {
+      ctx.log('observation', { kind: 'discovery-variance', initial, restoredDom });
+    }
+
+    // Unrelated persisted settings remain coherent.
+    const storeFile = S.readRealStoreFile(ctx);
+    ctx.assert('store-valid-json', storeFile.exists && storeFile.parsed !== null, 'isolated settings.json parses');
+    const finalSettings = await S.persistedSettings(ctx);
+    ctx.assert('settings-version-coherent', finalSettings.settingsVersion === 2, `settingsVersion=${String(finalSettings.settingsVersion)}`);
+    ctx.assert('unrelated-settings-intact',
+      (finalSettings.cardOrder === undefined || Array.isArray(finalSettings.cardOrder))
+      && (finalSettings.hiddenCardIds === undefined || Array.isArray(finalSettings.hiddenCardIds))
+      && (finalSettings.viewMode === undefined || typeof finalSettings.viewMode === 'string')
+      && (finalSettings.windowSecs === undefined || typeof finalSettings.windowSecs === 'number'),
+      `cardOrder/hidden/viewMode/windowSecs types coherent: ${JSON.stringify(finalSettings).slice(0, 200)}`);
+
+    // Live metrics continue to advance in the relaunched process. The chart
+    // element is re-resolved from the CURRENT page (the pre-restart locator
+    // handle belongs to the dead first target).
+    const chart = () => ctx.driver.page!.locator('[data-testid="metric-chart-cpu"]');
+    await chart().waitFor({ state: 'visible', timeout: 30_000 });
+    const firstTs = Number(await chart().getAttribute('data-chart-latest-ts') ?? 0);
+    const advanced = await waitForChartAdvance(ctx, firstTs);
+    ctx.assert('metrics-advance-after-relaunch', advanced > firstTs,
+      `latest-ts ${firstTs} -> ${advanced}`);
+
+    // Orphan-process + developer-store-isolation guarantees are enforced by
+    // the runner teardown (assertNoOrphanProcesses + driver.selfTest).
+  },
+};
+
+// ── 10. Restart/settings durability soak (real lane only, bounded) ──────────
+
+const RESTART_SOAK_CYCLES: ReadonlyArray<{ windowSecs: number; viewMode: 'tile' | 'list' }> = [
+  { windowSecs: 30, viewMode: 'tile' },
+  { windowSecs: 300, viewMode: 'list' },
+  { windowSecs: 600, viewMode: 'tile' },
+];
+
+const restartSoakDurability: Journey = {
+  id: 'restart-soak-durability',
+  title: 'Bounded soak: settings mutate/persist/shutdown/relaunch cycles stay durable',
+  supportedDrivers: ['real'],
+  personaIds: ['customizer'],
+  async run(ctx) {
+    await S.waitForState(ctx, 'live');
+    if (!ctx.driver.page) {
+      ctx.assert('page-available', false, 'soak journey requires a page');
+      return;
+    }
+    // Always resolve locators from the CURRENT driver page — restartApp
+    // replaces the target process and page, so pre-restart handles are dead.
+    const windowSelector = () => ctx.driver.page!.locator('select');
+
+    let lastTs = Number(await ctx.driver.page.locator('[data-testid="metric-chart-cpu"]').getAttribute('data-chart-latest-ts') ?? 0);
+
+    for (let i = 0; i < RESTART_SOAK_CYCLES.length; i += 1) {
+      const cycle = RESTART_SOAK_CYCLES[i];
+
+      // Mutate two unrelated fields through the real UI paths.
+      await S.setWindow(ctx, cycle.windowSecs);
+      await S.setViewMode(ctx, cycle.viewMode);
+      await S.waitForPersistedSettings(ctx, (s) => s.windowSecs === cycle.windowSecs && s.viewMode === cycle.viewMode, 10_000);
+
+      // The store file itself stays strictly valid JSON with a current version.
+      const file = S.readRealStoreFile(ctx);
+      ctx.assert(`cycle-${i + 1}-store-valid-json`, file.exists && file.parsed !== null, 'settings.json parses mid-soak');
+      if (file.parsed) {
+        ctx.assert(`cycle-${i + 1}-store-version-current`, file.parsed.settingsVersion === 2,
+          `settingsVersion=${String(file.parsed.settingsVersion)}`);
+      }
+
+      // Clean shutdown + relaunch of a NEW process (driver-owned).
+      await S.restartApp(ctx);
+      await S.waitForState(ctx, 'live', 30_000);
+
+      // State restored FROM DISK in the new process.
+      const restored = await S.persistedSettings(ctx);
+      ctx.assert(`cycle-${i + 1}-window-restored`, restored.windowSecs === cycle.windowSecs,
+        `windowSecs ${String(restored.windowSecs)} should be ${cycle.windowSecs}`);
+      ctx.assert(`cycle-${i + 1}-viewmode-restored`, restored.viewMode === cycle.viewMode,
+        `viewMode ${String(restored.viewMode)} should be ${cycle.viewMode}`);
+      await S.pollUntil(() => windowSelector().inputValue(), (v) => v === String(cycle.windowSecs), 8_000);
+      ctx.assert(`cycle-${i + 1}-ui-matches-store`, (await windowSelector().inputValue()) === String(cycle.windowSecs),
+        'UI window selector reflects the restored persisted value');
+
+      // Native supervisor re-answered inside the fresh process.
+      const status = await S.invokeCollectorStatus(ctx);
+      ctx.assert(`cycle-${i + 1}-status-rebootstrapped`, !!status && status.schema_version === 1
+        && typeof status.state === 'string' && ['starting', 'healthy'].includes(status.state),
+        `status=${JSON.stringify(status)}`);
+
+      // Metrics kept advancing across every cycle boundary.
+      lastTs = await waitForChartAdvance(ctx, lastTs);
+      ctx.assert(`cycle-${i + 1}-metrics-advance`, lastTs > 0, `chart latest-ts advanced to ${lastTs}`);
+    }
+  },
+};
+
 export const JOURNEYS: Journey[] = [
   firstLaunch,
   customizationRoundtrip,
@@ -592,6 +864,8 @@ export const JOURNEYS: Journey[] = [
   freezeRecovery,
   layoutPersistence,
   personaFreeRoam,
+  sidebarRelaunchPersistence,
+  restartSoakDurability,
 ];
 
 export function getJourney(id: string): Journey {

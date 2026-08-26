@@ -21,6 +21,10 @@ export interface QuarantineEntry {
   seeds: number[];
 }
 
+/** Curation budget: distinct-seed failures tolerated before a journey is
+ *  moved to QUARANTINE (a seed-stable failure is always a defect, never
+ *  quarantined). No code path consumes this today — quarantine curation is a
+ *  deliberate human decision recorded in QUARANTINE below. */
 export const FLAKE_BUDGET = 3;
 
 /** Journeys currently quarantined (removed from the blocking set). */
@@ -30,19 +34,4 @@ const quarantinedJourneyIds = new Set(QUARANTINE.map((q) => q.journeyId));
 
 export function isQuarantined(journeyId: string): boolean {
   return quarantinedJourneyIds.has(journeyId);
-}
-
-/**
- * Whether a failure should be treated as quarantine-worthy (seed-varying) as
- * opposed to a seed-stable defect. The runner passes the current seed; a
- * failure that is also reproducible under the SAME seed is a defect, not a
- * flake.
- */
-export function shouldQuarantine(
-  _journeyId: string,
-  seedStable: boolean,
-  distinctSeedFailures: number
-): boolean {
-  if (seedStable) return false;
-  return distinctSeedFailures >= FLAKE_BUDGET;
 }

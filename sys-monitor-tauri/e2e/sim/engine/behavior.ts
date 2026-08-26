@@ -50,8 +50,3 @@ export function mistakes(ctx: SimContext, kind: keyof Persona['mistakes']): bool
   const p = ctx.persona.mistakes[kind] ?? 0;
   return ctx.rng.chance(p);
 }
-
-/** Sharpens a [min,max] range toward the persona's session midpoint. */
-export function drawSessionLength(ctx: SimContext): number {
-  return draw(ctx.rng, ctx.persona.sessionLengthSecs, ctx.persona.variance);
-}

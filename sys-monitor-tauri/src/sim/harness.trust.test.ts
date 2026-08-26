@@ -39,7 +39,6 @@ function selection(): RunSelection {
     persona: {
       id: 'glancer',
       description: 'test',
-      sessionLengthSecs: [1, 1],
       thinkTimeMs: [0, 0],
       dwellTimeMs: [0, 0],
       actionPreference: {},

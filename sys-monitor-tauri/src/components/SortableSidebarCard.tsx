@@ -47,7 +47,7 @@ export function SortableSidebarCard({ id, children }: Props) {
   );
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} data-sb-id={id}>
       {children(dragHandle)}
     </div>
   );

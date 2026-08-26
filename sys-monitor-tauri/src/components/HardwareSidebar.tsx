@@ -104,9 +104,31 @@ export function defaultSidebarCardOrder(profile: HardwareProfile): string[] {
  * discarded and the current stable ids are appended in deterministic profile
  * order rather than attaching an old position to a different device.
  */
-export function migrateLegacySidebarCardOrder(current: string[], profile: HardwareProfile): string[] {
+export function migrateLegacySidebarCardOrder(current: string[], profile?: HardwareProfile): string[] {
   void profile;
   return current.filter((id) => !/^sb_(?:gpu|disk)_\d+$/.test(id));
+}
+
+/**
+ * Non-destructive PERSISTED merge (mirror of the dashboard's
+ * `mergeNewCardIds`): migrates legacy positional ids away and appends newly
+ * discovered ids, but KEEPS saved stable ids that the current discovery pass
+ * did not enumerate. Rendering filters by what is actually present; the
+ * store must not, or a transient discovery gap (e.g. Windows materializes
+ * GPU Engine counters lazily) would permanently rewrite the user's
+ * arrangement out of settings.json.
+ */
+export function persistSidebarCardOrder(current: string[], defaultIds: string[]): string[] {
+  const migrated = migrateLegacySidebarCardOrder(current);
+  const seen = new Set(migrated);
+  const merged = [...migrated];
+  for (const id of defaultIds) {
+    if (!seen.has(id)) {
+      merged.push(id);
+      seen.add(id);
+    }
+  }
+  return merged;
 }
 
 export function mergeSidebarCardOrder(
@@ -127,6 +149,21 @@ export function mergeSidebarCardOrder(
     if (!merged.includes(id)) merged.push(id);
   }
   return merged;
+}
+
+/**
+ * Merge a drag result with the previously-saved order WITHOUT dropping ids
+ * that were temporarily undiscovered at drag time (ghost devices): the moved
+ * rendered sequence wins for present devices, ghosts keep their store
+ * presence appended so the arrangement survives transient discovery gaps.
+ */
+export function mergeDraggedSidebarOrder(
+  movedRendered: string[],
+  previouslySaved: string[],
+  renderedBefore: string[]
+): string[] {
+  const ghosts = previouslySaved.filter((id) => !renderedBefore.includes(id));
+  return [...movedRendered, ...ghosts];
 }
 
 interface Props {
@@ -158,9 +195,9 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
     if (!profile) return;
     const defaultIds = defaultSidebarCardOrder(profile);
     if (defaultIds.length > 0) {
-      const migrated = migrateLegacySidebarCardOrder(settings.sidebarCardOrder ?? [], profile);
-      const next = mergeSidebarCardOrder(migrated, defaultIds);
-      if (settings.sidebarCardOrder === null || next.join('|') !== settings.sidebarCardOrder.join('|')) {
+      const saved = settings.sidebarCardOrder ?? [];
+      const next = persistSidebarCardOrder(saved, defaultIds);
+      if (settings.sidebarCardOrder === null || next.join('|') !== saved.join('|')) {
         save({ sidebarCardOrder: next });
       }
     }
@@ -177,7 +214,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
       const oldIndex = cardOrder.indexOf(active.id as string);
       const newIndex = cardOrder.indexOf(over.id as string);
       if (oldIndex >= 0 && newIndex >= 0) {
-        save({ sidebarCardOrder: arrayMove(cardOrder, oldIndex, newIndex) });
+        const moved = arrayMove(cardOrder, oldIndex, newIndex);
+        save({
+          sidebarCardOrder: mergeDraggedSidebarOrder(moved, settings.sidebarCardOrder ?? [], cardOrder),
+        });
       }
     }
   }

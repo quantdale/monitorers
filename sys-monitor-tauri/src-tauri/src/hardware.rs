@@ -64,15 +64,63 @@ pub struct HardwareProfile {
 
 // ── CPU detection ─────────────────────────────────────────────────────────────
 
-fn detect_cpu_vendor() -> CpuVendor {
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
-    let brand = sys
-        .cpus()
-        .first()
-        .map(|c| c.brand().to_lowercase())
-        .unwrap_or_default();
+/// CPU identity (vendor tag + display brand) extracted from a sysinfo brand
+/// string. Carried as a value so callers that already hold a refreshed
+/// `sysinfo::System` can build a profile WITHOUT paying another OS enumeration
+/// (each fresh `System` + CPU refresh costs ~2ms on real hardware, and the old
+/// per-call detect pair ran one enumeration per profile build — four extra
+/// enumerations per session start).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CpuIdentity {
+    pub vendor: CpuVendor,
+    pub name: String,
+}
+
+impl CpuIdentity {
+    /// Read the CPU identity from an ALREADY-REFRESHED sysinfo System.
+    pub fn from_sysinfo(system: &sysinfo::System) -> Self {
+        let brand = system
+            .cpus()
+            .first()
+            .map(|cpu| cpu.brand())
+            .unwrap_or_default();
+        Self::from_brand(brand)
+    }
+
+    /// Probe the CPU identity with a dedicated minimal OS enumeration.
+    /// Only for callers with no System available (see `from_sysinfo`).
+    pub fn probe() -> Self {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
+        Self::from_sysinfo(&sys)
+    }
+
+    pub fn from_brand(brand: &str) -> Self {
+        Self {
+            vendor: cpu_vendor_from_brand(brand),
+            name: if brand.is_empty() {
+                "Unknown CPU".to_string()
+            } else {
+                brand.to_string()
+            },
+        }
+    }
+}
+
+impl HardwareProfile {
+    /// The profile's CPU identity, for rebuilding a profile in place (e.g.
+    /// re-detecting GPUs once PDH/WMI become available) without re-enumerating
+    /// the CPU.
+    pub fn cpu_identity(&self) -> CpuIdentity {
+        CpuIdentity {
+            vendor: self.cpu_vendor.clone(),
+            name: self.cpu_name.clone(),
+        }
+    }
+}
+
+fn cpu_vendor_from_brand(brand: &str) -> CpuVendor {
+    let brand = brand.to_lowercase();
     if brand.contains("intel") {
         CpuVendor::Intel
     } else if brand.contains("amd") {
@@ -80,16 +128,6 @@ fn detect_cpu_vendor() -> CpuVendor {
     } else {
         CpuVendor::Unknown
     }
-}
-
-fn detect_cpu_name() -> String {
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
-    sys.cpus()
-        .first()
-        .map(|c| c.brand().to_string())
-        .unwrap_or_else(|| "Unknown CPU".to_string())
 }
 
 // ── GPU classification (conservative fallback when adapter properties are unavailable) ──
@@ -196,12 +234,13 @@ fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -
         .collect()
 }
 
-// ── Disk detection ─────────────────────────────────────────────────────────────
+// ── Disk detection ────────────────────────────────────────────────────────────
 
-fn detect_disks() -> Vec<DiskInfo> {
+/// Project an ALREADY-ENUMERATED sysinfo Disks list into profile DiskInfos.
+/// Lets callers that already hold a `Disks` (the collector state always does)
+/// build a profile without a second OS enumeration.
+pub fn disk_infos_from(disks: &sysinfo::Disks) -> Vec<DiskInfo> {
     use sysinfo::DiskKind as SysDiskKind;
-    use sysinfo::Disks;
-    let disks = Disks::new_with_refreshed_list();
     disks
         .iter()
         .map(|d| {
@@ -219,6 +258,10 @@ fn detect_disks() -> Vec<DiskInfo> {
         .collect()
 }
 
+fn detect_disks() -> Vec<DiskInfo> {
+    disk_infos_from(&sysinfo::Disks::new_with_refreshed_list())
+}
+
 // ── Public detect ──────────────────────────────────────────────────────────────
 
 /// Build hardware profile. Call with (None, None, None) when WMI is not yet available
@@ -230,10 +273,23 @@ pub fn detect(
     wmi_con: Option<&wmi::WMIConnection>,
     disks_override: Option<Vec<DiskInfo>>,
 ) -> HardwareProfile {
+    detect_with_cpu(pdh, wmi_con, disks_override, &CpuIdentity::probe())
+}
+
+/// Same as [`detect`], but reuses a caller-supplied CPU identity instead of
+/// paying a fresh OS enumeration. Every caller that already holds a refreshed
+/// sysinfo System or a previously built profile should prefer this — see
+/// `CpuIdentity` for why.
+pub fn detect_with_cpu(
+    pdh: Option<&PdhHandles>,
+    wmi_con: Option<&wmi::WMIConnection>,
+    disks_override: Option<Vec<DiskInfo>>,
+    cpu: &CpuIdentity,
+) -> HardwareProfile {
     let disks = disks_override.unwrap_or_else(detect_disks);
     HardwareProfile {
-        cpu_vendor: detect_cpu_vendor(),
-        cpu_name: detect_cpu_name(),
+        cpu_vendor: cpu.vendor.clone(),
+        cpu_name: cpu.name.clone(),
         gpus: detect_gpus(pdh, wmi_con),
         disks,
     }
@@ -242,6 +298,53 @@ pub fn detect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- CpuIdentity (regression pin: must match the removed per-call
+    // detect_cpu_vendor/detect_cpu_name semantics exactly — the profile
+    // printed at startup and the HistoryStore cpu_name depend on them) ---
+
+    #[test]
+    fn test_cpu_identity_brand_mapping_matches_legacy_detection() {
+        let intel = CpuIdentity::from_brand("Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz");
+        assert_eq!(intel.vendor, CpuVendor::Intel);
+        assert_eq!(intel.name, "Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz");
+
+        let amd = CpuIdentity::from_brand("AMD Ryzen 9 5900X");
+        assert_eq!(amd.vendor, CpuVendor::Amd);
+
+        let unknown = CpuIdentity::from_brand("Mystery Chip");
+        assert_eq!(unknown.vendor, CpuVendor::Unknown);
+    }
+
+    #[test]
+    fn test_cpu_identity_empty_brand_falls_back_like_legacy_detect() {
+        let identity = CpuIdentity::from_brand("");
+        assert_eq!(identity.vendor, CpuVendor::Unknown);
+        assert_eq!(identity.name, "Unknown CPU");
+    }
+
+    #[test]
+    fn test_hardware_profile_cpu_identity_round_trips() {
+        let profile = detect_with_cpu(None, None, None, &CpuIdentity::from_brand("AMD Ryzen 9"));
+        assert_eq!(
+            profile.cpu_identity(),
+            CpuIdentity::from_brand("AMD Ryzen 9")
+        );
+    }
+
+    #[test]
+    fn test_disk_infos_from_projects_sysinfo_kinds() {
+        // The projection helper must keep the exact key/name/kind mapping the
+        // old detect_disks produced (sidebar labels and card keys derive from
+        // these strings).
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let infos = disk_infos_from(&disks);
+        assert_eq!(infos.len(), disks.iter().count());
+        for (info, disk) in infos.iter().zip(disks.iter()) {
+            assert_eq!(info.key, disk.name().to_string_lossy());
+            assert_eq!(info.name, disk.name().to_string_lossy());
+        }
+    }
 
     // --- classify_gpu (name-based vendor + kind classification) ---
 

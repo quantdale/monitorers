@@ -3,7 +3,7 @@
 // snapshots. SCHEMA_VERSION must stay in sync with EXPECTED_SCHEMA_VERSION in the
 // frontend (src/hooks/useMetrics.ts) whenever the payload shape changes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crate::hardware::{classify_gpu, GpuVendor};
 use crate::state::HistoryStore;
@@ -240,22 +240,32 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
         })
         .collect();
 
-    // Cache per-name vendor classification so repeated GPU names are classified
-    // once per snapshot instead of re-running classify_gpu for every entry.
-    let mut vendor_cache: HashMap<String, String> = HashMap::new();
+    // Vendor classification without per-tick allocation churn: this runs on
+    // every 250ms tick under the history lock, so the previous
+    // HashMap<String, String> (two heap allocations per distinct GPU name,
+    // plus a cloned vendor String per entry) is replaced by a stack-friendly
+    // linear scan over (&str, &'static str). GPU counts are single digits;
+    // the scan wins on both allocations and total work.
+    let mut vendor_cache: Vec<(&str, &'static str)> = Vec::new();
     for (_, name, _) in &s.gpu_entries {
-        vendor_cache
-            .entry(name.clone())
-            .or_insert_with(|| vendor_tag(name).to_string());
+        let tag = vendor_tag(name);
+        if !vendor_cache
+            .iter()
+            .any(|(cached_name, cached_tag)| *cached_name == name.as_str() && *cached_tag == tag)
+        {
+            vendor_cache.push((name.as_str(), tag));
+        }
     }
     let gpus = s
         .gpu_entries
         .iter()
         .map(|(key, name, hist)| {
             let vendor = vendor_cache
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string());
+                .iter()
+                .find(|(cached_name, _)| *cached_name == name.as_str())
+                .map(|(_, tag)| *tag)
+                .unwrap_or("unknown")
+                .to_string();
             let nvidia = s.nvidia_telemetry.get(key).map(telemetry_snapshot);
             let temp_c = nvidia.as_ref().and_then(|telemetry| telemetry.temp_c);
             GpuSnapshot {

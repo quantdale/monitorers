@@ -57,8 +57,6 @@ export interface Persona {
   id: string;
   /** Human-readable description (goes into reports). */
   description: string;
-  /** Session length range (simulated seconds). */
-  sessionLengthSecs: Range;
   /** Delay between actions (ms). */
   thinkTimeMs: Range;
   /** Time spent watching before acting (ms). */

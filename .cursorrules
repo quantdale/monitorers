@@ -119,7 +119,8 @@ monitorers/
             ├── hardware.rs          ← detect()/classify_gpu(), degraded-but-useful HardwareProfile
             ├── pdh.rs               ← PDH helper layer
             ├── sensor.rs            ← SensorProvider trait + SensorRegistry (250 ms pollers)
-            ├── bin/cadence_probe.rs ← headless cadence probe/checker (real-hardware runs)
+                ├── examples/cadence_probe.rs ← headless cadence probe/checker (real-hardware runs)
+                ├── examples/startup_probe.rs ← session-bootstrap timing probe (startup-cost regressions)
             └── collector/
                 ├── mod.rs           ← poll/commit helpers, push_history(), MAX_HISTORY
                 ├── snapshot.rs      ← IPC payloads, schema version, timestamp slicing
@@ -150,7 +151,9 @@ monitorers/
 - Always use .unwrap_or_else(|e| e.into_inner()) on mutex locks (poison-safe)
 - push_history() always used for VecDeque appends — never push directly
 - All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
-- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 4
+- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 5
+  The lifecycle contract has its own version: LIFECYCLE_SCHEMA_VERSION (Rust
+  collector/supervisor.rs) == EXPECTED_LIFECYCLE_SCHEMA_VERSION (TS) == 1.
 - All push_history writes must happen on full ticks (1Hz) only.
   Providers may poll at 250ms for live snapshot freshness but must
   never commit to history more than once per second.
@@ -322,6 +325,13 @@ workflow covers all supported feature combinations plus a Windows no-bundle
 Tauri build; E2E and mock simulation are required PR checks, and MSI/NSIS
 bundles run for tags/manual dispatch.
 
+### Simulation platform pointer
+
+The user-simulation platform (personas × journeys × drivers, mock + packaged
+CDP lanes, exploratory-register discipline) is specified in
+`openspec/specs/user-simulation-platform/spec.md` with runner knobs documented
+in root `AGENTS.md`; this file intentionally does not duplicate it.
+
 ---
 
 ## 7. Build, Dev & Deployment
@@ -358,7 +368,7 @@ npx tsc --noEmit
 - Vite dev server: port **5180** (strict port; in `vite.config.ts` and `tauri.conf.json`)
 - Tauri window: 900×1100 default, 400×300 minimum
 - Bundle identifier: `com.quantdale.systemmonitor`
-- Release profile: `opt-level = 3`, `lto = true`, `codegen-units = 1`, `strip = true`
+- Release profile: `opt-level = 3`, `lto = "thin"`, `codegen-units = 1`, `strip = true` (thin LTO measured -32% final-crate build vs fat with +3.3% exe size; see the measured table in `src-tauri/Cargo.toml` before changing)
 
 Production configuration is compile-time. Test-only simulation controls and
 the packaged CDP lane use documented environment variables; they are not read

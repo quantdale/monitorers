@@ -297,6 +297,18 @@ export class RealAppDriver implements SimDriver {
     return this.workDir ? join(this.workDir, 'appdata') : null;
   }
 
+  /** The CDP debug port allocated for the CURRENT app process (null pre-launch).
+   *  Freshly allocated per launch, so two launches of one driver instance never
+   *  share a port — journeys use this to prove a genuine second process. */
+  get cdpPort(): number | null {
+    return this.port;
+  }
+
+  /** Path of the executable this driver launches (for process-table assertions). */
+  get appExePath(): string {
+    return this.appExe;
+  }
+
   get appTempRoot(): string | null {
     return this.workDir;
   }
@@ -365,13 +377,59 @@ export class RealAppDriver implements SimDriver {
     if (stderrFd !== undefined) closeSync(stderrFd);
     this.trackAppExit();
 
-    const cdpUrl = `http://127.0.0.1:${this.port}/json/version`;
-    await waitForCdpOrProcess(
-      this.proc,
-      cdpUrl,
-      this.options.extraEnv?.SIM_CDP_TIMEOUT ? Number(this.options.extraEnv.SIM_CDP_TIMEOUT) : 60_000
-    );
+    // Bounded cold-start retry: on a cold runner the WebView2 browser process
+    // can vanish between CDP-endpoint readiness and page attach (observed as
+    // 'Target page, context or browser has been closed' on the FIRST launch
+    // of a hosted run, with later launches fine). One fresh-process retry
+    // absorbs that transient; a genuine spawn/exe defect keeps failing here.
+    const attempts = 2;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const cdpUrl = `http://127.0.0.1:${this.port}/json/version`;
+        await waitForCdpOrProcess(
+          this.proc!,
+          cdpUrl,
+          this.options.extraEnv?.SIM_CDP_TIMEOUT ? Number(this.options.extraEnv.SIM_CDP_TIMEOUT) : 60_000
+        );
+        await this.attachPage();
+        return { page: this.page!, appStderrPath: this.appStderrPath };
+      } catch (error) {
+        lastError = error;
+        if (attempt === attempts) break;
+        console.warn(`[RealAppDriver] bring-up attempt ${attempt} failed (${String(error)}); retrying with a fresh process`);
+        await this.closeProcess();
+        await new Promise((r) => setTimeout(r, 1_000));
+        this.port = await freePort();
+        // Elevated hosts receive the debug switches through the machine-wide
+        // HKLM policy (env vars are ignored), so the rewritten value MUST be
+        // re-applied with the NEW port or the respawned process opens its
+        // debug server on the stale one while we poll the new endpoint.
+        this.env = {
+          ...this.env,
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${this.port} --remote-allow-origins=*`,
+        };
+        this.applyHklmArgsFallback();
+        const stderrFd2 = this.appStderrPath ? openSync(this.appStderrPath, 'a') : undefined;
+        try {
+          this.proc = spawn(this.appExe, [], { env: this.env, stdio: ['ignore', 'ignore', stderrFd2 ?? 'ignore'] });
+        } catch (spawnError) {
+          if (stderrFd2 !== undefined) closeSync(stderrFd2);
+          throw new ClassifiedSimulationError(
+            `RealAppDriver: failed to respawn ${this.appExe}: ${String(spawnError)}`,
+            'harness-defect',
+            'spawn',
+          );
+        }
+        if (stderrFd2 !== undefined) closeSync(stderrFd2);
+        this.trackAppExit();
+      }
+    }
+    throw lastError;
+  }
 
+  /** Connects over CDP and validates the app page (launch tail, retried). */
+  private async attachPage(): Promise<void> {
     this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${this.port}`);
     const context = this.browser.contexts()[0];
     const page = context?.pages()[0] ?? (await context?.newPage());
@@ -392,7 +450,6 @@ export class RealAppDriver implements SimDriver {
     await navigateToAppOrigin(page);
     await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
     await validateAppPage(page);
-    return { page, appStderrPath: this.appStderrPath };
   }
 
   /**

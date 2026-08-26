@@ -259,16 +259,16 @@ export async function cardLabelFor(ctx: SimContext, cardId: string): Promise<str
 
 // ── Drag reorder ──────────────────────────────────────────────────────────────
 
-export async function dragCard(ctx: SimContext, from: string, to: string, via: 'pointer' | 'keyboard'): Promise<void> {
+export async function dragCard(ctx: SimContext, from: string, to: string, via: 'pointer' | 'keyboard'): Promise<'applied' | 'cancelled'> {
   const page = ctx.driver.page;
   await sleep(await drawThinkTime(ctx));
-  if (!page) return;
+  if (!page) return 'cancelled';
   const before = await readCardIds(ctx);
   const fromIdx = before.indexOf(from);
   const toIdx = before.indexOf(to);
   if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) {
     ctx.assert(`drag:${from}->${to}`, false, `cards not both present (${before.join(',')})`);
-    return;
+    return 'cancelled';
   }
   // Modeled mistake: mis-drag that cancels.
   if (via === 'keyboard' && mistakes(ctx, 'misdrag')) {
@@ -278,7 +278,7 @@ export async function dragCard(ctx: SimContext, from: string, to: string, via: '
     await sleep(150);
     await page.keyboard.press('Escape'); // cancel
     ctx.log('action', { kind: 'dragCard', from, to, via, outcome: 'cancelled' });
-    return;
+    return 'cancelled';
   }
   if (via === 'pointer') {
     const src = page.locator(`${CARD_ID(from)} ${DASH_HANDLE}`);
@@ -290,7 +290,7 @@ export async function dragCard(ctx: SimContext, from: string, to: string, via: '
     const dstBox = await dst.boundingBox({ timeout: 5_000 });
     if (!srcBox || !dstBox) {
       ctx.assert(`drag:${from}->${to}`, false, 'drag handles not visible for pointer drag');
-      return;
+      return 'cancelled';
     }
     await page.mouse.move(srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2);
     await page.mouse.down();
@@ -312,6 +312,7 @@ export async function dragCard(ctx: SimContext, from: string, to: string, via: '
     .poll(async () => (await readCardIds(ctx)).indexOf(from), { timeout: 4000 })
     .not.toBe(fromIdx);
   ctx.log('action', { kind: 'dragCard', from, to, via });
+  return 'applied';
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -328,6 +329,126 @@ export async function openSidebar(ctx: SimContext): Promise<void> {
 }
 
 /**
+ * Reads the hardware sidebar's card ids in RENDERED order via the stable
+ * semantic `data-sb-id` attributes on each sortable card root. Real lane only
+ * in practice — the mock harness never has a hardware profile, so no sidebar
+ * cards exist there.
+ */
+export async function readSidebarIds(ctx: SimContext): Promise<string[]> {
+  const page = ctx.driver.page;
+  if (!page) return [];
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('#hardware-sidebar [data-sb-id]')).map((n) =>
+      n.getAttribute('data-sb-id') ?? ''
+    )
+  );
+}
+
+/**
+ * Polls until the hardware sidebar renders at least `minCount` cards — the
+ * semantic "native hardware discovery has settled" checkpoint for journeys
+ * that need a stable sidebar ordering (no fixed sleeps).
+ */
+export async function waitForSidebarCards(
+  ctx: SimContext,
+  minCount: number,
+  timeoutMs = 30_000
+): Promise<string[]> {
+  const ids = await pollUntil(() => readSidebarIds(ctx), (ids) => ids.length >= minCount, timeoutMs, 250);
+  if (ids.length < minCount) {
+    ctx.assert('sidebar-cards-settled', false, `expected >= ${minCount} sidebar cards, got ${ids.join(',') || 'none'}`);
+  }
+  return ids;
+}
+
+/**
+ * Polls until the rendered sidebar order is SETTLED: at least `minCount`
+ * cards AND two consecutive samples identical (WMI/PDH enrichment appends
+ * have landed). Sample spacing is measurement cadence, not a fixed delay.
+ */
+export async function waitForSidebarSettled(
+  ctx: SimContext,
+  minCount = 3,
+  timeoutMs = 30_000,
+  sampleMs = 1_200
+): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await readSidebarIds(ctx);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, sampleMs));
+    const next = await readSidebarIds(ctx);
+    if (next.length >= minCount && JSON.stringify(next) === JSON.stringify(last)) {
+      ctx.log('observation', { kind: 'sidebar-order-settled', ids: next });
+      return next;
+    }
+    last = next;
+  }
+  ctx.assert('sidebar-cards-settled', false, `sidebar never settled within ${timeoutMs}ms (last: ${last.join(',') || 'none'})`);
+  return last;
+}
+
+/** Reads the REAL run-isolated settings.json as raw text plus parsed form.
+ *  Unlike persistedSettings() (which swallows parse errors into {}), this
+ *  surfaces corruption explicitly so durability journeys can assert the file
+ *  stayed valid JSON. Mock lane returns exists:false — callers branch. */
+export function readRealStoreFile(
+  ctx: SimContext
+): { exists: boolean; text: string; parsed: Record<string, unknown> | null } {
+  const d = ctx.driver as unknown as { appDataDir?: string | null };
+  const dir = d.appDataDir;
+  const p = dir ? join(dir, 'settings.json') : null;
+  if (!p || !existsSync(p)) return { exists: false, text: '', parsed: null };
+  const text = readFileSync(p, 'utf8');
+  try {
+    return { exists: true, text, parsed: JSON.parse(text) as Record<string, unknown> };
+  } catch {
+    return { exists: true, text, parsed: null };
+  }
+}
+
+/** Invokes the real backend's get_collector_status through __TAURI_INTERNALS__
+ *  and returns the managed status answer — proves native re-bootstrap after a
+ *  relaunch (mock harness has no internals and returns null). Always resolves
+ *  the CURRENT driver page (a relaunched process replaces the target). */
+export async function invokeCollectorStatus(
+  ctx: SimContext
+): Promise<{ state?: string; schema_version?: number; generation?: number; timestamp_ms?: number } | null> {
+  const page = ctx.driver.page;
+  if (!page) return null;
+  return page.evaluate(async () => {
+    const internals = (window as unknown as {
+      __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+    }).__TAURI_INTERNALS__;
+    if (!internals) return null;
+    return (await internals.invoke('get_collector_status')) as {
+      state?: string;
+      schema_version?: number;
+      generation?: number;
+      timestamp_ms?: number;
+    };
+  });
+}
+
+/** Invokes the real backend's get_history through __TAURI_INTERNALS__ and
+ *  returns the committed timestamp count. Always resolves the CURRENT driver
+ *  page — a pre-restart binding dies with the first process across restartApp.
+ *  Mock harness has no internals and returns -1. */
+export async function invokeHistoryPointCount(ctx: SimContext, windowSecs = 60): Promise<number> {
+  const page = ctx.driver.page;
+  if (!page) return -1;
+  return page.evaluate(async (secs) => {
+    const internals = (window as unknown as {
+      __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+    }).__TAURI_INTERNALS__;
+    if (!internals) return -1;
+    const history = (await internals.invoke('get_history', { windowSecs: secs })) as {
+      timestamps: number[];
+    };
+    return Array.isArray(history.timestamps) ? history.timestamps.length : -1;
+  }, windowSecs);
+}
+
+/**
  * Keyboard-drags the first sidebar card down one slot. REAL LANE ONLY: the
  * mock harness never has a hardware profile (`useHardwareProfile` bails when
  * `isTauri()` is false), so sidebar cards — and their drag handles — do not
@@ -338,10 +459,25 @@ export async function dragSidebarCard(ctx: SimContext): Promise<void> {
   await sleep(await drawThinkTime(ctx));
   if (!page) return;
   await openSidebar(ctx);
+  await keyboardMoveFirstSidebarCardDown(ctx, 'dragSidebarCard');
+}
+
+/**
+ * Keyboard-drags the FIRST sidebar card down one slot WITHOUT touching the
+ * sidebar toggle. For journeys that already opened the sidebar (the toggle is
+ * a state flip — calling openSidebar while it is open would close it) and that
+ * need to assert the resulting rendered order.
+ */
+export async function keyboardMoveFirstSidebarCardDown(
+  ctx: SimContext,
+  label = 'sidebar-reorder'
+): Promise<void> {
+  const page = ctx.driver.page;
+  if (!page) return;
   const handles = page.locator(SIDEBAR_HANDLE);
   const count = await handles.count();
   if (count < 2) {
-    ctx.assert('dragSidebarCard', false, 'fewer than 2 sidebar cards to reorder');
+    ctx.assert(label, false, 'fewer than 2 sidebar cards to reorder');
     return;
   }
   // Keyboard drag: move the first sidebar card down one slot (dnd-kit
@@ -352,7 +488,7 @@ export async function dragSidebarCard(ctx: SimContext): Promise<void> {
   await page.keyboard.press('ArrowDown');
   await sleep(150);
   await page.keyboard.press('Enter');
-  ctx.log('action', { kind: 'dragSidebarCard' });
+  ctx.log('action', { kind: label });
 }
 
 // ── ErrorBoundary retry ───────────────────────────────────────────────────────
