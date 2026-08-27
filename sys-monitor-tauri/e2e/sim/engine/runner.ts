@@ -314,7 +314,7 @@ export async function runJourney(opts: RunOptions, selection: RunSelection): Pro
 
     // Video is flushed on browser close; find and normalize it.
     try {
-      const webm = readdirSync(runDir).find((f) => f.endsWith('.webm'));
+      const webm = readdirSync(runDir).find((f: string) => f.endsWith('.webm'));
       if (webm) {
         const target = join(runDir, 'video.webm');
         copyFileSync(join(runDir, webm), target);
