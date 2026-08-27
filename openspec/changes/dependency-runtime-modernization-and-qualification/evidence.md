@@ -128,15 +128,15 @@ At planning time the open queue included these relevant generated changes. The e
 - `git diff --check`: **0 whitespace errors** (only CRLF LF->CRLF warnings, expected on Windows)
 - OpenSpec strict validation (`npx openspec validate --all --strict --no-interactive`): **17 passed, 0 failed** after fixing ci-pipeline delta SHALL body
 
-### F. Hosted qualification
+### F. Hosted qualification (dispatched 2026-08-27T05:37Z for final candidate 2e56ffc)
 
 | Workflow | Run ID | SHA | Result | Artifact/evidence |
 |---|---|---|---|---|
-| Rust/frontend/release | | | | |
-| E2E | | | | |
-| Mock simulation | | | | |
-| Packaged real simulation | | | | |
-| MSI/NSIS qualification | | | | |
+| Rust and release (Rust, frontend, Windows exe, MSI/NSIS bundle) | 33043088979 | 2e56ffc | in_progress | https://github.com/quantdale/monitorers/actions/runs/33043088979 |
+| E2E Verification Harness | 33043091191 | 2e56ffc | success (completed 2026-08-27T05:38Z, 1m34s) | https://github.com/quantdale/monitorers/actions/runs/33043091191 |
+| Simulation (mock lane) | 33043093443 | 2e56ffc | in_progress | https://github.com/quantdale/monitorers/actions/runs/33043093443 |
+| Release qualification (MSI/NSIS) | 33043102890 | 2e56ffc | in_progress | https://github.com/quantdale/monitorers/actions/runs/33043102890 |
+| Packaged real simulation (via Simulation dispatch) | 33043093443 | 2e56ffc | in_progress (packaged lane is part of Simulation workflow dispatch) | https://github.com/quantdale/monitorers/actions/runs/33043093443 |
 
 ### G. Defects found during migration
 
