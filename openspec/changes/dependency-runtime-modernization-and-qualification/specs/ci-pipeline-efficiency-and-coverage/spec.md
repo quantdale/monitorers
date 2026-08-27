@@ -21,7 +21,7 @@ Dependency modernization SHALL not cite a green workflow from an earlier migrati
 - **THEN** every materially affected required workflow is rerun before the campaign is marked complete
 
 ### Requirement: CI maintenance discovered during migration SHALL preserve supply-chain controls
-If dependency migration exposes unsupported Node action runtimes, deprecated GitHub Actions, or cache incompatibilities, supported replacements MAY be adopted as part of the campaign only when action references remain pinned to full immutable commit SHAs and existing audit/security semantics remain mandatory.
+CI maintenance discovered during migration SHALL preserve supply-chain controls. If dependency migration exposes unsupported Node action runtimes, deprecated GitHub Actions, or cache incompatibilities, supported replacements MAY be adopted as part of the campaign only when action references remain pinned to full immutable commit SHAs and existing audit/security semantics remain mandatory.
 
 #### Scenario: artifact action emits an unsupported-runtime warning
 - **WHEN** a hosted workflow reports that a pinned artifact action uses a deprecated Node runtime and a compatible maintained release exists
