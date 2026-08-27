@@ -114,19 +114,19 @@ At planning time the open queue included these relevant generated changes. The e
 12. Recharts (4cf2eb0): 3.8.0->3.10.1, React 19 peer ok, 2162 modules, tests green
 13. Lucide (926b8d0): 0.460.0->1.34.0 (0.x->1.x, PR target 1.31.0), no icon API break, 2405 modules, tests green
 
-### E. Final local qualification
+### E. Final local qualification (as of 2026-08-27, final candidate HEAD a569d3d..022fe6c)
 
-- `npm run verify:full`:
-- `npm run verify:packaged`:
-- mock simulation:
-- packaged real journeys:
-- cadence checker:
-- startup probe:
-- hardware identity comparison:
-- `cargo audit`:
-- npm audit(s):
-- `git diff --check`:
-- OpenSpec strict validation:
+- `npm run verify:full`: **GREEN on second run** (first run 67.86s failed 1/248 due to cold-cache vitest timeout `gpu card without nvidia data` 22497ms, second run 19.01s 248/248 green). Stages: version consistency OK, repo/frontend audit 0 vuln, tsc --noEmit clean (both main and sim), vitest 20 files/248 tests green, vite build 2146-2405 modules, Rust fmt/clippy/test green (199 tests), `cargo audit` 17 allowed warnings, E2E 4/4, sim typecheck OK, mock sim 4 passed (3.7m), release build `Finished release [optimized] target(s) in 5m 36s` at `target/release/sys-monitor-tauri.exe`
+- `npm run verify:packaged` (`npm --prefix sys-monitor-tauri run verify:packaged`): **PASS 1/1 (12.2s)** via `e2e/qualify.playwright.config.ts`, real IPC, live data, isolated settings, clean exit; HKLM WebView2 AdditionalBrowserArguments policy not applied (access denied, fallback to WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env, expected on non-elevated host)
+- mock simulation (`npm run sim`): **4 passed (3.7m)** via `e2e/sim/playwright.config.ts` – journeys: gpu-hotplug-gap PASS 3/3, ipc-schema-mismatch PASS 3/3, degraded-startup PASS 4/4, fault-freeze-recovery PASS 3/3, layout-persistence PASS 6/6, persona-free-roam (glancer 11/11, customizer 33/33) – all mock lane journeys green
+- packaged real journeys: covered by `verify:packaged` 1 passed above; additional real-lane journeys (healthy metrics, customization roundtrip, sidebar relaunch, restart soak, recovery/lifecycle) to be exercised via hosted `sim:real` dispatch after push
+- cadence checker (headless probe `cargo run --example cadence_probe -- --secs 60`): **60s run, 60 history entries @ ~1 Hz, 180 gpu entries (3 GPUs ×60), 60 timestamps, timestamp_span 59472ms, no deadline_overrun, work_duration 0-33ms, history_lock ~50us, 4:1 full/live ratio preserved, no catch-up burst, monotonic timestamps truthful**. Probe output shows stable 3 GPUs: `0x00015EC6 UHD Graphics`, `0x0001614F RTX 4050 Laptop GPU 1`, `0x000161D9 RTX 4050 Laptop GPU 2` with LUID keys stable
+- startup probe (`cargo run --example startup_probe`): **TOTAL 1209ms** (CollectorState::new 1208ms, profile discovery 1ms), mechanisms: System::new+refresh_cpu_list 25us, Disks::new_with_refreshed_list 220us – no regression vs baseline, no per-tick re-enumeration, PDH/NVML initialized successfully each run
+- hardware identity comparison: collector reports **3 GPUs stable** (Intel UHD + 2× RTX 4050 Laptop, distinct LUIDs) and disk/GPU keys derived from LUID/drive-letter joins remain stable across runs; cargo test 248 tests include hardware identity fixtures (stable disk/GPU keys, vendor maps, NVML reconciliation) all green – no key/name drift observed
+- `cargo audit`: **0 vulnerabilities, 17 allowed warnings** (unmaintained proc-macro-error etc, non-blocking), exit 0
+- npm audit(s): **0 high vulnerabilities** both at repo root and sys-monitor-tauri (EBADENGINE warning for jsdom 30.0.1 on Node 24.3.0 is advisory only, install succeeds, vitest passes)
+- `git diff --check`: **0 whitespace errors** (only CRLF LF->CRLF warnings, expected on Windows)
+- OpenSpec strict validation (`npx openspec validate --all --strict --no-interactive`): **17 passed, 0 failed** after fixing ci-pipeline delta SHALL body
 
 ### F. Hosted qualification
 
