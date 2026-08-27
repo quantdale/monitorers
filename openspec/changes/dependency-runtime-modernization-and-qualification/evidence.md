@@ -140,12 +140,36 @@ At planning time the open queue included these relevant generated changes. The e
 
 ### G. Defects found during migration
 
-For each defect: priority/severity, root cause, dependency stage that exposed it, fix commit, regression test, and final verification.
+| # | Severity | Stage | Root cause | Fix commit | Regression test / verification |
+|---|---|---|---|---|---|
+| 1 | Medium | foundation (serde) | `cargo update -p serde --precise` forced resolver to unify windows-core to 0.61.2, breaking wmi 0.18.4 which requires 0.62.2 (dual-version coexistence via wry vs wmi) | Reverted lock, used plain `cargo update` (no --precise) which preserves 0.61.2+0.62.2 dual versions; documented in evidence D | cargo check --all-features green, wmi 0.18.4 compiles, windows-core 0.62.2 retained for wmi |
+| 2 | Low | toolchain (clippy 1.95) | New clippy 1.95 `question_mark` lint flagged `if let Some(stripped)=name.strip_prefix("luid_")` in `collector/gpu.rs:23` | `acfe6a5` rewrote to `name.strip_prefix("luid_")?` semantics identical | 43 gpu tests green, clippy -D warnings clean, fmt clean |
+| 3 | Low | TypeScript 7 | TS 7 stricter: `src/sim` harness files (node:fs/process) were pulled into main `tsc --noEmit` via `include: ["src"]` + imports to `e2e/`, and `runner.ts:317` had implicit `any` for `find((f)=>...)` | `b416212` added `exclude: ["src/sim","src/**/*.test.*"]` to `tsconfig.json` so harness only checked via `e2e/tsconfig.sim.json` (types: [node]), and added explicit `(f: string)` | tsc --noEmit clean (both main and sim), build 741ms, vitest 248 green |
+| 4 | Info | jsdom 30 | jsdom 30.0.1 engine requires Node ^24.15.0 but host is 24.3.0 → EBADENGINE warning on `npm ci`/`npm install` | Kept jsdom 30.0.1 (vitest still passes, 248 tests green); documented that CI Node 24 (latest patch) satisfies 24.15+ without warning, local Node patch update to 24.15+ recommended | npm audit 0, vitest 20 files green despite warning |
+| 5 | Info | vitest | Cold-cache full-suite timeout: `renderCardContent.test.tsx` 1/11 timed out at 20s (first `verify:full` 67.86s, transform 6.6s) vs warm-cache 19s 248/248 green | Triaged as env/load flake (same as baseline flake in evidence A), not code defect; second `verify:full` run with warm cache passes 5m36s release build | Second `verify:full` GREEN, isolated `vitest run src/cards/renderCardContent.test.tsx` 5.64s green, full suite 19s green on retry |
 
-### H. Dependabot PR disposition
+No Critical/High/P1/P2 defects introduced; all fixes verified by existing tests + targeted reruns.
 
-Refresh the live queue and record every PR as merged, superseded/closed, recreated, deferred or still blocked. No generated dependency PR should remain unexplained at campaign completion.
+### H. Dependabot PR disposition (as of 2026-08-27, refreshed via `gh pr list`)
 
-### I. Limitations
+| PR | Domain | From→To | Disposition | Evidence/trigger |
+|---|---|---|---|---|
+| #20 | frontend tooling group | vite 6.4.3->8.2.1, plugin-react 4.3.4->6.1.0, jsdom 25->30.0.1, TS 5.9->7.0.2, @types/node 24->26, Tauri CLI | **Superseded** – recreated as staged workstreams I (Vite 8.2.2/6.1.0, TS 7.0.2, jsdom 30.0.1) + G (CLI 2.11.4); @types/node 26 **deferred** (Node stays 24.3.0, 24.13.3 latest 24) | Commits acaf2e3, b416212, ad9ee00, 5981185 |
+| #21 | charts | recharts 3.8.0->3.10.1 | **Adopted** via `4cf2eb0` recharts 3.10.1 (latest) | 2162 modules, tests green |
+| #22 | Tauri JS API | @tauri-apps/api 2.10.1->2.11.1 | **Adopted** via `5981185` api 2.11.1 (matches Rust 2.11.5) | tsc+build green |
+| #23 | React | react 18.3->19.2.8 + @types/react | **Adopted** coherent with #24 via `8a92152` | 248 tests green |
+| #24 | React DOM | react-dom 18.3->19.2.8 + @types/react-dom | **Adopted** coherent with #23 via `8a92152` | 248 tests green |
+| #25 | UI icons | lucide-react 0.460.0->1.34.0 (target 1.31.0) | **Adopted** via `926b8d0` 1.34.0 (latest) | 2405 modules, tests green |
+| #26 | Tauri store JS | @tauri-apps/plugin-store 2.4.2->2.4.4 | **Adopted** via `5981185` plugin-store 2.4.4 (matches Rust) | tsc+build green |
+| #27 | Rust grouped | serde 1.0.228->1.0.229, serde_json 1.0.149->1.0.151, sysinfo 0.33.1->0.39.6, wmi 0.13.4->0.18.4, chrono 0.4.44->0.4.45, nvml-wrapper 0.10.0->0.12.1, windows 0.61.3->0.62.2, tauri-plugin-store, tauri-build | **Superseded** – decomposed into collector-platform (acfe6a5/618aaf5/11e5075/3c53934) + foundation+Tauri (a569d3d) per D2 | Each domain verified via cargo test/clippy/fmt |
 
-Preserve truthful external limits, including physical identical-GPU/hotplug/power validation and unsigned installers unless separately provisioned. Do not claim fixture/mock evidence as physical-hardware evidence.
+No open PR remains unexplained; all 8 PRs are Adopted (6) or Superseded (2) with exact commits. If `gh` cannot close superseded PRs in this environment, maintainer action: close #20 and #27 as superseded by this campaign branch (all their package bumps are landed in staged commits).
+
+### I. Limitations (truthful external limits, not campaign blockers)
+
+- **Dual identical-GPU physical proof – still exploratory / unqualified**: deterministic fixtures cover UUID/PCI vs name reconciliation and duplicate-name fail-closed logic (all 248 tests green), but this host has only one physical Nvidia GPU plus Intel iGPU (3 LUIDs total, not 2× identical). No qualifying machine with two identical physical GPUs was available, so runtime dual-identical-GPU telemetry association remains explicitly unqualified – fixtures are not physical proof (per D7/F requirement).
+- **Physical hotplug/lid/power automation – not fabricated**: hotplug gap journey is mocked (gpu-hotplug-gap 3/3 in mock sim), not physical; lid/power events remain in `e2e/exploratory-register.md` and are not claimed.
+- **Code signing – installers remain unsigned**: MSI/NSIS installers are unsigned because no signing certificate/secret is configured (per backlog). Dependency modernization does not invent credentials.
+- **Node patch level – jsdom 30 engine warning**: jsdom 30.0.1 wants Node ^24.15.0, host is 24.3.0 → EBADENGINE warning on npm install, but vitest still passes. CI Node 24 (latest) satisfies 24.15+; local Node patch update to 24.15+ is recommended but not required for correctness. @types/node 26 deferred for same reason (Node stays 24).
+- **Packaged real-lane free-roam pointer-drag – still exploratory**: keyboard drag is certified (dnd-kit keyboard + pointer tests green, Recharts memoization preserved), pointer-drag remains registered exploratory gap per AGENTS.md, not a blocker for this dependency campaign.
+- **Unsigned installers and physical-only gaps are intentionally deferred, not blockers for local/hosted qualification of the modernized stack**.
