@@ -8,10 +8,13 @@ use crate::pdh::PdhHandles;
 
 // ── Enums & structs ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, Default)]
 pub enum CpuVendor {
     Intel,
     Amd,
+    /// The default for a `HardwareProfile::default()`, i.e. "not detected yet" —
+    /// never a claim about the machine.
+    #[default]
     Unknown,
 }
 
@@ -54,7 +57,7 @@ pub struct DiskInfo {
     pub kind: DiskKind,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, Default)]
 pub struct HardwareProfile {
     pub cpu_vendor: CpuVendor,
     pub cpu_name: String,
@@ -85,14 +88,6 @@ impl CpuIdentity {
             .map(|cpu| cpu.brand())
             .unwrap_or_default();
         Self::from_brand(brand)
-    }
-
-    /// Probe the CPU identity with a dedicated minimal OS enumeration.
-    /// Only for callers with no System available (see `from_sysinfo`).
-    pub fn probe() -> Self {
-        let mut sys = sysinfo::System::new();
-        sys.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
-        Self::from_sysinfo(&sys)
     }
 
     pub fn from_brand(brand: &str) -> Self {
@@ -258,35 +253,30 @@ pub fn disk_infos_from(disks: &sysinfo::Disks) -> Vec<DiskInfo> {
         .collect()
 }
 
-fn detect_disks() -> Vec<DiskInfo> {
-    disk_infos_from(&sysinfo::Disks::new_with_refreshed_list())
-}
+// ── detect_with_cpu ───────────────────────────────────────────────────────────
 
-// ── Public detect ──────────────────────────────────────────────────────────────
-
-/// Build hardware profile. Call with (None, None, None) when WMI is not yet available
-/// (e.g. in CollectorState::new()); call with (Some(&pdh), wmi_con, Some(disks)) on the
-/// background thread after WMI is ready to populate GPUs and physical-disk list.
-/// When disks_override is Some, it is used so the sidebar matches the dashboard disk count.
-pub fn detect(
-    pdh: Option<&PdhHandles>,
-    wmi_con: Option<&wmi::WMIConnection>,
-    disks_override: Option<Vec<DiskInfo>>,
-) -> HardwareProfile {
-    detect_with_cpu(pdh, wmi_con, disks_override, &CpuIdentity::probe())
-}
-
-/// Same as [`detect`], but reuses a caller-supplied CPU identity instead of
-/// paying a fresh OS enumeration. Every caller that already holds a refreshed
-/// sysinfo System or a previously built profile should prefer this — see
-/// `CpuIdentity` for why.
+/// Build the hardware profile. Call with `(None, None, None)` when WMI is not
+/// yet available (the pre-WMI degraded profile); call with
+/// `(Some(&pdh), wmi_con, Some(disks))` on the background thread after WMI is
+/// ready to populate GPUs and the physical-disk list. When `disks_override` is
+/// `Some`, it is used so the sidebar matches the dashboard disk count.
+///
+/// The `cpu` argument is a caller-supplied CPU identity rather than something
+/// this function probes: every caller already holds either a refreshed sysinfo
+/// System or a previously built profile, so re-probing would pay a fresh OS
+/// enumeration for nothing. See `CpuIdentity` for why that matters.
 pub fn detect_with_cpu(
     pdh: Option<&PdhHandles>,
     wmi_con: Option<&wmi::WMIConnection>,
     disks_override: Option<Vec<DiskInfo>>,
     cpu: &CpuIdentity,
 ) -> HardwareProfile {
-    let disks = disks_override.unwrap_or_else(detect_disks);
+    // `disks_override` is None only when the caller detected no physical disks
+    // at all (e.g. PDH returned nothing yet). Fall back to a direct sysinfo
+    // enumeration in that case so a profile is never built with an empty disk
+    // list just because the caller had none to hand.
+    let disks = disks_override
+        .unwrap_or_else(|| disk_infos_from(&sysinfo::Disks::new_with_refreshed_list()));
     HardwareProfile {
         cpu_vendor: cpu.vendor.clone(),
         cpu_name: cpu.name.clone(),

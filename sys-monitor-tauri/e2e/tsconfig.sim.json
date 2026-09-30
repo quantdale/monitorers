@@ -1,10 +1,4 @@
 {
-  "extends": "../tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "types": ["node"],
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
-  },
-  "include": ["./sim/**/*.ts", "../src/**/*.ts"],
-  "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx"]
+  "//": "Entry point for `npm run sim:typecheck` (documented in AGENTS.md/CLAUDE.md as the project that owns e2e/** + src/sim/**). The real configuration lives in ./tsconfig.json so that editors and language servers — which resolve the NEAREST `tsconfig.json`, not a sibling `tsconfig.sim.json` — find the node types these files need. Keep this file as a shim; do not move the settings here.",
+  "extends": "./tsconfig.json"
 }

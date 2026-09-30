@@ -7,7 +7,7 @@ pub mod snapshot;
 pub mod supervisor;
 
 pub use cpu::query_cpu_temp_c;
-pub use disk::{physical_disk_list, query_disk_models_wmi};
+pub use disk::{disk_display_name, physical_disk_list, query_disk_models_wmi};
 pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]

@@ -12,6 +12,9 @@ import {
   type SimScenario,
 } from './mockBackend';
 import type { MetricsSnapshot } from '../types/metrics';
+// Safe to import here (the cycle ban is on mockBackend.ts importing useMetrics.ts,
+// which would be a bundle-time cycle; a test importing both is acyclic).
+import { EXPECTED_SCHEMA_VERSION, MAX_HISTORY } from '../hooks/useMetrics';
 
 // jsdom provides window/localStorage; ensure a clean slate per test.
 beforeEach(() => {
@@ -33,7 +36,7 @@ describe('MockBackend default parity', () => {
     vi.useRealTimers();
   });
 
-  it('emits 4:1 on_tick ratio snapshots with schema_version 5', () => {
+  it('emits 4:1 on_tick ratio snapshots with the current schema_version', () => {
     vi.useFakeTimers();
     const backend = makeBackend();
     const onTicks: boolean[] = [];
@@ -46,12 +49,12 @@ describe('MockBackend default parity', () => {
     vi.advanceTimersByTime(4 * 250); // 4 simulation seconds
     expect(onTicks).toHaveLength(4);
     expect(onTicks).toEqual([false, false, false, true]);
-    expect([...new Set(versions)]).toEqual([5]);
+    expect([...new Set(versions)]).toEqual([6]);
   });
 
   it('default scenario carries the pre-bridge disk/GPU set', () => {
     const scenario = defaultScenario();
-    expect(scenario.schema_version).toBe(5);
+    expect(scenario.schema_version).toBe(6);
     expect(scenario.speed).toBe(1);
     expect(scenario.disks?.map((d) => d.key)).toEqual(['C:', 'D:']);
     expect(scenario.gpus?.map((g) => [g.name, g.vendor])).toEqual([
@@ -60,14 +63,28 @@ describe('MockBackend default parity', () => {
     ]);
   });
 
-  it('getHistory returns a 300-point seed matching the pre-bridge shape', async () => {
+  it('a window covering the whole seed returns all 300 pre-attach points', async () => {
+    // RESTATED against the production contract (task 4.3): `getHistory` now
+    // honours the requested window like `build_history_payload` does, so the
+    // 300-point seed is only fully visible through a window wide enough to
+    // span it (300 points x HISTORICAL_DENSITY 1000 ms = 300 s).
     const backend = makeBackend();
-    const payload = await backend.getHistory();
-    expect(payload.schema_version).toBe(5);
+    const payload = await backend.getHistory(3600);
+    expect(payload.schema_version).toBe(6);
     expect(payload.timestamps).toHaveLength(300);
     expect(payload.cpu).toHaveLength(300);
     expect(payload.disks.map((d) => d.key)).toEqual(['C:', 'D:']);
     expect(payload.gpus.map((g) => g.name)).toEqual(['UHD Graphics', 'RTX 4050']);
+  });
+
+  it('a narrow window returns only that elapsed span of the SAME ring', async () => {
+    const backend = makeBackend();
+    const wide = await backend.getHistory(3600);
+    const narrow = await backend.getHistory(60);
+    // Strictly fewer points, and taken from the end of the same series.
+    expect(narrow.timestamps.length).toBeLessThan(wide.timestamps.length);
+    expect(narrow.timestamps.at(-1)).toBe(wide.timestamps.at(-1));
+    expect(narrow.timestamps[0]).toBeGreaterThan(wide.timestamps[0]);
   });
 
   it('keeps distinct telemetry on two same-name Nvidia fixture devices', () => {
@@ -429,5 +446,196 @@ describe('MockBackend recovery lifecycle parity', () => {
     expect(backend.getStatus().generation).toBe(3);
     expect(generationsAtHealthy).toEqual([1, 3]);
     expect(statuses.filter((s) => s === 'starting')).toHaveLength(2);
+  });
+});
+
+describe('mock schema parity with production', () => {
+  it('the mock emits the same schema_version the frontend expects', async () => {
+    // The mock cannot import useMetrics.ts (import cycle), so the value is
+    // duplicated. This test is what keeps the duplicate honest.
+    const backend = makeBackend();
+    const payload = await backend.getHistory();
+    expect(payload.schema_version).toBe(EXPECTED_SCHEMA_VERSION);
+    expect(defaultScenario().schema_version).toBe(EXPECTED_SCHEMA_VERSION);
+  });
+});
+
+describe('MockBackend single-clock timestamp channel', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stamps every snapshot with a monotonically advancing timestamp_ms', () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    const stamps: number[] = [];
+    backend.onSnapshot((s) => stamps.push(s.timestamp_ms));
+    backend.start();
+    vi.advanceTimersByTime(4 * 250);
+
+    expect(stamps).toHaveLength(4);
+    for (let i = 1; i < stamps.length; i += 1) {
+      expect(stamps[i]).toBeGreaterThan(stamps[i - 1]);
+    }
+  });
+
+  it('advances the timestamp on off-tick snapshots too, while only on_tick gates growth', () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    const stamps: number[] = [];
+    const onTicks: boolean[] = [];
+    backend.onSnapshot((s) => {
+      stamps.push(s.timestamp_ms);
+      onTicks.push(s.on_tick);
+    });
+    backend.start();
+    vi.advanceTimersByTime(4 * 250);
+
+    // 4 emissions, but only the 4th commits history.
+    expect(onTicks).toEqual([false, false, false, true]);
+    // Every emission carries a distinct, advancing timestamp: the off-tick
+    // samples are a truthful "read at" even though they append nothing.
+    expect(new Set(stamps).size).toBe(4);
+  });
+
+  it('the seeded history and the emitted snapshots share one clock (no second-clock seam)', async () => {
+    const backend = makeBackend();
+    const payload = await backend.getHistory();
+    const seedTail = payload.timestamps.at(-1)!;
+
+    vi.useFakeTimers();
+    const stamps: number[] = [];
+    backend.onSnapshot((s) => stamps.push(s.timestamp_ms));
+    backend.start();
+    vi.advanceTimersByTime(1000);
+    vi.useRealTimers();
+
+    // The first live sample continues from the seeded tail rather than
+    // restarting at an unrelated wall clock.
+    expect(stamps.length).toBeGreaterThan(0);
+    for (const s of stamps) expect(s).toBeGreaterThanOrEqual(seedTail);
+    expect(stamps[0] - seedTail).toBeLessThanOrEqual(1000);
+  });
+
+  it('a frozen snapshot keeps its values but still advances the clock', () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    const snaps: Array<{ timestamp_ms: number; cpu: number }> = [];
+    backend.onSnapshot((s) => snaps.push({ timestamp_ms: s.timestamp_ms, cpu: s.cpu }));
+    backend.start();
+    vi.advanceTimersByTime(4 * 250);
+    const frozenCpu = snaps.at(-1)!.cpu;
+
+    backend.injectFault({ kind: 'freeze', ticks: 4 });
+    const before = snaps.length;
+    vi.advanceTimersByTime(4 * 250);
+    const afterFreeze = snaps.slice(before);
+    expect(afterFreeze.length).toBeGreaterThan(0);
+    // Clock still moved…
+    for (let i = 1; i < afterFreeze.length; i += 1) {
+      expect(afterFreeze[i].timestamp_ms).toBeGreaterThan(afterFreeze[i - 1].timestamp_ms);
+    }
+    expect(frozenCpu).toBeDefined();
+  });
+});
+
+describe('MockBackend accumulating history ring', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('advances only on history-committing emissions (1 of every 4 ticks)', async () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    // Seed first so the ring exists and the delta is attributable to commits.
+    await backend.getHistory(3600);
+    const before = (await backend.getHistory(3600)).timestamps.length;
+
+    backend.start();
+    vi.advanceTimersByTime(16 * 250); // 16 ticks => 4 full ticks => 4 commits
+    vi.useRealTimers();
+    const after = (await backend.getHistory(3600)).timestamps.length;
+    expect(after - before).toBe(4);
+  });
+
+  it('off-tick emissions do not grow the ring', async () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    await backend.getHistory(3600);
+    const before = (await backend.getHistory(3600)).timestamps.length;
+
+    backend.start();
+    vi.advanceTimersByTime(3 * 250); // ticks 0,1,2 are registry-only
+    vi.useRealTimers();
+    expect((await backend.getHistory(3600)).timestamps.length).toBe(before);
+  });
+
+  it('a second request does not re-seed: the ring is the same session', async () => {
+    const backend = makeBackend();
+    const first = await backend.getHistory(3600);
+    const second = await backend.getHistory(3600);
+    expect(second.timestamps).toEqual(first.timestamps);
+    expect(second.cpu).toEqual(first.cpu);
+  });
+
+  it('caps the ring at the production MAX_HISTORY capacity', async () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    await backend.getHistory(3600); // 300 seed points
+    backend.start();
+    // 4000 full ticks => 4000 further commits, far beyond the 3600 cap.
+    vi.advanceTimersByTime(4000 * 4 * 250);
+    vi.useRealTimers();
+    const payload = await backend.getHistory(86_400);
+    expect(payload.timestamps).toHaveLength(3600);
+    expect(payload.cpu).toHaveLength(3600);
+    for (const disk of payload.disks) expect(disk.values).toHaveLength(3600);
+  });
+
+  it('widening the window reveals earlier committed samples of the same session', async () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    await backend.getHistory(3600);
+    backend.start();
+    vi.advanceTimersByTime(200 * 250);
+    vi.useRealTimers();
+
+    const narrow = await backend.getHistory(10);
+    const wide = await backend.getHistory(60);
+    expect(wide.timestamps.length).toBeGreaterThan(narrow.timestamps.length);
+    expect(wide.timestamps[0]).toBeLessThan(narrow.timestamps[0]);
+    // Both ends agree: it is the SAME series, sliced differently.
+    expect(wide.timestamps.at(-1)).toBe(narrow.timestamps.at(-1));
+  });
+
+  it('narrowing the window shrinks the span while retaining the newest sample', async () => {
+    vi.useFakeTimers();
+    const backend = makeBackend();
+    await backend.getHistory(3600);
+    backend.start();
+    vi.advanceTimersByTime(120 * 250);
+    vi.useRealTimers();
+
+    const wide = await backend.getHistory(60);
+    const narrow = await backend.getHistory(10);
+    const spanOf = (p: { timestamps: number[] }): number =>
+      p.timestamps.at(-1)! - p.timestamps[0];
+    expect(spanOf(narrow)).toBeLessThan(spanOf(wide));
+    expect(narrow.timestamps.at(-1)).toBe(wide.timestamps.at(-1));
+    expect(narrow.cpu.at(-1)).toBe(wide.cpu.at(-1));
+  });
+
+  it('mirrors the production MAX_HISTORY value used by useMetrics', async () => {
+    // The mock cannot import MAX_HISTORY (import cycle), so pin it here.
+    const backend = makeBackend();
+    await backend.getHistory(3600);
+    const observedCap = await (async () => {
+      vi.useFakeTimers();
+      backend.start();
+      vi.advanceTimersByTime(4000 * 4 * 250);
+      vi.useRealTimers();
+      return (await backend.getHistory(86_400)).timestamps.length;
+    })();
+    expect(observedCap).toBe(MAX_HISTORY);
   });
 });

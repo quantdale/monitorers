@@ -1,7 +1,9 @@
 ## Purpose
 
 Defines CI requirements beyond the plain test gate: jobs that share cached dependency paths fall back to a common cache-key prefix, and the real production frontend build (`npm run build`) runs on every PR.
+
 ## Requirements
+
 ### Requirement: CI jobs sharing cached dependency paths use a common cache-key fallback
 Any two CI jobs that cache identical dependency paths from the same lockfile SHALL share a common `restore-keys` fallback prefix, so a cache miss on one job's exact key can still restore from another job's most recent cache rather than recompiling the full dependency tree from scratch.
 
@@ -17,11 +19,23 @@ CI SHALL include a job or step that runs the real production frontend build (`np
 - **THEN** CI runs `npm run build` and the PR's checks fail if that build fails
 
 ### Requirement: Local and hosted verification use canonical gates
-The repository SHALL define canonical fast/full verification scripts and CI SHALL invoke those same commands or their documented platform-specific equivalent. Hooks SHALL identify the layer they run honestly; required checks SHALL not be made non-blocking.
+The repository SHALL define canonical fast/full verification scripts and CI SHALL invoke those same commands or their documented platform-specific equivalent. Hooks SHALL identify the layer they run honestly; required checks SHALL not be made non-blocking. The canonical frontend verification lane SHALL cover release-version and documentation consistency, the dead-code check, both npm audit scopes, the production TypeScript type check, the test-inclusive TypeScript type check, unit tests, the frontend production build, and any enforced frontend lint step. The test-inclusive type check SHALL type-check every first-party TypeScript test source the test runner executes, so a type error in a test file blocks the same gate as a type error in production source.
 
 #### Scenario: Full gate includes security and user-facing checks
 - **WHEN** the full gate runs
 - **THEN** it includes frontend typecheck/tests/build/audit, Rust fmt/test/clippy/audit, E2E, simulation typecheck/matrix, and the supported Windows Tauri release no-bundle build
+
+#### Scenario: Frontend job runs the canonical lane end-to-end
+- **WHEN** a pull request is opened
+- **THEN** the `frontend` job invokes the canonical frontend verification lane, which runs every step the lane defines, rather than a hand-picked subset
+
+#### Scenario: A test-source type error blocks the job
+- **WHEN** a pull request introduces a type error only in a test file
+- **THEN** the `frontend` job fails
+
+#### Scenario: Lane cost stays bounded
+- **WHEN** the test-inclusive type check and any lint step are added to the frontend lane
+- **THEN** the lane's added cost is reported and remains small relative to the unit-test and production-build steps already in that lane
 
 ### Requirement: Production Tauri integration is built automatically
 At least one Windows PR/push job SHALL build the shipped-feature Tauri release executable. Installer bundle generation SHALL run automatically on a documented release/scheduled policy, with artifacts/logs available for failures. CI SHALL pin/document its Rust toolchain, minimize permissions, cancel superseded work safely, and use maintained action/runtime versions.
@@ -66,7 +80,6 @@ Successful installer builds SHALL produce an uploaded artifact manifest recordin
 #### Scenario: Manifest reflects reality
 - **WHEN** the release-qualification workflow completes
 - **THEN** the manifest lists every produced installer with correct size/hash/version and the recorded qualification outcome, and is uploaded alongside the installers
-
 
 ### Requirement: Mandatory audit tooling is installed without avoidable compilation
 The Rust CI job's `cargo audit` gate SHALL remain mandatory at its pinned version, but the installation mechanism SHALL NOT recompile the tool's dependency tree from source when an official prebuilt release of that exact version exists. Any installation action SHALL be pinned immutably (full commit SHA, never a mutable tag), install the exact pinned tool version, fail the job visibly when installation fails, and introduce no unsigned-binary acceptance without integrity verification. The chosen mechanism, version integrity reasoning, and observed or estimated time impact SHALL be recorded as evidence.

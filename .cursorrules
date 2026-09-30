@@ -7,12 +7,14 @@ Real-time Windows desktop system monitor built with Tauri v2. A single Rust back
 | Layer | Technology | Version |
 |---|---|---|
 | App shell | Tauri v2 (WebView2) | `tauri = "2"` |
-| Backend | Rust 2021, `sysinfo 0.33`, `windows 0.61` (PDH), `wmi 0.13`, `nvml-wrapper 0.10` (default), `nvapi-sys 0.1.3` (default, fallback) | edition 2021 |
-| Frontend | React 18, TypeScript 5, Vite 6 | `"react": "^18.2.0"`, `"vite": "^6.4.3"` |
-| Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.8.0"` |
+| Backend | Rust 2021, `sysinfo 0.39`, `windows 0.62` (PDH), `wmi 0.18`, `nvml-wrapper 0.12` (default), `nvapi-sys 0.1.3` (default, fallback) | edition 2021 |
+| Frontend | React 19, TypeScript 7, Vite 8 | `"react": "^19.2.8"`, `"typescript": "^7.0.2"`, `"vite": "^8.2.2"` |
+| Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.10.1"` |
 | Drag-and-drop | @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities | `"@dnd-kit/core": "^6.3.1"`, `"@dnd-kit/sortable": "^10.0.0"` |
-| Icons | lucide-react | `"lucide-react": "^0.460.0"` |
+| Icons | lucide-react | `"lucide-react": "^1.34.0"` |
 | Serialization | serde + serde_json | `"1"` |
+
+Every range in this table is transcribed from the committed manifests — `sys-monitor-tauri/src-tauri/Cargo.toml` for the backend and `sys-monitor-tauri/package.json` for the frontend. `scripts/check-version.mjs` fails the frontend gate if this table and those manifests ever disagree.
 
 **Cargo features:**
 - `nvml` (default ON) — Nvidia GPU temp/power/VRAM/fan/clock via NVML; the primary Nvidia path.
@@ -48,8 +50,23 @@ If cargo clippy --all-targets --all-features -- -D warnings fails:
 ### When frontend files are changed (src/**):
 Run from sys-monitor-tauri:
   npx tsc --noEmit
+  npm run typecheck:test
   npm test -- --run
   npm run build
+
+`npm run typecheck:test` (tsconfig.test.json) is what actually type-checks
+the Vitest sources: tsconfig.json excludes src/**/*.test.ts(x) because the
+production build does not include them, so without this step no tsc
+invocation in any lane has ever seen a test file. tsconfig.test.json owns
+src/** with its tests; e2e/tsconfig.sim.json owns e2e/** and src/sim/**.
+The three projects together cover every first-party .ts/.tsx in the repo.
+
+Frontend linting is currently NOT enforced: no ESLint (or other linter) is
+configured, there is no `lint` script, and no linter dev dependency exists.
+`typescript-eslint` cannot be adopted today — every published version
+declares `peer typescript ">=4.8.4 <6.1.0"` while this project is pinned to
+TypeScript 7 — so adopting it would require a `--force`/`--legacy-peer-deps`
+resolution. React-hooks rules are therefore a known gap, tracked as such.
 
 npm ci is run by CI but not required locally if node_modules exists.
 If node_modules is missing or package.json changed: run npm install.
@@ -67,7 +84,7 @@ Run all checks from both sections above.
 
 ### Test counts (as of the latest merged change; these drift as tests are added):
 - Rust and frontend test counts are reported by their runners and intentionally not duplicated here; a change in count should be understood from the test output.
-- E2E (Playwright, mock-data harness on Vite): 12 tests expected (`npm run e2e` from `sys-monitor-tauri/`).
+- E2E (Playwright, mock-data harness on Vite): the count is reported by the runner — run `npm run e2e` from `sys-monitor-tauri/` and read the result; it is intentionally not duplicated here.
 
 ---
 
@@ -98,7 +115,8 @@ monitorers/
     │   ├── hooks/useMetrics.ts     ← Tauri IPC + state (single source of truth)
     │   ├── hooks/useSettings.ts    ← plugin-store persistence (cardOrder/viewMode/windowSecs…)
     │   ├── hooks/useHardwareProfile.ts, useCardOrderInitialization.ts
-    │   ├── sim/mockBackend.ts      ← scriptable browser mock backend (sine script, __SIM__ faults; healthy only after a generation's first snapshot; stop() invalidates crash/recovery timers via a run token)
+    │   ├── sim/                    ← scriptable browser mock backend + per-run settings shim
+    │   │   └── mockBackend.ts      ← sine script, __SIM__ faults; healthy only after a generation's first snapshot; stop() invalidates crash/recovery timers via a run token
     │   └── components/
     │       ├── MetricCard.tsx       ← main card (default/tile/list views, Recharts AreaChart)
     │       ├── SortableCard.tsx     ← dnd-kit useSortable wrapper around MetricCard
@@ -111,20 +129,25 @@ monitorers/
         ├── Cargo.toml
         ├── tauri.conf.json         ← window: 900×1100, bundle id: com.quantdale.systemmonitor
         ├── build.rs
+        ├── examples/               ← probe targets (single-bin app crate)
+        │   ├── cadence_probe.rs    ← headless cadence probe/checker (real-hardware runs)
+        │   └── startup_probe.rs    ← session-bootstrap timing probe (startup-cost regressions)
+        ├── tests/
+        │   └── cadence_hardware.rs ← opt-in real-hardware cadence test (`cargo test --ignored cadence_real_hardware`)
         └── src/
             ├── main.rs             ← thin Tauri shell, lifecycle, commands, collector bootstrap
-            ├── lib.rs               ← library facade shared by app binary and cadence_probe
+            ├── lib.rs               ← library facade shared by app binary and the probe examples
             ├── state.rs            ← PdhHandles, CollectorState, RawPoll, HistoryStore, SafeHistoryStore
             ├── cadence.rs           ← tick-cadence checks shared by loop and probe
             ├── hardware.rs          ← detect()/classify_gpu(), degraded-but-useful HardwareProfile
             ├── pdh.rs               ← PDH helper layer
+            ├── error_log.rs         ← persistent collector-error sink
             ├── sensor.rs            ← SensorProvider trait + SensorRegistry (250 ms pollers)
-                ├── examples/cadence_probe.rs ← headless cadence probe/checker (real-hardware runs)
-                ├── examples/startup_probe.rs ← session-bootstrap timing probe (startup-cost regressions)
             └── collector/
                 ├── mod.rs           ← poll/commit helpers, push_history(), MAX_HISTORY
                 ├── snapshot.rs      ← IPC payloads, schema version, timestamp slicing
                 ├── run_loop.rs      ← monotonic deadline loop and WMI bootstrap
+                ├── supervisor.rs     ← supervised sessions, bounded recovery, CollectorStatus lifecycle
                 ├── cpu.rs           ← WMI CPU thermal (tenths-Kelvin → Celsius)
                 ├── disk.rs          ← PDH disk active%, read/write MB/s, response ms
                 ├── gpu.rs           ← PDH GPU 3D util, WMI LUID→vendor classification, is_nvidia_gpu()
@@ -151,15 +174,30 @@ monitorers/
 - Always use .unwrap_or_else(|e| e.into_inner()) on mutex locks (poison-safe)
 - push_history() always used for VecDeque appends — never push directly
 - All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
-- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 5
+- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 6
   The lifecycle contract has its own version: LIFECYCLE_SCHEMA_VERSION (Rust
   collector/supervisor.rs) == EXPECTED_LIFECYCLE_SCHEMA_VERSION (TS) == 1.
+- The history ring and every live sample share ONE clock: the backend's
+  monotonic projection (`monotonic_timestamp_ms`), which fixes a wall-clock
+  origin once per session and advances it with a monotonic `Instant`. The same
+  value is pushed into the ring AND carried on the snapshot as `timestamp_ms`.
+  The frontend appends live events at the PAYLOAD's timestamp — never
+  `Date.now()` — so a mid-session wall-clock adjustment (NTP step, user change,
+  suspend/resume) cannot desync live samples from the ring. A payload with no
+  usable timestamp warns once and appends at the newest known timestamp,
+  preserving order. `on_tick` remains the only history growth gate.
 - All push_history writes must happen on full ticks (1Hz) only.
   Providers may poll at 250ms for live snapshot freshness but must
   never commit to history more than once per second.
   Violation: chart scroll rate mismatch at long time windows (CPU bug, fixed).
-  Implementation: registry.commit_all is gated inside
-  `if let Some(ref r) = raw` so it only runs on full ticks.
+  Implementation: the history commits (`commit_disk_network`, `commit_cpu`,
+  `commit_gpu`, `push_timestamp`) live inside the full-poll branch
+  `if let Some(ref r) = raw`. The registry commit is a *sibling* of that
+  branch, not nested inside it: on a registry-only tick `raw` is `None` so the
+  history commits are skipped, and on a full-poll tick `reg_raw` is a vector of
+  all-`None` so `registry.commit_all` is a no-op. Either way exactly one path
+  writes history per tick. Do not "simplify" this by moving the call inside
+  the branch — that would silently disable the 250 ms live scalar path.
   Any new sensor provider added in future must follow the same rule.
 
 ---

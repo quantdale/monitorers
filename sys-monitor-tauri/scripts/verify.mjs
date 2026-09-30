@@ -29,10 +29,33 @@ function runNpm(label, args, cwd) {
 }
 
 function frontend() {
-  run('release version consistency', process.execPath, ['scripts/check-version.mjs'], appRoot);
-  runNpm('repository npm audit', ['audit', '--audit-level=high'], repoRoot);
-  runNpm('frontend audit', ['audit', '--audit-level=high'], appRoot);
+  // Cheapest check in the lane, and the one that fails fastest: three release
+  // versions must agree, and every dependency version documented in the root
+  // `.cursorrules` §1 table must mirror the committed Cargo.toml / package.json.
+  run('release version + documentation consistency', process.execPath, ['scripts/check-version.mjs'], appRoot);
+  // Cheap text scan, so it runs right after the doc check and before the two
+  // audits / typecheck / tests / build. It lives here (rather than in the Rust
+  // lane) because the CI `frontend` job is the fast, platform-agnostic PR gate
+  // on ubuntu-latest, and the check itself is plain Node with no new dependency.
+  run('dead-code check', process.execPath, ['scripts/check-dead-code.mjs'], appRoot);
+  // Two audit scopes run here on purpose, and both are labelled so a reader
+  // cannot mistake one for the other:
+  //   - repository-root scope (repoRoot): the root workspace, which holds only
+  //     `husky`. It cannot observe the application's transitive tree.
+  //   - application scope (appRoot, i.e. sys-monitor-tauri): the tree that CI
+  //     and .husky/pre-push actually install and audit.
+  // The application scope is the AUTHORITATIVE result: runNpm throws on a
+  // non-zero exit, so a high-severity advisory anywhere in the shipped test
+  // toolchain fails this lane. The root scope stays as an intentional second
+  // scope with its own lockfile, but it is never reported as "the" gate.
+  runNpm('repository-root npm audit (root workspace)', ['audit', '--audit-level=high'], repoRoot);
+  runNpm('application npm audit (sys-monitor-tauri)', ['audit', '--audit-level=high'], appRoot);
   runNpm('frontend typecheck', ['run', 'typecheck'], appRoot);
+  // tsconfig.json excludes src/**/*.test.ts(x), so without this step no `tsc`
+  // invocation in any lane has ever seen the Vitest sources. Placed right after
+  // the production typecheck so a test-side type error fails fast, before the
+  // slower unit-test run and the production build.
+  runNpm('frontend test-source typecheck', ['run', 'typecheck:test'], appRoot);
   runNpm('frontend unit tests', ['test', '--', '--run'], appRoot);
   runNpm('frontend build', ['run', 'build'], appRoot);
 }
@@ -56,7 +79,7 @@ function rust() {
 }
 
 function version() {
-  run('release version consistency', process.execPath, ['scripts/check-version.mjs'], appRoot);
+  run('release version + documentation consistency', process.execPath, ['scripts/check-version.mjs'], appRoot);
 }
 
 function e2e() {

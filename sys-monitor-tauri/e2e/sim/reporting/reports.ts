@@ -204,14 +204,3 @@ export function writeTriageBundle(input: TriageBundleInput): string {
   void jsonl;
   return triageDir;
 }
-
-/** A lightweight JSONL emitter used by the runner to surface progress. */
-export function readTextLines(path: string, tail = 10): string[] {
-  try {
-    if (!existsSync(path)) return [];
-    const content = readFileSync(path, 'utf8').trim().split('\n');
-    return content.slice(-tail);
-  } catch {
-    return [];
-  }
-}

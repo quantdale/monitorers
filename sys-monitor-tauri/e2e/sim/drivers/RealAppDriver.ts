@@ -51,6 +51,13 @@ export interface HklmPolicyOps {
   write(key: string, valueName: string, data: string): void;
   /** Removes the value; throws on failure. */
   remove(key: string, valueName: string): void;
+  /**
+   * Reports whether the value currently EXISTS. Returns a definite boolean
+   * rather than signalling absence through a thrown error, so a post-removal
+   * check can never confuse "the value is gone" (success) with "the query
+   * itself failed" (an operational error worth escalating).
+   */
+  read(key: string, valueName: string): boolean;
 }
 
 /** Production registry channel via reg.exe (synchronous, stdio captured). */
@@ -62,6 +69,23 @@ export const RegHklmPolicyOps: HklmPolicyOps = {
   },
   remove(key, valueName) {
     execFileSync('reg.exe', ['delete', key, '/v', valueName, '/f'], { stdio: 'pipe' });
+  },
+  read(key, valueName) {
+    try {
+      execFileSync('reg.exe', ['query', key, '/v', valueName], { stdio: 'pipe' });
+      return true;
+    } catch (error) {
+      // `reg query` exits 1 with "The system was unable to find the specified
+      // registry key or value." when the value (or its key) is absent. That is
+      // a DEFINITE "absent", not an error — and treating it as an error would
+      // make the post-removal check fail on a correctly removed value.
+      //
+      // A spawn failure (reg.exe missing/unexecutable) carries no numeric
+      // `status`; that IS an operational error and must propagate.
+      const status = (error as { status?: number | null }).status;
+      if (typeof status === 'number') return false;
+      throw error;
+    }
   },
 };
 
@@ -76,6 +100,20 @@ export const RegHklmPolicyOps: HklmPolicyOps = {
  * expected to fail with access-denied — there the environment variable works.
  */
 const WV2_ARGS_POLICY_KEY = 'HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments';
+
+/**
+ * Value name for the machine-wide debug-switch channel.
+ *
+ * `*` is the wildcard form and it is the ONLY form documented for
+ * `AdditionalBrowserArguments`; it applies to EVERY WebView2 host on the
+ * machine, not just this app. That blast radius is the reason the value is
+ * (a) removed on every termination path, (b) verified absent after removal,
+ * and (c) created only for the duration of a run. Whether a per-application
+ * value name (e.g. the app's exe basename) is honoured instead was tested —
+ * see evidence.md §4 — and could not be confirmed on the available host, so
+ * `*` is retained as a RECORDED decision rather than an unexamined default.
+ */
+const WV2_ARGS_VALUE_NAME = '*';
 
 export interface RealDriverOptions {
   /** Path to the built app exe. Defaults to SIM_APP_EXE or the release exe. */
@@ -133,7 +171,7 @@ async function waitForCdp(url: string, timeoutMs: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new ClassifiedSimulationError(
-    `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms` + (lastErr ? ` (${String(lastErr)})` : ''),
+    `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms${lastErr ? ` (${String(lastErr)})` : ''}`,
     'harness-defect',
     'cdp',
   );
@@ -280,6 +318,8 @@ export class RealAppDriver implements SimDriver {
   private port: number | null = null;
   private appStderrPath: string | null = null;
   private hklmArgsValueWritten = false;
+  /** Unbind records for this instance's process-termination handlers. */
+  private policyRemovalHandlers: Array<{ event: NodeJS.Signals | 'exit' | 'uncaughtException'; handler: () => void }> = [];
   private readonly hklmOps: HklmPolicyOps;
   private lastExitInfo: string | null = null;
   private realSettingsPath: string | null = null;
@@ -470,8 +510,12 @@ export class RealAppDriver implements SimDriver {
     const args = this.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
     if (!args) return false;
     try {
-      this.hklmOps.write(WV2_ARGS_POLICY_KEY, '*', args);
+      this.hklmOps.write(WV2_ARGS_POLICY_KEY, WV2_ARGS_VALUE_NAME, args);
       this.hklmArgsValueWritten = true;
+      // From the moment the value exists machine-wide, EVERY way this process
+      // can end must be able to take it back out — including ones that never
+      // reach close() (Ctrl-C, SIGTERM, process.exit, an uncaught throw).
+      this.registerPolicyRemovalHandlers();
       console.log('[RealAppDriver] HKLM WebView2 args policy applied before spawn');
     } catch (error) {
       this.hklmArgsValueWritten = false;
@@ -483,19 +527,91 @@ export class RealAppDriver implements SimDriver {
   }
 
   /**
-   * SECURITY-CRITICAL teardown: removes the machine-wide debug/origin policy.
-   * Called from close() OUTSIDE every fallible path so neither process-close,
-   * work-directory, nor assertion failures can skip it; its own failure is
-   * returned to the caller for aggregation, never swallowed.
+   * SECURITY-CRITICAL teardown: removes the machine-wide debug/origin policy
+   * and then VERIFIES it is gone. Called from close() OUTSIDE every fallible
+   * path so neither process-close, work-directory, nor assertion failures can
+   * skip it; its own failure is returned to the caller for aggregation, never
+   * swallowed.
+   *
+   * The ownership flag (`hklmArgsValueWritten`) is cleared only when the value
+   * is confirmed absent. If it is still present afterwards, the driver owns a
+   * cleanup it has NOT completed: `close()` reports that as a teardown failure
+   * naming the key and value, and the flag stays set so a termination handler
+   * can make a final attempt at process exit.
    */
   private removeHklmArgsFallback(): void {
     if (!this.hklmArgsValueWritten) return;
-    try {
-      this.hklmOps.remove(WV2_ARGS_POLICY_KEY, '*');
-    } finally {
-      // One removal attempt per written value; never re-enter on retry loops.
-      this.hklmArgsValueWritten = false;
+    this.hklmOps.remove(WV2_ARGS_POLICY_KEY, WV2_ARGS_VALUE_NAME);
+    if (this.hklmOps.read(WV2_ARGS_POLICY_KEY, WV2_ARGS_VALUE_NAME)) {
+      // Still present: do NOT clear ownership and do NOT report success.
+      throw new Error(
+        `WebView2 debug-policy value ${WV2_ARGS_POLICY_KEY}\\${WV2_ARGS_VALUE_NAME} is STILL PRESENT after removal`
+      );
     }
+    // Confirmed gone: ownership released, and the termination handlers that
+    // existed only to clean this up have nothing left to do.
+    this.hklmArgsValueWritten = false;
+    this.unregisterPolicyRemovalHandlers();
+  }
+
+  /**
+   * Per-instance process-termination handlers, registered at the moment the
+   * machine-wide value is first written (never at construction, so a driver
+   * that never writes the value never installs handlers).
+   *
+   * Every handler body is non-throwing: a cleanup problem must not turn a
+   * clean Ctrl-C into an unhandled exception, nor prevent sibling handlers
+   * from running. Failures here cannot be reported to anyone — the process is
+   * exiting — so they are surfaced on stderr and otherwise dropped; close()
+   * remains the path that actually escalates a removal failure.
+   */
+  private registerPolicyRemovalHandlers(): void {
+    if (this.policyRemovalHandlers.length > 0) return;
+    const removeQuietly = (): void => {
+      try {
+        this.removeHklmArgsFallback();
+      } catch (error) {
+        try {
+          console.error(
+            `[RealAppDriver] WebView2 debug-policy removal failed during process termination: ${String(error)}`
+          );
+        } catch {
+          // Nothing may escape a termination handler.
+        }
+      }
+    };
+    const bindings: Array<{
+      event: NodeJS.Signals | 'exit' | 'uncaughtException';
+      handler: () => void;
+    }> = [];
+    const bind = (event: NodeJS.Signals | 'exit' | 'uncaughtException', handler: () => void): void => {
+      process.on(event, handler as never);
+      bindings.push({ event, handler });
+    };
+    bind('SIGINT', removeQuietly);
+    bind('SIGTERM', removeQuietly);
+    bind('exit', removeQuietly);
+    bind('uncaughtException', () => {
+      removeQuietly();
+      // Registering an `uncaughtException` listener suppresses Node's default
+      // crash-and-exit. Restore it explicitly so the failure is still fatal
+      // and still reported, instead of leaving the worker running in a
+      // half-broken state.
+      process.exit(1);
+    });
+    this.policyRemovalHandlers = bindings;
+  }
+
+  /**
+   * Removes the termination handlers once the value is confirmed gone, so a
+   * normal run leaves no live listener behind at exit and per-selection driver
+   * instances in run.spec.ts do not accumulate handlers.
+   */
+  private unregisterPolicyRemovalHandlers(): void {
+    for (const entry of this.policyRemovalHandlers) {
+      process.off(entry.event, entry.handler as never);
+    }
+    this.policyRemovalHandlers = [];
   }
 
   /** How the spawned app process ended so far, for failure diagnostics. */

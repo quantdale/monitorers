@@ -130,6 +130,38 @@ At planning time the open queue included these relevant generated changes. The e
 
 ### F. Hosted qualification (dispatched 2026-08-27T05:37Z for final candidate 2e56ffc)
 
+> **RESOLVED 2026-09-30.** The table below was written at dispatch time, when every
+> run was still `in_progress`. All four runs have since COMPLETED SUCCESSFULLY.
+> Verified directly via `gh run view <id> --json status,conclusion,headSha`:
+>
+> | Run ID | Workflow | Status | SHA |
+> |---|---|---|---|
+> | 33043088979 | Rust and release | **completed / success** | 2e56ffc |
+> | 33043091191 | E2E Verification Harness | **completed / success** | 2e56ffc |
+> | 33043093443 | Simulation | **completed / success** | 2e56ffc |
+> | 33043102890 | Release qualification (MSI/NSIS) | **completed / success** | 2e56ffc |
+>
+> `gh run view 33043093443 --json jobs` confirms the Simulation workflow's three
+> jobs all succeeded: **`Simulation — packaged lane` success**,
+> `Simulation — mock lane` success, `Simulation — config lint` success. The
+> packaged lane is therefore what closed the real-lane journey gap noted in §E
+> ("additional real-lane journeys … to be exercised via hosted `sim:real`
+> dispatch after push") — task 13.4's deferred portion.
+>
+> Task 14.5 ("never mark hosted qualification complete from an older SHA"):
+> `git log 2e56ffc..HEAD` contains exactly ONE commit — `efa2cd6 docs(evidence):
+> record hosted dispatch run IDs for final candidate 2e56ffc` — a docs-only
+> commit that *records* these run IDs. `2e56ffc` is therefore the final code SHA
+> for this campaign and every cited run corresponds to it.
+>
+> **Task checkboxes in this file's `tasks.md` are still unchecked.** They were
+> never reconciled by the original executor, and are left that way deliberately:
+> several tasks (notably §15's post-migration deep review) cannot be verified
+> from the repository alone, and §17.4 requires the change to be archived, which
+> is a separate explicit action. Recording the resolved hosted results here is
+> the accurate, verifiable part; the remaining reconciliation and the archive
+> step are left for a decision that needs the executor's own record.
+
 | Workflow | Run ID | SHA | Result | Artifact/evidence |
 |---|---|---|---|---|
 | Rust and release (Rust, frontend, Windows exe, MSI/NSIS bundle) | 33043088979 | 2e56ffc | in_progress | https://github.com/quantdale/monitorers/actions/runs/33043088979 |

@@ -75,6 +75,9 @@ async function readSettingsShim(ctx: SimContext): Promise<Record<string, unknown
 }
 
 function readRealSettings(ctx: SimContext): Record<string, unknown> {
+  // SAFETY: `appDataDir` is the optional real-lane-only capability every SimDriver
+  // exposes on the shared driver union. Widening is safe because the mock driver simply
+  // omits the property, which the `if (!dir) return {}` branch below handles.
   const d = ctx.driver as unknown as { appDataDir?: string | null };
   const dir = d.appDataDir;
   if (!dir) return {};
@@ -345,23 +348,6 @@ export async function readSidebarIds(ctx: SimContext): Promise<string[]> {
 }
 
 /**
- * Polls until the hardware sidebar renders at least `minCount` cards — the
- * semantic "native hardware discovery has settled" checkpoint for journeys
- * that need a stable sidebar ordering (no fixed sleeps).
- */
-export async function waitForSidebarCards(
-  ctx: SimContext,
-  minCount: number,
-  timeoutMs = 30_000
-): Promise<string[]> {
-  const ids = await pollUntil(() => readSidebarIds(ctx), (ids) => ids.length >= minCount, timeoutMs, 250);
-  if (ids.length < minCount) {
-    ctx.assert('sidebar-cards-settled', false, `expected >= ${minCount} sidebar cards, got ${ids.join(',') || 'none'}`);
-  }
-  return ids;
-}
-
-/**
  * Polls until the rendered sidebar order is SETTLED: at least `minCount`
  * cards AND two consecutive samples identical (WMI/PDH enrichment appends
  * have landed). Sample spacing is measurement cadence, not a fixed delay.
@@ -394,6 +380,8 @@ export async function waitForSidebarSettled(
 export function readRealStoreFile(
   ctx: SimContext
 ): { exists: boolean; text: string; parsed: Record<string, unknown> | null } {
+  // SAFETY: same real-lane-only `appDataDir` capability as readRealSettings; the mock
+  // driver omits it and the `dir ? … : null` branch below treats that as absent.
   const d = ctx.driver as unknown as { appDataDir?: string | null };
   const dir = d.appDataDir;
   const p = dir ? join(dir, 'settings.json') : null;
@@ -416,6 +404,9 @@ export async function invokeCollectorStatus(
   const page = ctx.driver.page;
   if (!page) return null;
   return page.evaluate(async () => {
+    // SAFETY: Tauri v2 injects `window.__TAURI_INTERNALS__` into every document of the app
+    // webview (it is the runtime-detection seam, not `window.__TAURI__`). It is absent in
+    // the mock lane, which the `if (!internals) return null` branch below handles.
     const internals = (window as unknown as {
       __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
     }).__TAURI_INTERNALS__;
@@ -437,6 +428,8 @@ export async function invokeHistoryPointCount(ctx: SimContext, windowSecs = 60):
   const page = ctx.driver.page;
   if (!page) return -1;
   return page.evaluate(async (secs) => {
+    // SAFETY: same Tauri v2 `window.__TAURI_INTERNALS__` seam as above; absent in the mock
+    // lane, which the `if (!internals) return -1` branch below handles.
     const internals = (window as unknown as {
       __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
     }).__TAURI_INTERNALS__;

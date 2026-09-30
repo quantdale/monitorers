@@ -5,7 +5,7 @@ use sysinfo::{Disks, Networks, System};
 
 pub use crate::pdh::PdhHandles;
 
-use crate::hardware::HardwareProfile;
+use crate::hardware::{CpuIdentity, HardwareProfile};
 
 /// Per-device Nvidia enrichment. The map key is the collector's stable GPU
 /// identity; a missing entry means telemetry was not safely reconciled to that
@@ -51,7 +51,18 @@ pub struct RawPoll {
 // thread. Never wrapped in a Mutex.
 
 pub struct CollectorState {
+    /// Starts as a default (empty) profile. `CollectorState::new()` no longer
+    /// builds a real profile: the very first thing `run_session_body` does is
+    /// overwrite it with the PDH-resolved profile, so the old construction
+    /// only ever produced a transiently WRONG profile (GPU-less, disk keys not
+    /// yet joined) that could be read by a caller in between.
     pub profile: HardwareProfile,
+    /// CPU identity resolved once from the already-refreshed `System` inside
+    /// `new()`. Lives here, rather than being read back out of `profile`,
+    /// because `profile` is replaced wholesale by each re-detection; this
+    /// field is the stable carrier that lets every rebuild reuse the same CPU
+    /// identity without a second OS enumeration.
+    pub cpu_identity: CpuIdentity,
     pub pdh: PdhHandles,
     pub system: System,
     pub sysinfo_disks: Disks,
@@ -130,18 +141,18 @@ impl CollectorState {
         #[cfg(feature = "nvml")]
         let nvml = crate::collector::nvidia::init_nvml();
 
-        // Degraded startup profile built WITHOUT any extra OS enumeration: the
         // CPU identity comes from the System refreshed above and the disk list
-        // from the Disks enumerated above (the old path re-probed both via
-        // hardware::detect(None, None, None), adding ~5ms of duplicate OS work
-        // per session start). GPU discovery is empty here because PDH-based
-        // detection runs in run_session_body once physical disks are resolved;
-        // that call now REUSES this CPU identity instead of re-enumerating.
-        let cpu_identity = crate::hardware::CpuIdentity::from_sysinfo(&system);
-        let disk_infos = crate::hardware::disk_infos_from(&disks);
+        // from the Disks enumerated above — no second OS enumeration. The
+        // profile itself is NOT built here: run_session_body replaces it
+        // immediately with the PDH-resolved profile (real GPU discovery, real
+        // drive-letter-joined disk keys), so constructing one now would only
+        // ever publish a transiently wrong profile. GPU discovery is empty
+        // until that first rebuild.
+        let cpu_identity = CpuIdentity::from_sysinfo(&system);
 
         CollectorState {
-            profile: crate::hardware::detect_with_cpu(None, None, Some(disk_infos), &cpu_identity),
+            profile: HardwareProfile::default(),
+            cpu_identity,
             pdh,
             system,
             sysinfo_disks: disks,
@@ -231,7 +242,8 @@ pub struct HistoryStore {
     pub net_recv_history: VecDeque<f64>,
     pub net_sent_history: VecDeque<f64>,
     pub timestamps: VecDeque<u64>,
-    /// Copy of hardware profile for IPC; set by background thread after detect().
+    /// Copy of hardware profile for IPC; set by background thread once it has
+    /// re-detected the profile (PDH GPUs + physical-disk list).
     pub profile: Option<HardwareProfile>,
 }
 

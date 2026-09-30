@@ -2,7 +2,9 @@
 
 ## Purpose
 Defines stable physical-device identity and safe per-device telemetry association across the collector, IPC payloads, frontend cards, sidebar, and persisted layout.
+
 ## Requirements
+
 ### Requirement: Physical hardware identity is stable and separate from display labels
 Dashboard cards, sidebar cards, history entries, React keys, drag state, and persisted layout SHALL use a stable hardware key from the strongest available OS/API identity. Display names SHALL remain presentation-only. Identical names, slug collisions, enumeration reorder, remove/reappear, and restart SHALL not silently merge or reassign devices.
 
@@ -30,7 +32,7 @@ NVML/NVAPI readings SHALL be normalized with stable identity candidates and atta
 - **THEN** the affected card shows unavailable telemetry rather than another card's values
 
 ### Requirement: Hardware profile degrades and updates truthfully
-The hardware profile SHALL retain PDH-discovered devices when optional WMI classification is unavailable, marking unknown enrichment explicitly. Profile changes SHALL be emitted when the stable hardware set changes after the configured grace/debounce; if a platform cannot update live, the UI SHALL label the profile as a startup snapshot.
+The hardware profile SHALL retain PDH-discovered devices when optional WMI classification is unavailable, marking unknown enrichment explicitly. Profile changes SHALL be emitted when the stable hardware set changes after the configured grace/debounce; if a platform cannot update live, the UI SHALL label the profile as a startup snapshot. A physical disk's **display name** SHALL be enriched from the authoritative OS-reported model when one is available, and a raw device path or other non-model identifier SHALL NOT be shown to the user as the disk's name. Such an enriched name SHALL remain presentation-only: it SHALL never become part of a device's identity, and the disk's stable key SHALL continue to be derived from the drive letters the PDH/sysinfo mapping produces, identically for the dashboard and the sidebar.
 
 #### Scenario: WMI unavailable does not hide GPUs
 - **WHEN** WMI bootstrap fails but PDH reports GPU instances
@@ -39,3 +41,19 @@ The hardware profile SHALL retain PDH-discovered devices when optional WMI class
 #### Scenario: Hotplug profile converges
 - **WHEN** a disk or GPU appears or disappears beyond the collector's grace threshold
 - **THEN** the sidebar profile converges to the stable set without transient duplicate cards
+
+#### Scenario: Disk name is enriched from the OS model when available
+- **WHEN** a physical disk's model can be read from the OS and the drive mapping exposes that disk's physical index
+- **THEN** the profile reports the OS-reported model as the disk's display name instead of a raw device path
+
+#### Scenario: Disk name degrades truthfully without the enrichment
+- **WHEN** the OS model cannot be read (for example before WMI is available, or on a query failure)
+- **THEN** the profile falls back to the previously available name, the device remains present, and the fallback does not become an identity or remove the disk
+
+#### Scenario: Enriched name is presentation-only
+- **WHEN** a disk's display name is enriched from the OS model
+- **THEN** the disk's stable key, its history channel, and its persisted layout identity are unchanged, and two disks that share a model string remain distinct devices
+
+#### Scenario: Dashboard and sidebar agree on disk identity
+- **WHEN** the same physical disk is observed by the metric poll and by the profile
+- **THEN** both use the identical drive-letter key for that disk, so the sidebar card and the dashboard card refer to the same device

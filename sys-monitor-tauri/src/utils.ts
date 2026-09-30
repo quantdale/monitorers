@@ -13,11 +13,6 @@ export function isTauri(): boolean {
   return typeof window !== 'undefined' && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 }
 
-/** Stable slug for GPU card ID from display name (e.g. "GeForce RTX 4050" → "gpu_geforce_rtx_4050"). */
-export function gpuId(name: string): string {
-  return 'gpu_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-}
-
 /**
  * Returns min and max of a history slice.
  * Computed from the current windowed slice (what the user can see on the graph),
@@ -31,3 +26,4 @@ export function historyMinMax(history: MetricValue[]): { min: number; max: numbe
     max: Math.max(...finite),
   };
 }
+

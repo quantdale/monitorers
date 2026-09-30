@@ -66,7 +66,7 @@ fn main() {
         } else {
             Some(
                 physical
-                    .into_iter()
+                    .iter()
                     .map(|(disk_key, kind, sysinfo_name, _drive_index)| {
                         let k = match kind {
                             sysinfo::DiskKind::SSD => DiskKind::Ssd,
@@ -74,8 +74,8 @@ fn main() {
                             _ => DiskKind::Unknown,
                         };
                         DiskInfo {
-                            key: disk_key,
-                            name: sysinfo_name,
+                            key: disk_key.clone(),
+                            name: sysinfo_name.clone(),
                             kind: k,
                         }
                     })
@@ -86,7 +86,7 @@ fn main() {
             Some(&collector_state.pdh),
             None,
             disk_infos,
-            &collector_state.profile.cpu_identity(),
+            &collector_state.cpu_identity,
         );
         profile_costs.push(started.elapsed().as_millis());
     }

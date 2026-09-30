@@ -10,7 +10,7 @@ use crate::state::HistoryStore;
 
 /// Bump in lockstep with `EXPECTED_SCHEMA_VERSION` in the frontend
 /// (`src/hooks/useMetrics.ts`) when `MetricsSnapshot`'s shape changes.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O, history committed).
 /// The other 3 ticks are registry-only (CPU + GPU scalar refresh, no history write).
@@ -27,6 +27,24 @@ pub struct MetricsSnapshot {
     /// The frontend only appends to its charting history arrays when this is true;
     /// it still updates live scalar readouts (e.g. CPU/GPU %) on every event.
     pub on_tick: bool,
+    /// Epoch-milliseconds timestamp for THIS tick, produced by the same
+    /// monotonic projection that produced the value pushed into the history
+    /// ring.
+    ///
+    /// The backend has exactly one clock for the history ring: `run_loop`'s
+    /// `monotonic_timestamp_ms(wall_origin_ms, loop_epoch, …)`, which fixes a
+    /// wall-clock origin once per session and advances it with `Instant`. The
+    /// frontend previously stamped live samples with `Date.now()` — a SECOND
+    /// clock. Any wall-clock adjustment mid-session (NTP step, user change,
+    /// suspend/resume) therefore made live samples disagree with the ring they
+    /// get appended to.
+    ///
+    /// On a full tick this is, by construction, the identical `u64` passed to
+    /// `push_timestamp` for that tick: the loop computes it once and hands the
+    /// same value to both. On a registry-only tick it is that tick's own
+    /// timestamp — a legitimate time to read the scalar snapshot at — but it
+    /// MUST NOT cause a history append; `on_tick` remains the sole growth gate.
+    pub timestamp_ms: u64,
     pub cpu: f64,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -218,7 +236,7 @@ fn telemetry_snapshot(telemetry: &crate::state::NvidiaTelemetry) -> NvidiaTeleme
 
 // ── SNAPSHOT BUILDER ─────────────────────────────────────────────────────────
 
-pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
+pub fn build_snapshot(s: &HistoryStore, on_tick: bool, timestamp_ms: u64) -> MetricsSnapshot {
     let cpu = s
         .cpu_latest
         .unwrap_or_else(|| s.cpu_history.back().copied().unwrap_or(0.0));
@@ -286,6 +304,7 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool) -> MetricsSnapshot {
     MetricsSnapshot {
         schema_version: SCHEMA_VERSION,
         on_tick,
+        timestamp_ms,
         cpu,
         cpu_name: s.cpu_name.clone(),
         cpu_temp_c: s.cpu_temp_c,
@@ -480,14 +499,14 @@ mod tests {
     #[test]
     fn test_build_snapshot_on_tick_true() {
         let s = HistoryStore::new("test");
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_000);
         assert!(snap.on_tick);
     }
 
     #[test]
     fn test_build_snapshot_on_tick_false() {
         let s = HistoryStore::new("test");
-        let snap = build_snapshot(&s, false);
+        let snap = build_snapshot(&s, false, 1_700_000_000_001);
         assert!(!snap.on_tick);
     }
 
@@ -498,7 +517,7 @@ mod tests {
         let mut s = HistoryStore::new("test");
         s.cpu_latest = Some(42.0);
         s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_002);
         assert_eq!(snap.cpu, 42.0);
     }
 
@@ -511,7 +530,7 @@ mod tests {
             deque(&[10.0, 20.0]),
         )];
         s.gpu_latest.insert("gpu0".to_string(), 75.0);
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_002);
         assert_eq!(snap.gpus.len(), 1);
         assert_eq!(snap.gpus[0].util, 75.0);
     }
@@ -520,7 +539,7 @@ mod tests {
     fn test_build_snapshot_cpu_fallback_without_latest() {
         let mut s = HistoryStore::new("test");
         s.cpu_history = deque(&[10.0, 20.0, 30.0]);
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_002);
         assert_eq!(snap.cpu, 30.0);
     }
 
@@ -532,8 +551,91 @@ mod tests {
             "NVIDIA GeForce".to_string(),
             deque(&[10.0, 25.0]),
         )];
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_002);
         assert_eq!(snap.gpus[0].util, 25.0);
+    }
+
+    // --- build_snapshot timestamp channel ---
+
+    #[test]
+    fn test_build_snapshot_carries_the_exact_timestamp_it_was_given() {
+        let s = HistoryStore::new("test");
+        let snap = build_snapshot(&s, true, 1_700_000_123_456);
+        assert_eq!(snap.timestamp_ms, 1_700_000_123_456);
+    }
+
+    /// The loop computes the tick timestamp ONCE and pushes that same value
+    /// into the ring; this pins the property that matters — the timestamp the
+    /// frontend appends against the payload is the ring's newest entry for that
+    /// tick, not a value recomputed from a second clock.
+    #[test]
+    fn test_snapshot_timestamp_equals_ring_timestamp_for_the_same_tick() {
+        let mut s = HistoryStore::new("test");
+        let ts = 1_700_000_123_456u64;
+        s.push_timestamp(ts);
+        let snap = build_snapshot(&s, true, ts);
+        assert_eq!(
+            snap.timestamp_ms,
+            *s.timestamps.back().expect("ring has one sample")
+        );
+        assert_eq!(snap.timestamp_ms, ts);
+    }
+
+    #[test]
+    fn test_snapshot_timestamp_is_never_behind_the_newest_ring_timestamp() {
+        let mut s = HistoryStore::new("test");
+        let mut previous = 0u64;
+        for step in 0..5u64 {
+            let ts = 1_700_000_000_000 + step * 250;
+            s.push_timestamp(ts);
+            let snap = build_snapshot(&s, true, ts);
+            // Monotonic across consecutive full ticks...
+            assert!(
+                snap.timestamp_ms >= previous,
+                "timestamp went backwards: {} then {}",
+                previous,
+                snap.timestamp_ms
+            );
+            // ...and identical to what the ring now holds for this tick.
+            assert_eq!(snap.timestamp_ms, *s.timestamps.back().unwrap());
+            previous = snap.timestamp_ms;
+        }
+    }
+
+    /// A registry-only tick carries a truthful timestamp for its scalars but
+    /// must NOT grow any history channel. `on_tick` is the sole growth gate.
+    #[test]
+    fn test_off_tick_snapshot_carries_a_timestamp_but_grows_no_history() {
+        let mut s = HistoryStore::new("test");
+        s.cpu_history.push_back(1.0);
+        s.mem_history.push_back(2.0);
+        s.net_recv_history.push_back(3.0);
+        s.net_sent_history.push_back(4.0);
+        s.push_timestamp(1_700_000_000_000);
+
+        let before = (
+            s.cpu_history.len(),
+            s.mem_history.len(),
+            s.net_recv_history.len(),
+            s.net_sent_history.len(),
+            s.timestamps.len(),
+        );
+
+        let snap = build_snapshot(&s, false, 1_700_000_000_250);
+
+        // The timestamp is present and strictly newer than the last ring entry…
+        assert!(snap.timestamp_ms > 1_700_000_000_000);
+        // …but nothing was appended, and the ring was not advanced.
+        let after = (
+            s.cpu_history.len(),
+            s.mem_history.len(),
+            s.net_recv_history.len(),
+            s.net_sent_history.len(),
+            s.timestamps.len(),
+        );
+        assert_eq!(before, after);
+        assert!(!snap.on_tick);
+        assert_eq!(*s.timestamps.back().unwrap(), 1_700_000_000_000);
     }
 
     // --- build_history_payload ---
@@ -690,7 +792,7 @@ mod tests {
             "GeForce RTX 4070".to_string(),
             deque(&[10.0]),
         ));
-        let snap = build_snapshot(&s, true);
+        let snap = build_snapshot(&s, true, 1_700_000_000_002);
         let payload = build_history_payload(&s, 10);
         assert_eq!(snap.gpus[0].vendor, "nvidia");
         assert_eq!(payload.gpus[0].vendor, snap.gpus[0].vendor);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   appendToHistory,
   appendLiveEvent,
@@ -7,10 +7,33 @@ import {
   mergeGpuHistory,
   mergeLatestGpu,
   reconcileHistoryWithLiveEvents,
+  appendSnapshotToHistory,
   assertSchemaVersion,
+  resolveSnapshotTimestamp,
+  resetMissingSnapshotTimestampWarning,
+  SchemaMismatchError,
   EXPECTED_SCHEMA_VERSION,
 } from './useMetrics';
 import type { DiskHistory, GpuHistory, MetricsSnapshot } from '../types/metrics';
+
+/** Minimal full-tick snapshot with an explicit backend timestamp. */
+function baseSnap(timestamp_ms: number, on_tick = true): MetricsSnapshot {
+  return {
+    schema_version: EXPECTED_SCHEMA_VERSION,
+    on_tick,
+    timestamp_ms,
+    cpu: 10,
+    cpu_name: 'CPU',
+    cpu_temp_c: null,
+    mem: 2,
+    mem_used_gb: 1,
+    mem_total_gb: 2,
+    disks: [],
+    net_recv_kib_s: 0,
+    net_sent_kib_s: 0,
+    gpus: [],
+  };
+}
 
 // --- appendToHistory ---
 
@@ -299,6 +322,7 @@ describe('reconcileHistoryWithLiveEvents', () => {
       net_recv_kib_s: 0,
       net_sent_kib_s: 0,
       gpus: [],
+      timestamp_ms: 1_000,
     };
 
     const result = reconcileHistoryWithLiveEvents(payload, [{ snapshot, timestamp: 1_000 }]);
@@ -307,3 +331,142 @@ describe('reconcileHistoryWithLiveEvents', () => {
   });
 });
 
+
+describe('resolveSnapshotTimestamp (single-clock timestamp channel)', () => {
+  beforeEach(() => {
+    resetMissingSnapshotTimestampWarning();
+  });
+
+  const snapWith = (timestamp_ms: unknown): MetricsSnapshot =>
+    ({
+      schema_version: EXPECTED_SCHEMA_VERSION,
+      on_tick: true,
+      timestamp_ms,
+      cpu: 1,
+      cpu_name: 'CPU',
+      cpu_temp_c: null,
+      mem: 1,
+      mem_used_gb: 1,
+      mem_total_gb: 2,
+      disks: [],
+      net_recv_kib_s: 0,
+      net_sent_kib_s: 0,
+      gpus: [],
+    }) as unknown as MetricsSnapshot;
+
+  it('uses the backend payload timestamp, not the local clock', () => {
+    expect(resolveSnapshotTimestamp(snapWith(1_700_000_123_456), 42)).toBe(1_700_000_123_456);
+  });
+
+  it('falls back to the newest known timestamp when the payload has none', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // This is the regression this prevents: a missing timestamp must NOT be
+    // replaced by Date.now(), which would place the sample on a second clock.
+    expect(resolveSnapshotTimestamp(snapWith(undefined), 999)).toBe(999);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('warns only once across repeated degraded payloads', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveSnapshotTimestamp(snapWith(undefined), 1);
+    resolveSnapshotTimestamp(snapWith(undefined), 2);
+    resolveSnapshotTimestamp(snapWith(undefined), 3);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('rejects NaN, Infinity and negative payload timestamps', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveSnapshotTimestamp(snapWith(Number.NaN), 7)).toBe(7);
+    expect(resolveSnapshotTimestamp(snapWith(Number.POSITIVE_INFINITY), 7)).toBe(7);
+    expect(resolveSnapshotTimestamp(snapWith(-1), 7)).toBe(7);
+    warn.mockRestore();
+  });
+
+  it('accepts timestamp 0 (a falsy but valid epoch value)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveSnapshotTimestamp(snapWith(0), 7)).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('history growth is gated by on_tick, not by the timestamp', () => {
+  it('an off-tick snapshot carrying a valid timestamp appends nothing', () => {
+    const base = {
+      schema_version: EXPECTED_SCHEMA_VERSION,
+      timestamps: [1_000, 2_000],
+      cpu: [10, 20],
+      cpu_name: 'CPU',
+      cpu_temp_c: null,
+      mem: [1, 2],
+      disks: [],
+      net_recv: [0, 0],
+      net_sent: [0, 0],
+      gpus: [],
+    };
+    const offTick = { ...baseSnap(3_000, false) };
+    const next = appendSnapshotToHistory(base, offTick, 3_000);
+    // shouldCommitHistory(false) short-circuits: the SAME payload returned.
+    expect(next).toBe(base);
+  });
+});
+
+describe('reconcileHistoryWithLiveEvents still compares like with like', () => {
+  it('suppresses an event already covered by the response tail', () => {
+    const payload = {
+      schema_version: EXPECTED_SCHEMA_VERSION,
+      timestamps: [1_000, 2_000],
+      cpu: [10, 20],
+      cpu_name: 'CPU',
+      cpu_temp_c: null,
+      mem: [1, 2],
+      disks: [],
+      net_recv: [0, 0],
+      net_sent: [0, 0],
+      gpus: [],
+    };
+    // Now that both sides share the backend clock, "covered" is a real
+    // comparison: 2_000 is exactly the response tail.
+    const result = reconcileHistoryWithLiveEvents(payload, [
+      { snapshot: baseSnap(2_000, true), timestamp: 2_000 },
+    ]);
+    expect(result.timestamps).toEqual([1_000, 2_000]);
+  });
+
+  it('does not drop a genuinely new event', () => {
+    const payload = {
+      schema_version: EXPECTED_SCHEMA_VERSION,
+      timestamps: [1_000, 2_000],
+      cpu: [10, 20],
+      cpu_name: 'CPU',
+      cpu_temp_c: null,
+      mem: [1, 2],
+      disks: [],
+      net_recv: [0, 0],
+      net_sent: [0, 0],
+      gpus: [],
+    };
+    const result = reconcileHistoryWithLiveEvents(payload, [
+      { snapshot: baseSnap(3_000, true), timestamp: 3_000 },
+    ]);
+    expect(result.timestamps).toEqual([1_000, 2_000, 3_000]);
+    expect(result.cpu).toEqual([10, 20, 10]);
+  });
+});
+
+describe('schema-version bump fails closed', () => {
+  it('rejects a payload carrying the previous schema version', () => {
+    expect(() => assertSchemaVersion(EXPECTED_SCHEMA_VERSION - 1, 'MetricsSnapshot')).toThrow(
+      SchemaMismatchError
+    );
+    expect(() => assertSchemaVersion(EXPECTED_SCHEMA_VERSION - 1, 'MetricsSnapshot')).toThrow(
+      /schema mismatch/i
+    );
+  });
+
+  it('accepts the current version', () => {
+    expect(() => assertSchemaVersion(EXPECTED_SCHEMA_VERSION, 'MetricsSnapshot')).not.toThrow();
+  });
+});

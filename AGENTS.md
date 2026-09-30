@@ -5,7 +5,7 @@ Windows-only real-time system monitor: Rust/Tauri v2 backend (Win32 PDH/WMI/NVML
 ## Instruction sources
 
 - `CLAUDE.md` (root) and `.cursorrules` (root) hold the detailed architecture. Both were re-reconciled against source on 2026-08-21; if they ever appear to disagree again, trust the source and fix the docs. Previously-stale claims, now corrected in all three files:
-  - Schema version is **4** (`src-tauri/src/collector/snapshot.rs` ↔ `src/hooks/useMetrics.ts`); bump both together for payload changes.
+  - The metrics schema version is **not restated here** — read it from the IPC contract section below, which is the single place in this file that names a current value; `SCHEMA_VERSION` (`src-tauri/src/collector/snapshot.rs`) and `EXPECTED_SCHEMA_VERSION` (`src/hooks/useMetrics.ts`) must always move together for payload changes.
   - The backend is not a `main.rs` monolith: `main.rs` is a thin Tauri shell; payload structs/`SCHEMA_VERSION` live in `collector/snapshot.rs`, the tick loop in `collector/run_loop.rs`, cadence checks in `cadence.rs`. `lib.rs` is the library facade shared by the app binary and the headless probe `examples/cadence_probe.rs`.
   - Card order / view mode / hidden cards / window **are persisted** via `@tauri-apps/plugin-store`.
   - Cargo default features are `["nvapi", "nvml"]`.
@@ -23,6 +23,7 @@ npm run sim              # user-simulation mock lane (journeys × personas, engi
 npm run sim:real         # user-simulation packaged lane — drives the BUILT app via CDP (needs app built)
 npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.json)
 npm run verify:packaged  # packaged-app qualification: build exe, drive it via CDP (real IPC/settings/data), assert clean teardown
+npm run assert:webview2-policy-absent  # check no machine-wide HKLM WebView2 debug value leaked
 ```
 
 Simulation run knobs (`SIM_LANE`, `SIM_JOURNEYS`, `SIM_PERSONAS`, `SIM_SEED`, `SIM_SPEED`,
@@ -48,7 +49,8 @@ cargo run --example startup_probe                 # session-bootstrap timing pro
 ## CI gate (never commit failing; CI runs the same checks)
 
 - Rust changed: `cargo test`, `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo audit`
-- Frontend changed: `npx tsc --noEmit`, `npm test -- --run`, `npm run build`
+- Frontend changed: `npx tsc --noEmit`, `npm run typecheck:test`, `npm test -- --run`, `npm run build`. `npm run typecheck:test` (`tsconfig.test.json`) is the only `tsc` invocation that sees the Vitest sources, because `tsconfig.json` excludes `src/**/*.test.ts(x)`; `e2e/tsconfig.sim.json` (a shim that extends `e2e/tsconfig.json`, so editors and language servers — which resolve the nearest `tsconfig.json` — find the `@types/node` these files need) owns `e2e/**` + `src/sim/**`. Together the three projects type-check every first-party `.ts`/`.tsx`. Frontend **linting is not enforced** (no ESLint configured; `typescript-eslint` declares `peer typescript ">=4.8.4 <6.1.0"` and cannot be adopted while the repo is on TypeScript 7) — React-hooks rules are a known, recorded gap, not an oversight.
+- Dependency audit gate has **two scopes** and they must never be conflated: the **application** scope (`cd sys-monitor-tauri && npm audit --audit-level=high`, also `npm run audit:app`) is the authoritative one because it is what CI's `frontend` job and `.husky/pre-push` actually gate on; the **repository-root** scope holds only `husky` and can never fail on an application advisory. Report both with their scope, never as an unqualified "npm audit 0".
 - Sim code changed: `npm run sim:typecheck`; the mock lane (`npm run sim`) is a required PR/push gate in `.github/workflows/simulation.yml`
 - CI: `.github/workflows/rust.yml` — Rust, frontend, production Windows executable, and manual/tag installer jobs; `.github/workflows/e2e.yml` (mock-harness E2E on Windows); `.github/workflows/simulation.yml` (blocking mock lane on PR/push, packaged lane + shipped-config fault-surface lint on dispatch); `.github/workflows/release-qualification.yml` (dispatch/tag only: MSI/NSIS install/run/uninstall qualification + hashed release manifest).
 
@@ -71,7 +73,9 @@ cargo run --example startup_probe                 # session-bootstrap timing pro
 - Rust params are `snake_case` (`window_secs`); JS **must pass camelCase** (`{ windowSecs }`). Mismatch fails silently — history stays `null`, UI hangs on "Collecting metrics…".
 - `app_handle.emit("event", &payload)` — `emit_all` was removed in v2. Events: `metrics-update`, `hardware-profile-ready`, `collector-status` (typed `CollectorStatus`), `collector-error` (legacy string, still fired per panic for diagnostics).
 - Detect Tauri v2 runtime with `window.__TAURI_INTERNALS__`, **not** `window.__TAURI__`.
-- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **5**. The lifecycle contract has its own version: `LIFECYCLE_SCHEMA_VERSION` (Rust `collector/supervisor.rs`) must equal `EXPECTED_LIFECYCLE_SCHEMA_VERSION` (TS) — currently **1**. Bump each pair together when its payload shape changes.
+- `SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `hooks/useMetrics.ts`) — currently **6** (bumped from 5 when `MetricsSnapshot` gained `timestamp_ms`). The lifecycle contract has its own version: `LIFECYCLE_SCHEMA_VERSION` (Rust `collector/supervisor.rs`) must equal `EXPECTED_LIFECYCLE_SCHEMA_VERSION` (TS) — currently **1**. Bump each pair together when its payload shape changes.
+- **Single clock for the history ring.** The ring and every live sample share ONE timestamp source: `monotonic_timestamp_ms(wall_origin_ms, loop_epoch, …)` fixes a wall-clock origin once per collector session and advances it with a monotonic `Instant`. `MetricsSnapshot.timestamp_ms` carries that same value, and the frontend appends live events at the payload's timestamp — never `Date.now()`. Consequence: a mid-session wall-clock adjustment (NTP step, user change, suspend/resume) cannot make live samples disagree with the ring. `on_tick` remains the ONLY history growth gate, including for registry-only ticks that carry a timestamp.
+- **Missing-timestamp fallback.** If a `metrics-update` payload has no usable `timestamp_ms`, the frontend logs `console.warn` once and appends at the newest timestamp it already knows, so the sample is preserved in order rather than dropped. It never falls back to `Date.now()`.
 - Commands: `get_history`, `get_hardware_profile`, `get_collector_status`, `retry_collection` (honored ONLY while `failed`: signals the retry flag and answers `Failed`; any other answered state means the click was coalesced — a `Failed` answer never means ignored), `sim_store_override` (simulation-only).
 
 ## Frontend conventions
@@ -95,4 +99,19 @@ Git history shows merged changes arrive as OpenSpec applications — propose bef
 
 - Three verification lanes, three different capabilities — do not conflate them: (1) plain Playwright E2E (`e2e/tests/`) drives the Vite mock-data harness, because a stock WebView2 window exposes no automation endpoint; (2) the mock simulation lane scripts faults through the bridge; (3) the real lane launches the BUILT app with remote debugging and drives it over CDP — real IPC, real store, true process relaunch. Only genuinely hardware-bound events (physical hotplug, lid/power) stay in `e2e/exploratory-register.md`.
 - The simulation platform (`e2e/sim/`) runs on top: the mock lane drives the Vite harness plus the scriptable bridge (`src/sim/mockBackend.ts`, faults via `window.__SIM__`, per-run localStorage settings shim); the real lane launches the BUILT app with WebView2 remote debugging (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<p> --remote-allow-origins=*`, env-only, loopback; an HKLM policy fallback covers elevated hosts) and attaches via CDP — real IPC, real settings store, real sensors, full restart via `restartApp()`. **Isolation**: the driver redirects `WEBVIEW2_USER_DATA_FOLDER` and sets `SYSMON_SIM_APP_DATA` to a per-run temp dir; the frontend loads the plugin-store from that absolute path (`sim_store_override` command) so a sim run never touches the developer's real `settings.json` (a plain `APPDATA` env redirect does NOT work on Windows — Tauri resolves store paths via Win32 KnownFolders). The runner enforces an orphan-process guard plus a developer-store byte-identity self-test on every real-lane run. The real lane needs a built exe (`npx tauri build --no-bundle` or `cargo build --release --features custom-protocol`) and is opt-in.
+
+**After a packaged/real-lane run — check the machine-wide WebView2 policy.** On an *elevated* host the driver writes a value named `*` under `HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`; `*` applies to **every WebView2 host on the machine**, not just this app. The value is removed on every termination path (normal close, spawn failure, Ctrl-C, SIGTERM, `process.exit`, uncaught throw) and removal is *verified* by reading it back — a still-present value fails the run rather than being reported as clean. If you ever suspect one leaked:
+
+```bash
+# check (exit 0 = absent, exit 1 = still present; same command CI runs)
+npm run assert:webview2-policy-absent
+
+# manual check
+reg query "HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments" /v *
+
+# remove it if present
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments" /v * /f
+```
+
+`simulation-real` and both release-qualification jobs assert this with `if: always()`, so a failed run is checked too. A non-elevated host cannot write the value at all (access denied) and the driver falls back to the environment variable; that is expected, not a leak.
 - Rust tests are `#[cfg(test)]` modules co-located in source files; PDH/WMI functions needing real handles are not unit-tested — only their pure parsing helpers.

@@ -27,7 +27,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 function emptyHistoryPayload(): HistoryPayload {
   return {
-    schema_version: 5,
+    schema_version: EXPECTED_SCHEMA_VERSION,
     timestamps: [],
     cpu: [],
     cpu_name: 'CPU',
@@ -73,13 +73,29 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }));
 
-import { useMetrics, type SlicedHistory } from './useMetrics';
+import {
+  EXPECTED_SCHEMA_VERSION,
+  useMetrics,
+  type SlicedHistory,
+} from './useMetrics';
 import type { CollectorStatus } from '../types/metrics';
+
+/**
+ * Simulated backend clock. Monotonically increasing across the whole suite so
+ * every emitted snapshot advances the history ring exactly as the real
+ * backend's monotonic projection does.
+ */
+let nextBackendTimestamp = 1_700_000_000_000;
+function advanceBackendClock(ms = 250): number {
+  nextBackendTimestamp += ms;
+  return nextBackendTimestamp;
+}
 
 function baseSnapshot(onTick: boolean): MetricsSnapshot {
   return {
-    schema_version: 5,
+    schema_version: EXPECTED_SCHEMA_VERSION,
     on_tick: onTick,
+    timestamp_ms: advanceBackendClock(),
     cpu: 42,
     cpu_name: 'CPU',
     cpu_temp_c: 50,

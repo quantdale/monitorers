@@ -4,7 +4,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use sys_monitor_tauri::collector::{
-    physical_disk_list, run_collector_loop, LoopOutcome, MetricsSnapshot, WmiBootstrap,
+    disk_display_name, physical_disk_list, query_disk_models_wmi, run_collector_loop, LoopOutcome,
+    MetricsSnapshot, WmiBootstrap,
 };
 use sys_monitor_tauri::hardware::{classify_gpu, DiskInfo, DiskKind, GpuInfo, HardwareProfile};
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
@@ -261,21 +262,28 @@ fn run_session_body(
     // PDH/sysinfo collection must not wait behind WMI startup or retry sleeps.
     let physical = physical_disk_list(&collector_state.sysinfo_disks, &collector_state.pdh);
     use sysinfo::DiskKind as SysDiskKind;
+    // Presentation helper shared with the WMI-enrichment path below. The
+    // pre-WMI call passes an EMPTY model map, so the resulting names are
+    // exactly the sysinfo names the startup path produced before this change —
+    // no enrichment is attempted while no WMI connection exists.
+    let no_models: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     let disk_infos: Option<Vec<DiskInfo>> = if physical.is_empty() {
         None
     } else {
+        // Borrowed, not consumed: `physical` is still needed by the WMI
+        // enrichment callback below for the per-disk drive indexes.
         Some(
             physical
-                .into_iter()
-                .map(|(disk_key, kind, sysinfo_name, _drive_index)| {
+                .iter()
+                .map(|(disk_key, kind, sysinfo_name, drive_index)| {
                     let k = match kind {
                         SysDiskKind::SSD => DiskKind::Ssd,
                         SysDiskKind::HDD => DiskKind::Hdd,
                         _ => DiskKind::Unknown,
                     };
                     DiskInfo {
-                        key: disk_key,
-                        name: sysinfo_name,
+                        key: disk_key.clone(),
+                        name: disk_display_name(*drive_index, &no_models, sysinfo_name),
                         kind: k,
                     }
                 })
@@ -289,7 +297,7 @@ fn run_session_body(
         Some(&collector_state.pdh),
         None,
         disk_infos.clone(),
-        &collector_state.profile.cpu_identity(),
+        &collector_state.cpu_identity,
     );
     let profile = &collector_state.profile;
     println!(
@@ -338,11 +346,36 @@ fn run_session_body(
             // WMI enrichment becomes available independently of the core loop.
             // The connection remains on this session MTA thread for all future
             // polls.
+            //
+            // This is also where the previously-dead disk-model query finally
+            // gets called: `query_disk_models_wmi` turns Win32_DiskDrive
+            // physical indexes into human-readable models, so a disk whose
+            // sysinfo name is a raw device path (\\.\PhysicalDrive0) is shown
+            // as its real model. Presentation ONLY — `disk_key` still comes
+            // from the drive-letter join in `physical_disk_list`, so identity
+            // across dashboard/sidebar/history is untouched. An empty map (WMI
+            // query failed or returned nothing) simply falls back to the
+            // pre-WMI names, so no disk is ever dropped.
+            let disk_models = query_disk_models_wmi(Some(wmi));
+            let enriched_disk_infos: Option<Vec<DiskInfo>> = disk_infos.as_ref().map(|infos| {
+                infos
+                    .iter()
+                    .enumerate()
+                    .map(|(i, info)| {
+                        let drive_index = physical.get(i).and_then(|(_, _, _, di)| *di);
+                        DiskInfo {
+                            key: info.key.clone(),
+                            name: disk_display_name(drive_index, &disk_models, &info.name),
+                            kind: info.kind.clone(),
+                        }
+                    })
+                    .collect()
+            });
             state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
                 Some(&state.pdh),
                 Some(wmi),
-                disk_infos.clone(),
-                &state.profile.cpu_identity(),
+                enriched_disk_infos,
+                &state.cpu_identity,
             );
             let mut shared = store.lock().unwrap_or_else(|e| e.into_inner());
             shared.profile = Some(state.profile.clone());
@@ -612,6 +645,7 @@ mod tests {
         };
         use sys_monitor_tauri::collector::{DiskSnapshot, GpuSnapshot};
         use sys_monitor_tauri::hardware::{CpuVendor, GpuKind, GpuVendor};
+        use sys_monitor_tauri::SCHEMA_VERSION;
 
         let profile = HardwareProfile {
             cpu_vendor: CpuVendor::Unknown,
@@ -629,8 +663,9 @@ mod tests {
             }],
         };
         let snapshot = MetricsSnapshot {
-            schema_version: 5,
+            schema_version: SCHEMA_VERSION,
             on_tick: true,
+            timestamp_ms: 1_700_000_000_000,
             cpu: 10.0,
             cpu_name: "CPU".to_string(),
             cpu_temp_c: None,

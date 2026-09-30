@@ -39,6 +39,32 @@ pub fn query_disk_models_wmi(wmi_con: Option<&wmi::WMIConnection>) -> HashMap<u3
     map
 }
 
+/// Choose the disk's DISPLAY name for a physical drive index.
+///
+/// `models` is the already-queried `query_disk_models_wmi` map (empty when WMI
+/// is unavailable or the query failed). `fallback` is the name sysinfo
+/// reported, which on some hosts is a raw device path (`\\.\PhysicalDrive0`)
+/// and therefore not something to show a user.
+///
+/// Deliberately pure and WMI-free: it takes the queried map rather than a
+/// connection, so it is unit-testable without COM, and a failed/empty query
+/// degrades to `fallback` instead of dropping the disk.
+///
+/// This affects PRESENTATION ONLY. Disk identity is the drive-letter key
+/// derived from `physical_disk_list`; two disks that report the same model
+/// string keep distinct keys because the key never comes from the name.
+pub fn disk_display_name(
+    drive_index: Option<u32>,
+    models: &HashMap<u32, String>,
+    fallback: &str,
+) -> String {
+    drive_index
+        .and_then(|idx| models.get(&idx))
+        .filter(|model| !model.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 // ── DISK HELPERS ─────────────────────────────────────────────────────────────
 
 /// A sysinfo disk's kind and display name, keyed by drive letter.
@@ -307,6 +333,72 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- disk_display_name ---
+
+    fn model_map(entries: &[(u32, &str)]) -> HashMap<u32, String> {
+        entries
+            .iter()
+            .map(|(i, m)| (*i, (*m).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn disk_display_name_prefers_the_wmi_model_for_the_index() {
+        let models = model_map(&[(0, "Samsung SSD 990 PRO 2TB")]);
+        assert_eq!(
+            disk_display_name(Some(0), &models, "\\\\.\\PhysicalDrive0"),
+            "Samsung SSD 990 PRO 2TB"
+        );
+    }
+
+    #[test]
+    fn disk_display_name_falls_back_when_index_is_absent_from_a_non_empty_map() {
+        let models = model_map(&[(7, "WDC WD40EFRX")]);
+        // Index 0 is missing from the map: another disk's model must not leak.
+        assert_eq!(
+            disk_display_name(Some(0), &models, "\\\\.\\PhysicalDrive0"),
+            "\\\\.\\PhysicalDrive0"
+        );
+    }
+
+    #[test]
+    fn disk_display_name_falls_back_when_no_wmi_map_exists() {
+        assert_eq!(
+            disk_display_name(Some(0), &HashMap::new(), "\\\\.\\PhysicalDrive0"),
+            "\\\\.\\PhysicalDrive0"
+        );
+        // And when the index itself is unknown (no drive index recorded).
+        assert_eq!(
+            disk_display_name(None, &model_map(&[(0, "x")]), "fallback"),
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn disk_display_name_ignores_a_blank_model() {
+        let models = model_map(&[(0, "   ")]);
+        assert_eq!(
+            disk_display_name(Some(0), &models, "\\\\.\\PhysicalDrive0"),
+            "\\\\.\\PhysicalDrive0"
+        );
+    }
+
+    #[test]
+    fn two_disks_sharing_a_model_keep_distinct_drive_letter_keys() {
+        // Presentation-only guarantee: identical model strings must not
+        // collapse two physical disks onto one identity.
+        let models = model_map(&[(0, "Generic Disk"), (1, "Generic Disk")]);
+        let name_a = disk_display_name(Some(0), &models, "\\\\.\\PhysicalDrive0");
+        let name_b = disk_display_name(Some(1), &models, "\\\\.\\PhysicalDrive1");
+        assert_eq!(name_a, name_b, "the model string is expected to be shared");
+        // Keys come from the drive-letter join, never from the name.
+        let key_a = pdh_instance_to_drive_letters("0 C:").join(" ");
+        let key_b = pdh_instance_to_drive_letters("1 D:").join(" ");
+        assert_eq!(key_a, "C:");
+        assert_eq!(key_b, "D:");
+        assert_ne!(key_a, key_b);
+    }
 
     // --- pdh_instance_to_drive_letters ---
 

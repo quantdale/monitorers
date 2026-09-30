@@ -35,6 +35,7 @@ import type {
   CollectorLifecycleState,
   CollectorStatus,
   HistoryPayload,
+  MetricValue,
   MetricsSnapshot,
   NvidiaTelemetry,
 } from '../types/metrics';
@@ -78,7 +79,7 @@ export type HistoryLoadFault = { mode: 'fail' } | { mode: 'slow'; delayMs: numbe
 export interface SimScenario {
   /** Scenario shape version (bump on incompatible changes). */
   version: 1;
-  /** Emitted `schema_version` in snapshots/history. Default 5 (production). */
+  /** Emitted `schema_version` in snapshots/history. Defaults to the production value. */
   schema_version?: number;
   /** Mock clock speed factor (1 = real-time 250 ms ticks). */
   speed?: number;
@@ -172,7 +173,7 @@ const DEFAULT_GPUS: SimGpuSpec[] = [
 export function defaultScenario(): SimScenario {
   return {
     version: 1,
-    schema_version: 5,
+    schema_version: MOCK_SCHEMA_VERSION,
     speed: 1,
     disks: DEFAULT_DISKS.map((disk) => ({ ...disk })),
     gpus: DEFAULT_GPUS.map((gpu) => ({ ...gpu })),
@@ -210,6 +211,22 @@ function nvidiaStatsFor(gpu: SimGpuSpec, index: number): NvidiaTelemetry | null 
     clock_mhz: gpu.nvidia?.clock_mhz ?? 2100,
   };
 }
+
+/**
+ * The mock mirrors the production metrics schema. Kept as a local constant
+ * rather than importing `EXPECTED_SCHEMA_VERSION` because this module MUST NOT
+ * import from `useMetrics.ts` (import cycle at bundle-evaluation time). The
+ * production `SCHEMA_VERSION` in `collector/snapshot.rs` is the third value and
+ * must always match; the equality is pinned by `src/sim/mockBackend.test.ts`.
+ */
+const MOCK_SCHEMA_VERSION = 6;
+
+/**
+ * Production ring capacity. `MAX_HISTORY` lives in `useMetrics.ts`, which this
+ * module must not import (bundle-time import cycle), so the value is mirrored
+ * here; equality is pinned by `src/sim/mockBackend.test.ts`.
+ */
+const MAX_SIM_HISTORY = 3600;
 
 /** 300-point seed kept identical to the pre-bridge mock (chart cap parity). */
 const MOCK_SEED_POINTS = 300;
@@ -314,6 +331,52 @@ export class MockBackend {
   private freezeRemaining = 0;
   private halted = false;
   private lastSnapshot: MetricsSnapshot | null = null;
+  /**
+   * Epoch-ms origin for the mock's SINGLE clock. Mirrors the real backend's
+   * `wall_origin_ms`: fixed once per session, then advanced by elapsed SIM
+   * time. Both the seeded history and every emitted snapshot are stamped from
+   * it, so the mock cannot reintroduce the two-clock seam the production
+   * timestamp channel exists to remove.
+   */
+  private readonly historyAnchorMs = Date.now();
+  /**
+   * The mock's own accumulating history ring — the analog of the Rust
+   * `HistoryStore`. Advanced only on history-committing ticks (1 Hz), capped at
+   * `MAX_SIM_HISTORY`, and sliced by elapsed time on request.
+   */
+  private readonly history: {
+    timestamps: number[];
+    cpu: number[];
+    cpu_name: string;
+    cpu_temp_c: number | null;
+    mem: number[];
+    net_recv: number[];
+    net_sent: number[];
+    disks: Map<
+      string,
+      { values: MetricValue[]; read_mb_s: number; write_mb_s: number; avg_response_ms: number }
+    >;
+    gpus: Map<
+      string,
+      {
+        values: MetricValue[];
+        name: string;
+        vendor: string;
+        temp_c: number | null;
+        nvidia: NvidiaTelemetry | null;
+      }
+    >;
+  } = {
+    timestamps: [],
+    cpu: [],
+    cpu_name: 'CPU',
+    cpu_temp_c: null,
+    mem: [],
+    net_recv: [],
+    net_sent: [],
+    disks: new Map(),
+    gpus: new Map(),
+  };
   private pendingTimeline: SimTimelineEvent[];
   private firedTimeline = 0;
 
@@ -327,7 +390,7 @@ export class MockBackend {
     this.gpus = this.scenario.gpus === undefined
       ? DEFAULT_GPUS.map((gpu) => ({ ...gpu }))
       : this.scenario.gpus.map((gpu) => ({ ...gpu }));
-    this.schemaVersion = this.scenario.schema_version ?? 5;
+    this.schemaVersion = this.scenario.schema_version ?? MOCK_SCHEMA_VERSION;
     this.speed = this.scenario.speed ?? 1;
     this.historyFault = this.scenario.history_fault ?? null;
     this.corruptSettings = this.scenario.corrupt_settings ?? false;
@@ -541,12 +604,17 @@ export class MockBackend {
   }
 
   /**
-   * `get_history` analog. Honors the configured history fault (fail/slow);
-   * the default resolves with a fresh 300-point sine seed, matching the
-   * pre-bridge mock exactly.
+   * `get_history` analog. Honors the configured history fault (fail/slow).
+   *
+   * The returned payload is an ELAPSED-TIME WINDOW SLICE of the backend's own
+   * accumulating ring, matching production `build_history_payload` →
+   * `timestamp_window_range`. Widening the window therefore reveals more of the
+   * SAME accumulated session rather than fabricating an unrelated series, which
+   * is what the previous re-seed implementation did.
    */
-  getHistory(): Promise<HistoryPayload> {
-    const payload = this.generateHistory();
+  getHistory(windowSeconds = 60): Promise<HistoryPayload> {
+    this.ensureSeededHistory();
+    const payload = this.sliceHistoryWindow(windowSeconds);
     const fault = this.historyFault;
     if (!fault) return Promise.resolve(payload);
     if (fault.mode === 'fail') {
@@ -633,6 +701,19 @@ export class MockBackend {
     return this.tick * 0.25;
   }
 
+  /**
+   * The mock's current history timestamp, in epoch ms, from the single anchor
+   * captured at construction plus elapsed SIM time. The production equivalent
+   * is `monotonic_timestamp_ms(wall_origin_ms, loop_epoch, Instant::now())`.
+   *
+   * Advancing it on EVERY emission (not only on history commits) matches the
+   * real backend: a registry-only tick still reports a truthful "read at" time
+   * for its scalars, while `on_tick` remains the only thing that grows history.
+   */
+  currentHistoryTimestamp(): number {
+    return this.historyAnchorMs + Math.round(this.simSeconds * 1000);
+  }
+
   private advance(): void {
     if (this.halted) {
       this.stop();
@@ -672,9 +753,45 @@ export class MockBackend {
   private emitSnapshot(): void {
     const snap = this.composeSnapshot();
     this.lastSnapshot = snap;
+    // Advance the history ring ONLY on history-committing emissions
+    // (`on_tick`, the same 1-of-4 cadence the real backend commits at), so the
+    // mock's 4:1 emission ratio keeps producing a 1 Hz history exactly as
+    // production does.
+    if (snap.on_tick) this.appendToRing(this.snapshotToHistorySample(snap));
     for (const listener of this.snapListeners) {
       listener(snap);
     }
+  }
+
+  /** Project one full-tick snapshot into a single-sample HistoryPayload. */
+  private snapshotToHistorySample(snap: MetricsSnapshot): HistoryPayload {
+    return {
+      schema_version: snap.schema_version,
+      timestamps: [snap.timestamp_ms],
+      cpu: [snap.cpu],
+      cpu_name: snap.cpu_name,
+      cpu_temp_c: snap.cpu_temp_c ?? null,
+      mem: [snap.mem],
+      disks: snap.disks.map((d) => ({
+        key: d.key,
+        values: [d.active],
+        read_mb_s: d.read_mb_s,
+        write_mb_s: d.write_mb_s,
+        avg_response_ms: d.avg_response_ms,
+        last_seen_ts: snap.timestamp_ms,
+      })),
+      net_recv: [snap.net_recv_kib_s],
+      net_sent: [snap.net_sent_kib_s],
+      gpus: snap.gpus.map((g) => ({
+        key: g.key,
+        name: g.name,
+        vendor: g.vendor,
+        values: [g.util],
+        temp_c: g.temp_c ?? null,
+        nvidia: g.nvidia ?? null,
+        last_seen_ts: snap.timestamp_ms,
+      })),
+    };
   }
 
   /**
@@ -684,12 +801,17 @@ export class MockBackend {
    */
   private composeSnapshot(): MetricsSnapshot {
     const onTick = this.tick % 4 === 0;
+    const timestamp = this.currentHistoryTimestamp();
     if (this.freezeRemaining > 0 && this.lastSnapshot) {
       this.freezeRemaining -= 1;
       return {
         ...this.lastSnapshot,
         schema_version: this.schemaVersion,
         on_tick: onTick,
+        // Values are frozen (PDH freeze hold) but the clock still advances —
+        // exactly what the real backend does: a frozen poll still pushes a
+        // timestamp on a full tick. Only `on_tick` gates history growth.
+        timestamp_ms: timestamp,
       };
     }
     this.freezeRemaining = 0;
@@ -724,6 +846,7 @@ export class MockBackend {
     return {
       schema_version: this.schemaVersion,
       on_tick: onTick,
+      timestamp_ms: timestamp,
       cpu,
       cpu_name: 'CPU',
       cpu_temp_c: 52,
@@ -737,10 +860,190 @@ export class MockBackend {
     };
   }
 
+  /**
+   * Seed the ring ONCE, the first time history is requested and before any
+   * commit has occurred. Subsequent calls never regenerate: the buffer is the
+   * session's history, not a per-request fixture.
+   */
+  private ensureSeededHistory(): void {
+    // `timestamps.length > 0` IS the seeded flag: once anything has been
+    // committed the ring is never re-seeded, so a second request cannot swap
+    // the accumulated session for a fresh series.
+    if (this.history.timestamps.length > 0) return;
+    this.appendToRing(this.generateHistory());
+  }
+
+  /**
+   * Append one full-tick sample to the ring, enforcing the production
+   * `MAX_HISTORY` cap.
+   *
+   * Only `values` is a per-timestamp series in `HistoryPayload`; a disk's
+   * read/write/response and a GPU's temp are SCALAR latest-readings, exactly
+   * as the production payload defines them, so they are carried forward from
+   * the newest sample rather than accumulated.
+   */
+  private appendToRing(sample: HistoryPayload): void {
+    // A payload may carry many points (the 300-point pre-attach seed) or
+    // exactly one (a full tick), so append EVERY point it holds rather than
+    // assuming a single sample.
+    const points = sample.timestamps.length;
+    for (let i = 0; i < points; i += 1) {
+      const before = this.history.timestamps.length;
+      const h = this.history;
+      h.timestamps.push(sample.timestamps[i]);
+      h.cpu.push(sample.cpu[i]);
+      h.mem.push(sample.mem[i]);
+      h.net_recv.push(sample.net_recv[i]);
+      h.net_sent.push(sample.net_sent[i]);
+      h.cpu_name = sample.cpu_name;
+      h.cpu_temp_c = sample.cpu_temp_c ?? null;
+
+      for (const disk of sample.disks) {
+        let entry = h.disks.get(disk.key);
+        if (!entry) {
+          // A device discovered mid-stream is back-filled with nulls for the
+          // whole pre-discovery span, matching production
+          // `slice_aligned_history`.
+          entry = {
+            values: new Array<MetricValue>(before).fill(null),
+            read_mb_s: disk.read_mb_s,
+            write_mb_s: disk.write_mb_s,
+            avg_response_ms: disk.avg_response_ms,
+          };
+          h.disks.set(disk.key, entry);
+        } else {
+          entry.read_mb_s = disk.read_mb_s;
+          entry.write_mb_s = disk.write_mb_s;
+          entry.avg_response_ms = disk.avg_response_ms;
+        }
+        const v = disk.values[i];
+        entry.values.push(v === undefined ? null : v);
+      }
+      // Devices absent from this sample stop being accumulated, exactly as
+      // `mergeDiskHistory`/`mergeGpuHistory` prune them.
+      for (const key of [...h.disks.keys()]) {
+        if (!sample.disks.some((d) => d.key === key)) h.disks.delete(key);
+      }
+
+      for (const gpu of sample.gpus) {
+        let entry = h.gpus.get(gpu.key);
+        if (!entry) {
+          entry = {
+            values: new Array<MetricValue>(before).fill(null),
+            name: gpu.name,
+            vendor: gpu.vendor,
+            temp_c: gpu.temp_c ?? null,
+            nvidia: gpu.nvidia ?? null,
+          };
+          h.gpus.set(gpu.key, entry);
+        } else {
+          entry.name = gpu.name;
+          entry.vendor = gpu.vendor;
+          entry.temp_c = gpu.temp_c ?? null;
+          entry.nvidia = gpu.nvidia ?? null;
+        }
+        const v = gpu.values[i];
+        entry.values.push(v === undefined ? null : v);
+      }
+      for (const key of [...h.gpus.keys()]) {
+        if (!sample.gpus.some((g) => g.key === key)) h.gpus.delete(key);
+      }
+    }
+
+    // Production `push_history` caps every channel at MAX_HISTORY.
+    const h = this.history;
+    const trim = <T,>(arr: T[]): void => {
+      if (arr.length > MAX_SIM_HISTORY) arr.splice(0, arr.length - MAX_SIM_HISTORY);
+    };
+    trim(h.timestamps);
+    trim(h.cpu);
+    trim(h.mem);
+    trim(h.net_recv);
+    trim(h.net_sent);
+    for (const entry of h.disks.values()) trim(entry.values);
+    for (const entry of h.gpus.values()) trim(entry.values);
+  }
+
+  /**
+   * Elapsed-time window slice using production `timestamp_window_range`
+   * semantics: the window is measured BACK from the newest sample, so widening
+   * it reveals earlier committed samples of the same session.
+   */
+  private sliceHistoryWindow(windowSeconds: number): HistoryPayload {
+    const h = this.history;
+    const all = h.timestamps;
+    let start = 0;
+    const end = all.length;
+    if (all.length > 0 && Number.isFinite(windowSeconds) && windowSeconds > 0) {
+      const newest = all[all.length - 1];
+      const cutoff = newest - windowSeconds * 1000;
+      const found = all.findIndex((timestamp: number) => timestamp >= cutoff);
+      start = found < 0 ? Math.max(0, all.length - 1) : found;
+    }
+    const timestamps = all.slice(start, end);
+    const pick = <T,>(arr: T[]): T[] => {
+      const offset = all.length - arr.length;
+      const localStart = Math.max(0, start - offset);
+      const localEnd = Math.min(arr.length, end - offset);
+      return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
+    };
+    // A device whose series is shorter than the global ring keeps its
+    // pre-discovery gap as leading nulls.
+    const align = <T,>(arr: T[]): Array<T | null> => {
+      const sliced = pick(arr);
+      if (timestamps.length === sliced.length) return sliced;
+      const offset = timestamps.length - sliced.length;
+      const padded = new Array<T | null>(timestamps.length).fill(null);
+      for (let i = 0; i < sliced.length; i += 1) padded[offset + i] = sliced[i];
+      return padded;
+    };
+    return {
+      schema_version: this.schemaVersion,
+      timestamps,
+      cpu: pick(h.cpu),
+      cpu_name: h.cpu_name,
+      cpu_temp_c: h.cpu_temp_c,
+      mem: pick(h.mem),
+      // Only devices in the CURRENT stable set are reported, mirroring the
+      // backend's ghost-pruning: a device removed from the active set drops out
+      // of the payload even while its earlier samples are still in the ring.
+      // A device re-added later reappears immediately with its whole series
+      // null — the same pre-discovery gap production `slice_aligned_history`
+      // produces for a newly enumerated device.
+      disks: this.disks.map((spec) => {
+        const key = spec.key;
+        const entry = h.disks.get(key);
+        return {
+          key,
+          values: entry ? align(entry.values) : new Array(timestamps.length).fill(null),
+          read_mb_s: entry?.read_mb_s ?? spec.read_mb_s ?? 0,
+          write_mb_s: entry?.write_mb_s ?? spec.write_mb_s ?? 0,
+          avg_response_ms: entry?.avg_response_ms ?? spec.avg_response_ms ?? 0,
+          last_seen_ts: timestamps[timestamps.length - 1] ?? 0,
+        };
+      }),
+      net_recv: pick(h.net_recv),
+      net_sent: pick(h.net_sent),
+      gpus: this.gpus.map((spec, index) => {
+        const key = gpuKey(spec, index);
+        const entry = h.gpus.get(key);
+        return {
+          key,
+          name: entry?.name ?? spec.name,
+          vendor: entry?.vendor ?? spec.vendor ?? 'unknown',
+          values: entry ? align(entry.values) : new Array(timestamps.length).fill(null),
+          temp_c: entry?.temp_c ?? null,
+          nvidia: entry?.nvidia ?? spec.nvidia ?? null,
+          last_seen_ts: timestamps[timestamps.length - 1] ?? 0,
+        };
+      }),
+    };
+  }
+
   /** 300-point history seed mirroring the pre-bridge mock payload. */
   private generateHistory(): HistoryPayload {
     const n = MOCK_SEED_POINTS;
-    const now = Date.now();
+    const now = this.currentHistoryTimestamp();
     const cpu: number[] = [];
     const mem: number[] = [];
     const netRecv: number[] = [];

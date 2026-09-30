@@ -60,6 +60,17 @@ export interface MetricsSnapshot {
   schema_version: number;
   /** True when this snapshot was emitted on a full (history-committing) tick. */
   on_tick: boolean;
+  /**
+   * Epoch-milliseconds timestamp for this tick, from the backend's single
+   * monotonic projection — the same `u64` pushed into the history ring on a
+   * full tick. Mirrors `MetricsSnapshot::timestamp_ms` in
+   * `src-tauri/src/collector/snapshot.rs`.
+   *
+   * Declared required (not optional) because the backend always sets it. The
+   * runtime defensiveness in `resolveSnapshotTimestamp` exists for payloads
+   * that bypass this type, not to make the field legitimately absent.
+   */
+  timestamp_ms: number;
   cpu: number;
   cpu_name: string;
   cpu_temp_c?: number | null;

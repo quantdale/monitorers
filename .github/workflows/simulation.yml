@@ -166,6 +166,14 @@ jobs:
           SIM_APP_EXE: src-tauri/target/release/sys-monitor-tauri.exe
         run: npm run sim:real
 
+      # CI runners are elevated, so the driver really does write the
+      # machine-wide WebView2 policy value. A leaked value leaves remote
+      # debugging enabled for every WebView2 host on the runner, so assert it
+      # is gone — `always()` so a FAILED run is checked too.
+      - name: Assert no machine-wide WebView2 policy value leaked
+        if: always()
+        run: npm run assert:webview2-policy-absent
+
       # v7.0.1 — 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       - name: Upload simulation artifacts
         if: always()

@@ -23,7 +23,7 @@ export const MAX_HISTORY = 3600;
  */
 const PRUNE_GRACE_MS = 5000;
 
-export const EXPECTED_SCHEMA_VERSION = 5;
+export const EXPECTED_SCHEMA_VERSION = 6;
 
 export const SCHEMA_MISMATCH_MESSAGE =
   'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
@@ -298,6 +298,43 @@ function sliceWithRange<T>(arr: T[], timestampCount: number, range: [number, num
   return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
 }
 
+/**
+ * Resolve the timestamp a live snapshot must be appended at.
+ *
+ * The backend owns exactly ONE clock for the history ring: a wall-clock origin
+ * fixed once per collector session, advanced by a monotonic `Instant`
+ * (`monotonic_timestamp_ms` in `collector/run_loop.rs`). The IPC snapshot
+ * carries that same value as `timestamp_ms`, so a live sample and the ring it
+ * is appended to can never disagree after a mid-session wall-clock adjustment
+ * (NTP step, user change, suspend/resume). Calling `Date.now()` here would
+ * reintroduce the second clock this replaced.
+ *
+ * Fallback rule when the payload timestamp is missing or unusable: warn ONCE
+ * and append at the newest timestamp already known, so the sample is preserved
+ * in order rather than dropped and never jumps to an unrelated wall clock.
+ */
+let warnedMissingSnapshotTimestamp = false;
+/** Test seam: lets a suite assert the "warn once" contract repeatedly. */
+export function resetMissingSnapshotTimestampWarning(): void {
+  warnedMissingSnapshotTimestamp = false;
+}
+
+export function resolveSnapshotTimestamp(
+  snapshot: MetricsSnapshot,
+  fallbackTimestamp: number
+): number {
+  const raw = snapshot?.timestamp_ms;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+  if (!warnedMissingSnapshotTimestamp) {
+    warnedMissingSnapshotTimestamp = true;
+    console.warn(
+      '[useMetrics] metrics-update payload has no usable timestamp_ms; falling back to ' +
+        'the newest known history timestamp. This indicates a backend/frontend schema mismatch.'
+    );
+  }
+  return fallbackTimestamp;
+}
+
 /** Append a validated full-tick snapshot to a history payload. */
 export function appendSnapshotToHistory(
   previous: HistoryPayload | null,
@@ -441,6 +478,13 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const lifecycleSchemaError = useRef<string | null>(null);
   const requestGeneration = useRef(0);
   const liveSequence = useRef(0);
+  /**
+   * Newest timestamp seen from the backend (the seed response, or a previous
+   * snapshot). Used ONLY as the documented fallback when a payload arrives with
+   * no usable `timestamp_ms`, so a degraded sample still lands at the end of
+   * the existing series instead of jumping to an unrelated wall clock.
+   */
+  const lastBackendTimestamp = useRef<number | null>(null);
   const liveEvents = useRef<LiveEvent[]>([]);
   /**
    * Counts every VALID lifecycle status applied to hook state (listener or
@@ -486,6 +530,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
           .map(({ snapshot, timestamp }) => ({ snapshot, timestamp }));
         if (replay.length > 0) next = reconcileHistoryWithLiveEvents(next, replay);
         historyRef.current = next;
+        lastBackendTimestamp.current = next.timestamps.at(-1) ?? lastBackendTimestamp.current;
         setHistory(next);
         historyRequestError.current = null;
         liveSchemaError.current = null;
@@ -510,7 +555,15 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         .then(acceptHistory)
         .catch(rejectHistory);
     } else {
-      getSimBackend().getHistory().then(acceptHistory).catch(rejectHistory);
+      // Pass the selected window, mirroring the Tauri branch's
+      // `invoke('get_history', { windowSecs })`. The mock now answers with an
+      // elapsed-time slice of its own accumulating ring, so the browser lane
+      // exercises the same windowing semantics as production instead of
+      // re-seeding an unrelated series on every request.
+      getSimBackend()
+        .getHistory(windowSeconds)
+        .then(acceptHistory)
+        .catch(rejectHistory);
       setMemGb({ used: 8, total: 16 });
     }
 
@@ -532,7 +585,13 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         return;
       }
 
-      const timestamp = Date.now();
+      const timestamp = resolveSnapshotTimestamp(
+        snap,
+        // Fallback: newest timestamp already known to the frontend, so the
+        // sample is appended in order rather than dropped.
+        historyRef.current?.timestamps.at(-1) ?? lastBackendTimestamp.current ?? Date.now()
+      );
+      lastBackendTimestamp.current = timestamp;
       // A compatible event proves the live IPC stream recovered from a live
       // schema fault. It does not, by itself, prove that a failed history
       // request for the selected window recovered, so keep that error until a

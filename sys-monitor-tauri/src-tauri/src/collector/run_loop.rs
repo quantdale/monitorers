@@ -261,17 +261,25 @@ pub fn run_collector_loop(
             };
 
             let history_lock_started = Instant::now();
+            // ONE timestamp per tick, from the session's monotonic projection.
+            // It is handed to both the history ring (full ticks only) and the
+            // emitted snapshot, so the value the frontend appends against the
+            // payload is identical BY CONSTRUCTION rather than recomputed from
+            // a second clock. On a registry-only tick `raw` is None, so the
+            // ring is untouched while the snapshot still carries a truthful
+            // "read at" time for its scalars; `on_tick` stays the growth gate.
+            let tick_timestamp_ms =
+                monotonic_timestamp_ms(wall_origin_ms, loop_epoch, Instant::now());
             let snapshot = {
                 let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref r) = raw {
                     commit_disk_network(&mut s, r);
                     commit_cpu(&mut s, r);
                     commit_gpu(&mut s, r);
-                    let ts = monotonic_timestamp_ms(wall_origin_ms, loop_epoch, Instant::now());
-                    s.push_timestamp(ts);
+                    s.push_timestamp(tick_timestamp_ms);
                 }
                 registry.commit_all(&mut s, &reg_raw);
-                build_snapshot(&s, full_poll_tick)
+                build_snapshot(&s, full_poll_tick, tick_timestamp_ms)
             };
             let history_lock_duration = history_lock_started.elapsed();
 

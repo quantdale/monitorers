@@ -21,8 +21,10 @@ npm run dev                 # frontend only in browser at http://127.0.0.1:5180 
 npm run tauri build         # production .msi/.exe bundle; does not launch
 npm run build               # tsc + vite build (frontend only)
 npm test -- --run           # frontend tests (Vitest; count intentionally drifts)
-npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (12 tests)
-npx tsc --noEmit            # frontend type check
+npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (count comes from the runner)
+npx tsc --noEmit            # frontend type check (production sources)
+npm run typecheck:test      # frontend type check for the Vitest sources (tsconfig.test.json)
+npm run sim:typecheck       # type check for the Playwright simulation platform + src/sim bridge
 
 cd src-tauri && cargo test                  # Rust tests (Cargo reports the current count)
 cd src-tauri && cargo test test_name        # single Rust test
@@ -37,7 +39,11 @@ npm run verify:full         # fast gate + E2E + simulation + Tauri executable
 
 Before considering any task done, run the checks for whatever you changed and confirm they pass. CI calls the canonical verification scripts. The Rust workflow runs the Windows Rust gate, frontend gate, and a production no-bundle Tauri build; installer bundles run on version tags/manual dispatch. Separate E2E and mock simulation workflows are required PR checks. Current action versions are immutable SHA pins in `.github/workflows/`.
 
+The frontend lane audits **two scopes** and labels each one: the application scope (`sys-monitor-tauri/`, `npm run audit:app`) is authoritative because CI's `frontend` job and `.husky/pre-push` gate on it, while the repository-root scope contains only `husky` and cannot observe the application's transitive tree. Never report a bare "npm audit 0" — name the scope and the exit status.
+
 Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. Test counts are intentionally not hard-coded in documentation; use the command results as evidence.
+
+Three TypeScript projects own the source tree and between them type-check **every** first-party `.ts`/`.tsx`: `tsconfig.json` (production `src/**`, tests excluded), `tsconfig.test.json` (`src/**` **including** the Vitest sources — the only project that sees a test file), and `e2e/tsconfig.sim.json` (a shim extending `e2e/tsconfig.json`, so editors and language servers — which resolve the nearest `tsconfig.json`, not a sibling `*.sim.json` — find the `@types/node` these files need; it owns `e2e/**` + `src/sim/**`, including the simulation bridge's own tests). Frontend linting is **not** enforced: there is no ESLint config, `lint` script, or linter dev dependency, and `typescript-eslint` cannot be adopted while the repo is on TypeScript 7 (every published version declares `peer typescript ">=4.8.4 <6.1.0"`). React-hooks rules are a recorded gap.
 
 ## Backend architecture (`src-tauri/src/`)
 
@@ -73,7 +79,8 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
 - Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), `collector-error` (legacy `string` message, still fired per panic for diagnostics), and `collector-status` (typed `CollectorStatus` lifecycle contract with its own `LIFECYCLE_SCHEMA_VERSION`, also served by the `get_collector_status` command; `retry_collection` is honored only while `failed`).
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
-- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `5`.** Bump both together when payload shape changes.
+- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `6`** (bumped from 5 when `MetricsSnapshot` gained `timestamp_ms`). Bump both together when payload shape changes.
+- **The history ring has exactly one clock.** `run_loop`'s `monotonic_timestamp_ms()` fixes a wall-clock origin once per session and advances it with a monotonic `Instant`; the same `u64` goes into the ring (full ticks) and into `MetricsSnapshot.timestamp_ms`. `useMetrics` appends live events at the payload's timestamp and must never call `Date.now()` for that purpose, or a mid-session wall-clock adjustment (NTP step, user change, suspend/resume) would desync live samples from the ring. A payload with no usable timestamp warns once and appends at the newest known timestamp (preserving order) rather than dropping the sample or using the local clock. `on_tick` stays the only history growth gate.
 
 ## Conventions worth internalizing (see `.cursorrules` for the full list)
 - **Add an IPC field**: struct in `collector/snapshot.rs` → `build_snapshot` + `build_history_payload` → mirror in `types/metrics.ts`.

@@ -21,12 +21,6 @@ export interface QuarantineEntry {
   seeds: number[];
 }
 
-/** Curation budget: distinct-seed failures tolerated before a journey is
- *  moved to QUARANTINE (a seed-stable failure is always a defect, never
- *  quarantined). No code path consumes this today — quarantine curation is a
- *  deliberate human decision recorded in QUARANTINE below. */
-export const FLAKE_BUDGET = 3;
-
 /** Journeys currently quarantined (removed from the blocking set). */
 export const QUARANTINE: QuarantineEntry[] = [];
 

@@ -47,18 +47,20 @@ export async function firstGpuCardId(page: Page): Promise<string> {
   return gpu;
 }
 
-/** Reads app-owned chart metadata. This deliberately does not depend on
- * Recharts' internal SVG class names or path commands. */
-export async function chartPointCount(page: Page, id: string): Promise<number> {
-  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-point-count'));
-}
-
 export async function chartTimeSpanMs(page: Page, id: string): Promise<number> {
   return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-span-ms'));
 }
 
 export async function chartLatestTimestamp(page: Page, id: string): Promise<number> {
   return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-latest-ts'));
+}
+
+export async function chartStartTimestamp(page: Page, id: string): Promise<number> {
+  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-start-ts'));
+}
+
+export async function chartPointCount(page: Page, id: string): Promise<number> {
+  return Number(await page.locator(`${CARD_ID(id)} [data-testid="metric-chart-${id}"]`).getAttribute('data-chart-point-count'));
 }
 
 /** Asserts a card's displayed value changes at least `minChanges` times. */

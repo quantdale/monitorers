@@ -113,7 +113,13 @@ export function MetricCard({
         'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
       },
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- secondaryHistory only participates when hasSecondary is true
+    // The dependency array is intentionally partial. `secondaryHistory` only
+    // participates when `hasSecondary` is true, so it is expressed as
+    // `hasSecondary ? secondaryHistory : undefined`: when hasSecondary is
+    // false the secondary channel is not read at all, and depending on the
+    // raw object would recompute identical data. There is no linter in this
+    // project enforcing exhaustive-deps, so this note is the record of intent —
+    // do not read a missing eslint-disable here as an oversight.
   }, [history, hasSecondary ? secondaryHistory : undefined, timestamps]);
   const { data, metadata: chartMetadata } = chart;
 

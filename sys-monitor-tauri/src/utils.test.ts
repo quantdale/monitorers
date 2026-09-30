@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { historyMinMax, gpuId } from './utils';
+import { historyMinMax } from './utils';
 
 // --- historyMinMax ---
 
@@ -46,29 +46,5 @@ describe('historyMinMax', () => {
 
   it('returns a finite empty fallback for all gaps', () => {
     expect(historyMinMax([NaN, Infinity, -Infinity])).toEqual({ min: 0, max: 0 });
-  });
-});
-
-// --- gpuId ---
-
-describe('gpuId', () => {
-  it('GeForce RTX 4050 → gpu_geforce_rtx_4050', () => {
-    expect(gpuId('GeForce RTX 4050')).toBe('gpu_geforce_rtx_4050');
-  });
-
-  it('Intel(R) Iris Xe Graphics → gpu_intel_r_iris_xe_graphics', () => {
-    expect(gpuId('Intel(R) Iris Xe Graphics')).toBe('gpu_intel_r_iris_xe_graphics');
-  });
-
-  it('AMD Radeon RX 7600 → gpu_amd_radeon_rx_7600', () => {
-    expect(gpuId('AMD Radeon RX 7600')).toBe('gpu_amd_radeon_rx_7600');
-  });
-
-  it('empty string → gpu_', () => {
-    expect(gpuId('')).toBe('gpu_');
-  });
-
-  it('spaces trimmed by regex → gpu_spaces', () => {
-    expect(gpuId('  spaces  ')).toBe('gpu_spaces');
   });
 });

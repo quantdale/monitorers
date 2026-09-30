@@ -175,6 +175,13 @@ jobs:
           SIM_APP_EXE: ${{ steps.install.outputs.exe }}
         run: npm run verify:packaged
 
+      # The packaged driver writes a machine-wide WebView2 policy value on
+      # elevated hosts so the elevated WebView2 honours the debug switches.
+      # `always()` so a failed smoke test is checked for a leaked value too.
+      - name: Assert no machine-wide WebView2 policy value leaked
+        if: always()
+        run: npm run assert:webview2-policy-absent
+
       - name: Uninstall silently and assert clean removal
         shell: pwsh
         run: |
@@ -297,6 +304,11 @@ jobs:
         env:
           SIM_APP_EXE: ${{ steps.install.outputs.exe }}
         run: npm run verify:packaged
+
+      # See the MSI job: assert the machine-wide WebView2 policy value is gone.
+      - name: Assert no machine-wide WebView2 policy value leaked
+        if: always()
+        run: npm run assert:webview2-policy-absent
 
       - name: Uninstall silently and assert removal
         env:

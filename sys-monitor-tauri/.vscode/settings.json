@@ -1,0 +1,4 @@
+{
+  "//": "This is a Tauri/Node + React/TypeScript project, NOT a Deno project (there is no deno.json anywhere and no Deno tooling in the toolchain). The Deno VS Code extension/Deno LSP must not claim these files: its node: compat shims model Server/ChildProcess more narrowly than @types/node and report phantom errors on ordinary Node built-in usage. `tsc` against the repo's own projects is the source of truth.",
+  "deno.enable": false
+}
