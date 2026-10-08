@@ -64,6 +64,8 @@ mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passe
 - **Frontend test count** is whatever the runner reports — currently 281 tests in 21 files. Do not hard-code it in docs.
 - **Visual evidence** for the dashboard campaign lives under `sys-monitor-tauri/e2e-results/qa/` (gitignored): before/after screenshots at 390×844, 400×300, 900×1100 in Default, Tile and List modes.
 
+**Final validation of this state (2026-10-09):** `npm run verify:full` exits **0** — frontend lane (version + 11/11 documentation fidelity, dead-code check, both npm audit scopes 0 vulnerabilities, two typechecks, 281 unit tests, production build) + Rust lane (fmt, five-matrix `cargo test`, clippy `-D warnings`, `cargo audit`) + E2E (22 passed) + mock simulation lane (4 passed) + Tauri release executable (Finished in 4m09s). `npm run verify:packaged` 1 passed locally; `assert:webview2-policy-absent` exit 0. `openspec validate --all --strict` 23 passed. Hosted: PR #45 all required checks success at `e94d266`.
+
 ## Active TODO
 
 - [x] Remediate the application-scope `source-map-js` advisory and add the advisory-watch lane (`2026-10-08-remediate-source-map-js-advisory`).
