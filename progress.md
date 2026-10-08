@@ -70,33 +70,7 @@ mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passe
 - [x] Harden dashboard layout containment and semantic accessibility (`2026-10-08-harden-dashboard-layout-and-semantics`).
 - [x] Reconcile, re-verify and archive `dependency-runtime-modernization-and-qualification`.
 - [x] **Disposition the open dependency queue** (`2026-10-09-disposition-open-dependency-queue`, branch `agent/monitorers-dependency-queue-2026-10-09`, local): React 19.3.0 + types, Vite 8.3.1 + plugin-react 6.1.1, jsdom 30.1.1, vitest 4.1.11, Playwright 1.63.0, lucide-react 1.48.0, Rust+JS Tauri 2.12.0 as one stage, actions/download-artifact v8.0.1, taiki-e/install-action 2.87.21, nvml-wrapper 0.13.0. Eight PRs closed with a disposition comment; `@types/node` 26 (PR #44) stays open and deferred until the Node runtime moves to 26.
-- [ ] **Push and host-qualify.** The four local campaign commits (`96aefb6`, `38b82b0`, `b2ef5d7` on `main`, and the three on the dependency-queue branch) have never been pushed, so no hosted run covers them — including the first `dependency-audit-watch` schedule.
-
-## Recently completed
-
-- [x] 2026-10-08 `2026-10-08-harden-dashboard-layout-and-semantics`: negative-percentage correctness (mock fidelity + shared clamped range formatter), tile-grid containment at the 400×300 minimum, list-row containment, `header`/`main`/`h1`, charts as named non-focusable images, per-card drag-handle names, collapsed sidebar out of the a11y tree, selector focus management, drag-handle contrast 2.90:1 → 3.88:1. 281 unit tests, 22 E2E, sim 4/4, verify:frontend/fast green.
-- [x] 2026-10-08 `2026-10-08-remediate-source-map-js-advisory`: app npm audit 1 high → 0, plus a weekly advisory-watch workflow filing one issue per failing scope.
-- [x] 2026-10-09 `2026-10-09-disposition-open-dependency-queue`: nine Dependabot PRs dispositioned (8 adopted, 1 deferred), including the Tauri Rust+JS halves adopted as one stage after PR #43 proved that a JS-only bump fails the production-executable build, and `@tauri-apps/plugin-store` held at 2.4.4 because the Rust crate has no stable line above it. `verify:fast`, 281 unit tests, 22 E2E, sim 4/4, openspec 23/23.
-- [x] 2026-10-08 Archive reconciliation for `dependency-runtime-modernization-and-qualification`: tasks reconciled from evidence, four hosted runs re-verified at `2e56ffc`, §15 adversarial review executed fresh (0 added unsafe blocks / 0 `#[allow]` / 0 `as any` / 0 skipped tests / 29 full-SHA action pins).
-- [x] 2026-08-27 `dependency-runtime-modernization-and-qualification`: Rust 1.95.0, sysinfo 0.39.6, wmi 0.18.4, windows 0.62.2, nvml 0.12.1, Tauri 2.11.5/2.4.4, React 19.2.8, Vite 8.2.2, TS 7.0.2, jsdom 30.0.1, Recharts 3.10.1, Lucide 1.34.0 – all staged and qualified (verify:full, verify:packaged, mock sim, cadence, startup, audits, openspec 17/17 at the time).
-
-
-## Backlog / deliberately deferred
-
-- [ ] **Dual identical-GPU runtime mapping — physical proof.** Deterministic fixtures cover identity logic, but a qualifying machine with two identical physical GPUs is still required before claiming physical runtime qualification. A single iGPU exposing multiple PDH LUID nodes does not qualify.
-- [ ] **Free-roam real-lane pointer-drag reorder.** Keyboard drag is the certified deterministic interaction used by persistence journeys. Pointer drag remains registered exploratory behavior and is not a blocker for the active dependency campaign.
-- [ ] **Code signing.** MSI/NSIS installers remain unsigned because no signing certificate/secret is configured. Do not invent credentials inside the dependency campaign.
-- [ ] **Node 24.3.0 → 24.15+ patch for jsdom 30 engine satisfaction.** jsdom 30.0.1 wants Node ^24.15.0, current 24.3.0 triggers EBADENGINE warning but vitest still passes; CI Node 24 (latest) satisfies without warning. Patch update is low-risk follow-up, not a blocker for the modernized stack.
-- [ ] **@types/node 26.x.** Deferred because Node runtime stays 24.3.0; 24.13.3 is latest 24 patch. Adopt 26 only when Node runtime moves to 26.
-
-## Blocked
-
-- **None that stops local work.** The only genuinely external items are physical
-  (dual identical-GPU proof, physical hotplug/lid/power) and provisioning
-  (code-signing certificate); all are backlog items above, not blockers.
-- Hosted qualification for the dependency campaign is **already recorded**
-  (`evidence.md` §F/J: four runs, `completed`/`success` at
-  `2e56ffc17ff2d97203e74b29009e30c9a47eab20`).
-- The 2026-10-08 follow-up campaigns are **local commits only** — they are not
-  pushed, so their GitHub Actions qualification (including the new advisory-watch
-  workflow's first scheduled run) is pending a push, not blocked.
+- [x] **Push and host-qualify.** Branch `agent/monitorers-dependency-queue-2026-10-09` pushed; PR #45 open against `main` with every required workflow **success** at `e94d266` (Rust — verify, Frontend — verify, Windows — production executable, E2E harness, Simulation mock lane, Simulation config lint — run IDs 37834212019 / 37834211907 / 37834211917). The two dispatch-only lanes (`Simulation — packaged lane`, `Windows — MSI and NSIS bundle`) are skipped by policy and remain unclaimed.
+- [ ] **Merge PR #45** — the branch is qualified but not merged; merging is the maintainer's call.
+- [ ] **Push the four `main` commits.** `main` (`b4517f4`..`b2ef5d7`) is still ahead of `origin/main`; those four commits are also contained in the PR branch, so pushing `main` is a bookkeeping step, not lost work.
+- [ ] **Packaged real-app lane for the updated stack** — run locally it passes (see the schema-assertion change), but the *dispatch-only* hosted packaged lane has not run at this stack.

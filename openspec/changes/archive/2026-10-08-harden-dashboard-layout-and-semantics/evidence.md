@@ -125,6 +125,21 @@ Screenshots are stored under `sys-monitor-tauri/e2e-results/qa/` (gitignored;
 | Viewport / mode | Before | After |
 |---|---|---|
 | 900×1100 List | `Min: -9.9%`, `Netwo…`, `D_:`, `RTX 4050`, Network range clipped (`scrollHeight 72 > 50`) | full titles, `Min: 20.5% Max: 70.0%`, all four Network pills visible, rows 50 px |
+### 4b. Deliberate consequence: the Tile grid's column count now adapts
+
+`repeat(auto-fit, minmax(300px, 1fr))` keeps the Track count equal to whatever
+fits, so a window wider than the 900×1100 default gets more columns than the
+previous bare `1fr 1fr` (measured at 1280 px: **3 columns of 306 px**, all equal,
+zero clipped or overflowing cards; at 700 px: **2 columns of 330 px**; at 390 px:
+1 column of 368 px). This is a behaviour change from "always exactly two columns"
+and it is intentional: it is the same equal-track responsive grid the Refero
+reference describes (uniformly sized cards in a balanced responsive grid, with
+the same dashboard appearing as 2- and 3-column layouts at different widths),
+and it only affects windows wider than the product's default, where the previous
+layout left a fixed two-column width with no way to use the extra space. No card
+is ever narrower than 300 px, and at the default window the result is identical
+to before (2 × 430 px).
+
 | 900×1100 Default | — | unchanged (no regression in the primary view) |
 | 900×1100 Tile | tracks `430px 430px` (correct) | tracks `430px 430px` (unchanged) |
 | 400×300 Tile | tracks `406.234px 180.703px`, 2 cards overflowing | **one** 368 px track, zero overflowing cards, `document.scrollWidth == clientWidth` |

@@ -130,14 +130,33 @@ notes and confirmed by resolving the tags through the GitHub API
 
 ## Limitations
 
-- **Not pushed.** All commits are local to
-  `agent/monitorers-dependency-queue-2026-10-09`; hosted qualification of this
-  stack (including the release-qualification lane that consumes the updated
-  `download-artifact` v8) has not been run and is not claimed.
-- **The packaged real-app lane (`verify:packaged` / `sim:real`) was not run** for
-  this change. It is opt-in, needs the built executable, and drives the real
-  Tauri app over CDP; the production executable *build* was verified
-  (`verify:tauri`), but not a packaged run of the updated app.
-- `@playwright/test` 1.63.0's new Chromium revision had to be installed locally;
-  CI already does this, so no workflow change was needed, but the local browser
-  cache is now one revision further ahead than a fresh CI runner's.
+- `@playwright/test` 1.63.0's new Chromium revision had to be installed locally
+  (`npx playwright install chromium`); CI already does this as a workflow step, so
+  no workflow change was needed, but the local browser cache is one revision
+  further ahead than a fresh CI runner's.
+
+### Hosted qualification (PR #45, head `e94d266`)
+
+The branch was pushed as `origin/agent/monitorers-dependency-queue-2026-10-09`
+and PR #45 was opened against `main` so the required workflows would run against
+the adopted stack. All required checks succeeded:
+
+| Run ID | Workflow / job | Result | Head |
+|---|---|---|---|
+| 37834212019 | Rust and release — `Rust — verify` | completed / **success** | `e94d266` |
+| 37834212019 | Rust and release — `Frontend — verify` | completed / **success** | `e94d266` |
+| 37834212019 | Rust and release — `Windows — production executable` | completed / **success** | `e94d266` |
+| 37834211907 | E2E Verification Harness | completed / **success** | `e94d266` |
+| 37834211907 | (within the E2E run) `Simulation — config lint` | completed / **success** | `e94d266` |
+| 37834211917 | Simulation — `Simulation — mock lane` | completed / **success** | `e94d266` |
+
+`Windows — production executable` succeeding is the hosted proof for the Tauri
+stage: it is the same job that failed on JS-only PR #43. `Simulation — packaged
+lane` and `Windows — MSI and NSIS bundle` are `skipped` by policy (dispatch/tag
+only), so the packaged real-app lane and installer qualification are **not**
+covered by this run and are not claimed here.
+
+Local `verify:packaged` for this stack was run separately and passes
+(`2026-10-09-keep-packaged-lane-schema-assertion-current`), which also required
+fixing a stale schema assertion found on the way; `assert:webview2-policy-absent`
+exits 0 after that run.
