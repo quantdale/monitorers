@@ -1,0 +1,104 @@
+name: Dependency advisory watch
+
+# A fixable advisory can become applicable to an ALREADY-COMMITTED lockfile: a
+# patched release is published (e.g. source-map-js 1.2.2 on 2026-09-30) and the
+# application lockfile, which nobody touched, starts resolving an affected range.
+# That produces no Dependabot PR (monthly cadence, and no dependency version
+# changed) yet it turns `npm run verify:frontend` — the CI `frontend` job and the
+# .husky/pre-push hook — red. This lane exists so that state surfaces as an issue
+# instead of being discovered the next time somebody tries to push.
+#
+# The two audit commands below are the same two `sys-monitor-tauri/scripts/verify.mjs`
+# runs, in the same order, with the same labels: there is deliberately no second
+# definition of "the audit" in this repository.
+
+on:
+  schedule:
+    # Weekly on Monday. Dependabot is monthly; this closes the gap between the two.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit-watch:
+    name: Audit watch — both npm scopes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # v7.0.1 — 3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # v7.0.0 — 820762786026740c76f36085b0efc47a31fe5020
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - name: Audit both npm scopes against the committed lockfiles
+        id: audit
+        run: |
+          set +e
+          npm audit --audit-level=high > /tmp/root-audit.txt 2>&1
+          root_status=$?
+          npm --prefix sys-monitor-tauri audit --audit-level=high > /tmp/app-audit.txt 2>&1
+          app_status=$?
+          set -e
+          echo "root_status=$root_status" >> "$GITHUB_OUTPUT"
+          echo "app_status=$app_status" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Repository-root scope (root workspace) — exit '"$root_status"
+            echo '```'
+            cat /tmp/root-audit.txt
+            echo '```'
+            echo '### Application scope (sys-monitor-tauri) — exit '"$app_status"
+            echo '```'
+            cat /tmp/app-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$root_status" -ne 0 ] || [ "$app_status" -ne 0 ]; then
+            echo "::error::dependency advisory watch: a scoped npm audit is red (root=$root_status app=$app_status)"
+            exit 1
+          fi
+          echo "Both audited scopes are green at --audit-level=high."
+
+      # One issue per repository, updated in place, so a persistent advisory is a
+      # single open item rather than a weekly spam stream. `gh` is preinstalled on
+      # GitHub-hosted runners, so no third-party action (and therefore no new pin)
+      # is introduced. Issues are the only thing this job can write.
+      - name: Open or update the advisory issue
+        if: failure() && steps.audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Dependency advisory watch: application audit red"
+          existing=$(gh issue list --state open --label dependencies --search "$title in:title" --json number --jq '.[0].number')
+          body=$(cat <<'EOF'
+          A scoped `npm audit --audit-level=high` is red against the committed lockfiles.
+
+          The application scope (`sys-monitor-tauri/`) is authoritative: it is the
+          tree CI's `frontend` job installs with `npm ci` and the one
+          `.husky/pre-push` gates on through `npm run verify:fast`. The repository-root
+          scope holds only `husky` and cannot fail on an application advisory.
+
+          Check the failing run's step summary for the exact package, affected range,
+          fixed version and scope exit codes, then re-resolve the app lockfile to the
+          patched release (see `openspec/changes/archive/2026-10-08-remediate-source-map-js-advisory/design.md`
+          for the recorded policy: in-range update preferred, no `overrides` block).
+          EOF
+          )
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body
+
+          Re-reported by run [$GITHUB_RUN_NUMBER]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+          else
+            gh issue create --title "$title" --label dependencies --body "$body
+
+          First reported by run [$GITHUB_RUN_NUMBER]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+          fi
