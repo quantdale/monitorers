@@ -19,6 +19,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RealAppDriver } from './drivers/RealAppDriver';
 import { assertNoOrphanProcesses } from './drivers/processGuard';
+// The packaged lane must follow the schema pair, not a copy of it: this assertion
+// was hardcoded at 5 and silently went stale when the metrics schema moved to 6
+// (`MetricsSnapshot` gained `timestamp_ms`), failing the lane against a correct
+// app. Importing the frontend's expectation keeps the two halves in lockstep.
+import { EXPECTED_SCHEMA_VERSION } from '../../src/hooks/useMetrics';
 
 const APP_EXE =
   process.env.SIM_APP_EXE ?? 'src-tauri/target/release/sys-monitor-tauri.exe';
@@ -127,7 +132,7 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
         timestamps: number[];
       };
     });
-    expect(history.schema_version, 'real IPC history schema version').toBe(5);
+    expect(history.schema_version, 'real IPC history schema version').toBe(EXPECTED_SCHEMA_VERSION);
     expect(Array.isArray(history.timestamps)).toBe(true);
 
     // ── 3. Real collector data arrives and advances ──
