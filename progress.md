@@ -4,9 +4,44 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: COMPLETED — `dependency-runtime-modernization-and-qualification` (branch `agent/monitorers-dependency-runtime-modernization` @ 3840e73, 2026-08-27, 17 commits ahead of 46ee499, pushed to `origin/agent/monitorers-dependency-runtime-modernization`).**
+**Current phase: `2026-10-08` follow-up campaigns completed on `main` (branch `main`; local commits, not yet pushed). Three OpenSpec changes archived; no active change remains.**
 
-Planning was produced from `main@46ee499ab934663c4e0807f7ab8e995707b77471` on 2026-08-26 after a fresh repository/dependency audit. The active OpenSpec change was `openspec/changes/dependency-runtime-modernization-and-qualification/` – execution started from `35b9f6469c04ed35865f12ef81068eaf1613de40` (the plan activation commit, the only commit between planned and actual start) and completed at `3840e73` (evidence G/H/I). Final local qualification is green; hosted qualification to be triggered from the pushed branch.
+Campaigns completed on 2026-10-08, in order:
+
+1. **`2026-10-08-remediate-source-map-js-advisory`** (archived). P0: the
+   application-scoped npm audit that gates CI's `frontend` job and
+   `.husky/pre-push` was **red on a clean `main`** (`source-map-js@1.2.1`,
+   GHSA-68fv-2mgg-jv7q, high; fix 1.2.2 published 2026-09-30, i.e. after the
+   lockfile was written, so the advisory appeared with no dependency upgrade).
+   Fixed by re-resolving `sys-monitor-tauri/package-lock.json` to 1.2.2 — no
+   `package.json` edit, no `overrides` block. A weekly
+   `.github/workflows/dependency-audit-watch.yml` now runs the same two scoped
+   audit commands `scripts/verify.mjs` runs and files one issue per failing
+   scope, so an advisory published between Dependabot's monthly runs surfaces as
+   an issue instead of a blocked push. Both scopes green afterwards
+   (root exit 0, app exit 0).
+2. **`2026-10-08-harden-dashboard-layout-and-semantics`** (archived). UI/UX-first
+   campaign: eight user-visible defects fixed from rendered evidence — a negative
+   CPU percentage (`Min: -9.9%`) from unclamped mock utilizations and an unclamped
+   min/max formatter; the Tile grid resolving to `406.234px/180.703px` inside a
+   358 px container at the product's own 400×300 minimum window; List rows
+   clipping the Network card's range behind a fixed 50 px height; zero landmarks
+   and zero headings; seven focusable `role="application"` charts with empty
+   `<title>`; a collapsed sidebar still in the tab order; seven drag handles
+   sharing one accessible name; a 2.90:1 drag-handle glyph.
+3. **Archive reconciliation** of `dependency-runtime-modernization-and-qualification`
+   (archived as `2026-10-09-dependency-runtime-modernization-and-qualification`):
+   its 172 task checkboxes were reconciled against evidence, hosted runs were
+   re-queried through the GitHub API (all four `completed`/`success` at
+   `2e56ffc17ff2d97203e74b29009e30c9a47eab20`), and task 15's adversarial review
+   was executed fresh over `git diff 46ee499 2e56ffc` (0 added unsafe blocks,
+   0 `#[allow]`, 0 `as any`/`@ts-ignore`, 0 skipped tests, all 29 action pins
+   full SHAs). Findings in that change's `evidence.md` §J.
+
+Validation after these campaigns: `verify:frontend` and `verify:fast` exit 0,
+`npm test -- --run` **281 passed (281)** in 21 files, `npm run e2e` **22 passed**,
+mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passed,
+0 failed**.
 
 ## Agent Rules
 
@@ -19,45 +54,30 @@ Planning was produced from `main@46ee499ab934663c4e0807f7ab8e995707b77471` on 20
 - Do not run destructive commands, force pushes, production deploys, secret mutation or database resets.
 - Never weaken tests/security/identity/cadence contracts merely to accept a dependency update.
 
-## Status snapshot (2026-08-27, campaign complete – final local qualification green)
+## Status snapshot (2026-10-08)
 
-- **Latest production baseline:** merge PR #29 at `46ee499ab934663c4e0807f7ab8e995707b77471` plus `35b9f6469c04ed35865f12ef81068eaf1613de40` (plan activation). The previous `production-persistence-and-operational-hardening` behavior and hosted evidence remain baseline requirements.
-- **Final supported stack (2026-08-27):** Rust 1.95.0 (MSRV for sysinfo 0.39.6), Node 24.3.0 (CI 24, satisfies Vite 8), sysinfo 0.39.6, wmi 0.18.4, windows 0.62.2 (dual windows-core 0.61.2/0.62.2), nvml-wrapper 0.12.1, Tauri Rust 2.11.5 / Tauri Build 2.6.3 / plugin-store 2.4.4, Tauri JS api 2.11.1 / plugin-store 2.4.4 / CLI 2.11.4, React 19.2.8 + types 19.2.18/19.2.5, Vite 8.2.2 + plugin-react 6.1.0, TypeScript 7.0.2 (Go-native), jsdom 30.0.1 (Node 24.15+ recommended, 24.3.0 still runs), Recharts 3.10.1, Lucide 1.34.0, @types/node 24.13.3 (26 deferred). Evidence matrix at `openspec/changes/dependency-runtime-modernization-and-qualification/evidence.md` §B.
-- **Dependabot policy:** decomposed from catch-all `rust-dependencies:*` / `frontend-tooling:*` into compatibility domains per D2: collector-platform / tauri-runtime / rust-foundation + react-framework / tauri-js / build-tooling / test-dom / ui-libraries; @types/node deliberately ungrouped. Commit `9242a88`.
-- **Collector migrations:** sysinfo 0.33->0.39.6 (API-stable, no per-tick re-enumeration, startup 371-420ms vs 462ms), wmi 0.13->0.18.4 (COMLibrary removed, WMIConnection::new CoIncrementMTAUsage, WmiBootstrap preserved), windows 0.61->0.62.2 (PDH FFI identical, unsafe re-audited), nvml 0.10->0.12.1 (fail-closed UUID/PCI/name), all feature matrices green, clippy -D warnings clean, cadence 60s probe 60 history @1Hz, 180 gpu, no overrun, startup 1209ms.
-- **Tauri/JS alignment:** serde 1.0.228->1.0.229, serde_json 1.0.149->1.0.151, chrono 0.4.44->0.4.45 via plain `cargo update` (dual windows-core preserved), Tauri stack via `a569d3d` + `5981185`, IPC schema 5/1, settings 2, StopFlag/RetryRequest distinct, tsc+build+248 tests green.
-- **Frontend framework/tooling:** React 19 coherent, Vite 8 Rolldown, TS7 with harness exclude + implicit any fix, jsdom 30 (EBADENGINE warn on 24.3.0), Recharts/Lucide, all via `8a92152`/`acaf2e3`/`b416212`/`ad9ee00`/`4cf2eb0`/`926b8d0`, tsc clean, 248 tests green (cold-cache flake triaged).
-- **Final local qualification (2026-08-27):** `verify:full` second run GREEN (5m36s release, 248 tests), `verify:packaged` 1 passed 12.2s, mock sim 4 passed 3.7m, cadence 60s probe green, startup 1209ms, `cargo audit` 17 allowed warnings, `git diff --check` 0, `openspec validate --all --strict` 17 passed. **Audit result (2026-09-30, corrected — the earlier unqualified "`npm audit` 0" in this line described only the repository-root workspace):** `npm audit --audit-level=high` at the **repository root** → `found 0 vulnerabilities`, exit 0 (that workspace contains only `husky`); `npm audit --audit-level=high` in **`sys-monitor-tauri/`** (also reachable as `npm run audit:app`, and the scope the `frontend` CI job and `.husky/pre-push` actually gate on) → `found 0 vulnerabilities`, exit 0 after `restore-green-frontend-gate` re-resolved the dev/test toolchain to `vitest@4.1.11` / `undici@8.11.2`; **before** that change the same app-scoped command exited 1 with `3 vulnerabilities (2 moderate, 1 high)` (`undici` high via `jsdom`, `vitest`/`@vitest/mocker` moderate). Both scopes are named explicitly from now on; neither may be reported as an unqualified aggregate.
-
-### Production contracts that remain mandatory
-
-- Metrics schema 5 and lifecycle schema 1 unless an intentional serialized-contract migration is separately specified/tested.
-- Settings schema 2, one shared store, serialized saves, future-version fail-closed behavior and isolated packaged-simulation store.
-- Supervised collector sessions with typed `StopFlag`/`RetryRequest`, bounded automatic recovery and manual retry from failed state.
-- 250 ms monotonic live schedule, 4:1 full-poll ratio, approximately 1 Hz history commits, elapsed-time rate fidelity and no catch-up burst.
-- Stable disk/GPU identity across history/cards/sidebar/persisted layout; ambiguous Nvidia telemetry remains unavailable instead of guessed.
-- WMI remains optional enrichment; core metrics stay live during WMI failure.
-- Packaged CDP lane proves real Tauri IPC/store/sensors/restart with per-run isolation and orphan-process checks.
-- GitHub Actions remain immutable-SHA pinned; cargo/npm security audits remain mandatory.
+- **Audit health, stated per scope (never as an aggregate):**
+  - repository-root scope (`npm audit --audit-level=high` at the repo root) → exit 0, `found 0 vulnerabilities` (that workspace holds only `husky`);
+  - application scope (`cd sys-monitor-tauri && npm audit --audit-level=high`) → exit 0, `found 0 vulnerabilities` after `source-map-js` 1.2.1 → 1.2.2; **before** that change the same command exited 1 with `1 high severity vulnerability` (`source-map-js` via `vite → postcss` and `jsdom → css-tree`).
+- **A new advisory can appear against an unchanged lockfile.** `source-map-js@1.2.2` was published 2026-09-30; the lockfile nobody touched then resolved an affected range. The weekly `dependency-audit-watch` workflow is the signal for that class; nothing else in the repository detects it earlier than a push.
+- **Dashboard invariants now under test:** tile tracks stay equal and collapse to one column at ≤400 px; list rows never clip metadata; the page exposes one `h1`, a `banner` and a `main`; every chart is a named `role="img"` with `tabindex="-1"`; no rendered percentage is negative; the chart's accessible name is invariant to live scalar ticks (guards the Recharts render fan-out).
+- **Frontend test count** is whatever the runner reports — currently 281 tests in 21 files. Do not hard-code it in docs.
+- **Visual evidence** for the dashboard campaign lives under `sys-monitor-tauri/e2e-results/qa/` (gitignored): before/after screenshots at 390×844, 400×300, 900×1100 in Default, Tile and List modes.
 
 ## Active TODO
 
-- [x] Execute `openspec/changes/dependency-runtime-modernization-and-qualification/tasks.md` end-to-end using `.agent/EXECUTION_PROMPT.md`.
-- [x] Reconcile every dependency PR in the execution-time queue as Adopted / Superseded / Deferred with exact evidence.
-- [x] Archive the OpenSpec change only after final local + packaged + hosted qualification and post-migration deep review are truthful and green. — *local green, hosted to be triggered from pushed branch; deep review pending final push*.
+- [x] Remediate the application-scope `source-map-js` advisory and add the advisory-watch lane (`2026-10-08-remediate-source-map-js-advisory`).
+- [x] Harden dashboard layout containment and semantic accessibility (`2026-10-08-harden-dashboard-layout-and-semantics`).
+- [x] Reconcile, re-verify and archive `dependency-runtime-modernization-and-qualification`.
+- [ ] **Dependency queue disposition.** Nine Dependabot PRs are open (35, 37, 38, 39, 40, 41, 42, 43, 44) and none is accounted for in any recorded disposition. Several have failing required checks (`ui-libraries` #35 fails `Frontend — verify`; `tauri-js` #43 fails `Windows — production executable`). Successor campaign: `2026-10-09-disposition-open-dependency-queue`.
 
 ## Recently completed
 
-- [x] 2026-08-27 `dependency-runtime-modernization-and-qualification`: Rust 1.95.0, sysinfo 0.39.6, wmi 0.18.4, windows 0.62.2, nvml 0.12.1, Tauri 2.11.5/2.4.4, React 19.2.8, Vite 8.2.2, TS 7.0.2, jsdom 30.0.1, Recharts 3.10.1, Lucide 1.34.0 – all staged, qualified via `verify:full`/`verify:packaged`/mock sim/cadence/startup/audits/openspec 17/17; Dependabot decomposed; 5 defects triaged (windows-core drift, clippy 1.95, TS7 harness, jsdom engine, vitest flake); 8 PRs dispositioned (6 Adopted, 2 Superseded); branch `agent/monitorers-dependency-runtime-modernization` @ `3840e73` pushed. Evidence at `openspec/changes/dependency-runtime-modernization-and-qualification/evidence.md` §B/D/E/G/H/I.
-- [x] 2026-08-25 supervised collector recovery + typed lifecycle contract + recovery UX.
-- [x] 2026-08-25 packaged qualification lane + MSI/NSIS release-qualification CI.
-- [x] 2026-08-26 PR #28 safety closure: typed stop/retry managed state, race-fenced status bootstrap, initial-deadline wait, mock first-emit parity/teardown, artifact workflow fixes, WebView2 policy cleanup and retry-doc reconciliation; hosted/release qualification green.
-- [x] 2026-08-26 deep-audit remediation/reconciliation: stale schema/probe docs fixed, duplicate helper/test code consolidated, dead code removed, executable schema contracts rechecked.
-- [x] 2026-08-26 performance campaign: prebuilt SHA-pinned cargo-audit install, Playwright Chromium caching, MetricChart memoization/render-fanout reduction, measured release LTO decision, startup enumeration de-duplication and collector snapshot allocation cleanup.
-- [x] 2026-08-26 simulation journey robustness: seeded misdrag outcome modeled truthfully so customization roundtrip no longer fails on an intentional simulated canceled drag.
-- [x] 2026-08-26 PR #29 `production-persistence-and-operational-hardening`: real sidebar persistence across true relaunch, repeated restart soak, destructive sidebar persistence bug fix, drag-time ghost-drop fix, real-app orphan guard, CI efficiency evidence, repository-truth convergence and final hosted MSI/NSIS qualification.
+- [x] 2026-10-08 `2026-10-08-harden-dashboard-layout-and-semantics`: negative-percentage correctness (mock fidelity + shared clamped range formatter), tile-grid containment at the 400×300 minimum, list-row containment, `header`/`main`/`h1`, charts as named non-focusable images, per-card drag-handle names, collapsed sidebar out of the a11y tree, selector focus management, drag-handle contrast 2.90:1 → 3.88:1. 281 unit tests, 22 E2E, sim 4/4, verify:frontend/fast green.
+- [x] 2026-10-08 `2026-10-08-remediate-source-map-js-advisory`: app npm audit 1 high → 0, plus a weekly advisory-watch workflow filing one issue per failing scope.
+- [x] 2026-10-08 Archive reconciliation for `dependency-runtime-modernization-and-qualification`: tasks reconciled from evidence, four hosted runs re-verified at `2e56ffc`, §15 adversarial review executed fresh (0 added unsafe blocks / 0 `#[allow]` / 0 `as any` / 0 skipped tests / 29 full-SHA action pins).
+- [x] 2026-08-27 `dependency-runtime-modernization-and-qualification`: Rust 1.95.0, sysinfo 0.39.6, wmi 0.18.4, windows 0.62.2, nvml 0.12.1, Tauri 2.11.5/2.4.4, React 19.2.8, Vite 8.2.2, TS 7.0.2, jsdom 30.0.1, Recharts 3.10.1, Lucide 1.34.0 – all staged and qualified (verify:full, verify:packaged, mock sim, cadence, startup, audits, openspec 17/17 at the time).
 
-Detailed command/run/performance history for completed campaigns is intentionally owned by their archived `openspec/changes/archive/.../evidence.md` plus git history rather than duplicated indefinitely in this live progress file.
 
 ## Backlog / deliberately deferred
 
@@ -69,4 +89,12 @@ Detailed command/run/performance history for completed campaigns is intentionall
 
 ## Blocked
 
-- None. Physical-only backlog items are intentionally deferred, not blockers for the active software campaign. Hosted qualification (Rust/frontend/E2E/mock-sim/packaged/release) to be obtained from the pushed branch at final SHA `3840e73` (or subsequent docs-only SHA) via GitHub Actions dispatch.
+- **None that stops local work.** The only genuinely external items are physical
+  (dual identical-GPU proof, physical hotplug/lid/power) and provisioning
+  (code-signing certificate); all are backlog items above, not blockers.
+- Hosted qualification for the dependency campaign is **already recorded**
+  (`evidence.md` §F/J: four runs, `completed`/`success` at
+  `2e56ffc17ff2d97203e74b29009e30c9a47eab20`).
+- The 2026-10-08 follow-up campaigns are **local commits only** — they are not
+  pushed, so their GitHub Actions qualification (including the new advisory-watch
+  workflow's first scheduled run) is pending a push, not blocked.

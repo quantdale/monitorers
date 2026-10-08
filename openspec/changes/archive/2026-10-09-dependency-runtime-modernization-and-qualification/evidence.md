@@ -205,3 +205,53 @@ No open PR remains unexplained; all 8 PRs are Adopted (6) or Superseded (2) with
 - **Node patch level – jsdom 30 engine warning**: jsdom 30.0.1 wants Node ^24.15.0, host is 24.3.0 → EBADENGINE warning on npm install, but vitest still passes. CI Node 24 (latest) satisfies 24.15+; local Node patch update to 24.15+ is recommended but not required for correctness. @types/node 26 deferred for same reason (Node stays 24).
 - **Packaged real-lane free-roam pointer-drag – still exploratory**: keyboard drag is certified (dnd-kit keyboard + pointer tests green, Recharts memoization preserved), pointer-drag remains registered exploratory gap per AGENTS.md, not a blocker for this dependency campaign.
 - **Unsigned installers and physical-only gaps are intentionally deferred, not blockers for local/hosted qualification of the modernized stack**.
+
+## J. Independent re-verification and adversarial deep review (2026-10-08)
+
+Executed on `main@b4517f44` by the follow-up campaign, not by the original
+executor, so that this change could be archived on evidence rather than on the
+previous record's word.
+
+### J1. Hosted qualification runs re-queried from the GitHub API
+
+| Command | Result |
+|---|---|
+| `gh run view 33043088979 --json status,conclusion,headSha,workflowName` | `completed` / `success` / `2e56ffc17ff2d97203e74b29009e30c9a47eab20` — Rust and release |
+| `gh run view 33043091191 --json status,conclusion,headSha,workflowName` | `completed` / `success` / `2e56ffc17ff2…` — E2E Verification Harness |
+| `gh run view 33043093443 --json status,conclusion,headSha,workflowName` | `completed` / `success` / `2e56ffc17ff2…` — Simulation |
+| `gh run view 33043102890 --json status,conclusion,headSha,workflowName` | `completed` / `success` / `2e56ffc17ff2…` — Release qualification |
+
+Task 14.5 is therefore satisfied independently: every cited run corresponds to
+`2e56ffc`, which `git log 2e56ffc..HEAD` shows is followed only by docs commits
+(`efa2cd6`) and the unrelated post-campaign work of `b4517f4`/`aee7a72` plus this
+follow-up's own commits — none of which touch the migrated stack.
+
+### J2. Task 15 adversarial review of the migration diff (`git diff 46ee499 2e56ffc`)
+
+4281 added lines across 23 files were re-read and mechanically scanned:
+
+| Check | Result |
+|---|---|
+| added `unsafe` blocks / `unsafe fn` / `unsafe impl` | **0** — the windows-rs 0.62 PDH re-audit added no new unsafe sites |
+| `unsafe` sites in the backend today vs `// SAFETY:` comments | 9 / 9 — every site keeps its documented justification (verified site by site, `pdh.rs`, `collector/mod.rs`, `collector/nvidia.rs`, `state.rs`) |
+| added `#[allow(...)]` | **0** — no lint suppression was introduced (AGENTS.md: fix clippy, don't allow it) |
+| added `as any` / `@ts-ignore` / `@ts-expect-error` / `eslint-disable` | **0** in `sys-monitor-tauri/src` |
+| added `it.skip` / `test.skip` / `describe.skip` / `it.only` | **0** |
+| added code `TODO`/`FIXME`/`HACK` | **0** (4 added mentions, all inside tracked documents: `progress.md`, `audit.md`, `tasks.md`) |
+| GitHub Actions pins | every `uses:` ref in all 5 workflows is a full 40-hex commit SHA (29 refs), including the follow-up campaign's new `dependency-audit-watch.yml` |
+| `StopFlag` / `RetryRequest` | still two distinct newtypes with `register_lifecycle_flags` asserting each registration (`main.rs:33,38,70-81`) and tests proving manual retry never sets shutdown |
+| schema pair | metrics `6` / lifecycle `1` — unchanged, as the proposal's non-goal required |
+
+No introduced Critical/High/P1/P2 defect was found, so task 15.3 has nothing to
+attach. The two findings that *are* attributable to this change's window are
+process findings already recorded elsewhere: the application-scoped npm audit
+went red again in early October (a new advisory against an unchanged lockfile),
+which the successor change `2026-10-08-remediate-source-map-js-advisory`
+remediates and guards.
+
+### J3. What remains unverifiable from here
+
+- Physical dual-identical-GPU telemetry association (host has 1 physical Nvidia
+  GPU + Intel iGPU) — tasks 7.6 and 13.6 stay open per 17.2.
+- Closing the regenerated Dependabot PRs (task 16.4) — queue disposition belongs
+  to the successor dependency-queue campaign.

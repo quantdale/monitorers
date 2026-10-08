@@ -3,43 +3,18 @@
 ## Why
 
 The repository's required frontend gate is **red on a clean checkout of `main`**
-(`b4517f44`). `sys-monitor-tauri/scripts/verify.mjs`'s `frontend()` lane runs
-`npm audit --audit-level=high` inside `sys-monitor-tauri/`, and that command
-exits **1**:
+(`b4517f44`): `npm audit --audit-level=high` inside `sys-monitor-tauri/` exits 1
+because the lockfile resolves `source-map-js@1.2.1`, which is inside the affected
+range of GHSA-68fv-2mgg-jv7q (event-loop DoS, high, fixed in 1.2.2, published
+2026-09-30). Because that audit is what CI's `frontend` job and `.husky/pre-push`
+run, **no commit can be pushed and no PR can be green** until it is resolved.
 
-```
-source-map-js  1.0.0 - 1.2.1
-Severity: high
-source-map-js allows event-loop denial of service through indexed
-source-map section offsets — GHSA-68fv-2mgg-jv7q
-1 high severity vulnerability
-```
-
-Because `verify:frontend` is what the `frontend` job of `.github/workflows/rust.yml`
-executes and `verify:fast` is what `.husky/pre-push` executes, **no commit can be
-pushed and no PR can be green** until this is resolved.
-
-This is the *third* recurrence of the same failure family:
-
-1. `restore-green-frontend-gate` (2026-09-30) fixed `undici` (high, via `jsdom`)
-   and `vitest` (moderate) — and recorded its root cause as "the recorded status
-   was scoped wrong".
-2. `progress.md` then recorded "0 high vulnerabilities" for the application
-   scope on 2026-09-30 — truthfully, as of that date.
-3. `source-map-js@1.2.2` (the patched release) was published **2026-09-30**, one
-   day before that status was written, so the already-locked `1.2.1` in
-   `sys-monitor-tauri/package-lock.json` became an in-range-but-vulnerable pin.
-   The gate went red without any dependency being upgraded.
-
-Root cause of the recurrence: detection is real (the gate fails loudly), but
-nothing in the repository tells an agent or maintainer that an advisory can
-appear *against an unchanged lockfile*. The remediation path is also undocumented,
-so the natural first guesses (`npm update`, `overrides`, `npm audit fix --force`)
-are unreviewed guesses.
-
-Two re-resolutions are enough for the fix itself; the durable work is (a) recording
-the exact, minimal remediation and (b) making the advisory surface visible before
-it blocks a push.
+This is the third instance of one failure family: an advisory becomes applicable
+to an *already-committed* lockfile, so no dependency is upgraded, Dependabot
+(monthly) produces nothing, and the gate goes red while the recorded audit status
+still says both scopes are green. The fix is trivial (a one-entry lockfile
+re-resolution); the durable work is recording the remediation policy and making
+the advisory surface between pushes.
 
 ## What Changes
 
