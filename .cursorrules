@@ -7,7 +7,7 @@ Real-time Windows desktop system monitor built with Tauri v2. A single Rust back
 | Layer | Technology | Version |
 |---|---|---|
 | App shell | Tauri v2 (WebView2) | `tauri = "2"` |
-| Backend | Rust 2021, `sysinfo 0.39`, `windows 0.62` (PDH), `wmi 0.18`, `nvml-wrapper 0.12` (default), `nvapi-sys 0.1.3` (default, fallback) | edition 2021 |
+| Backend | Rust 2021, `sysinfo 0.39`, `windows 0.62` (PDH), `wmi 0.18`, `nvml-wrapper 0.13` (default), `nvapi-sys 0.1.3` (default, fallback) | edition 2021 |
 | Frontend | React 19, TypeScript 7, Vite 8 | `"react": "^19.3.0"`, `"typescript": "^7.0.2"`, `"vite": "^8.3.1"` |
 | Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.10.1"` |
 | Drag-and-drop | @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities | `"@dnd-kit/core": "^6.3.1"`, `"@dnd-kit/sortable": "^10.0.0"` |
