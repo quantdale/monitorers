@@ -15,6 +15,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -29,6 +30,9 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
       }
     }
     if (open) {
+      // Move focus into the panel so a keyboard user is inside the dialog they
+      // just opened instead of still on the trigger behind it.
+      panelRef.current?.focus();
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
       return () => {
@@ -70,8 +74,10 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
       {open && (
         <div
           id="metric-card-selector-panel"
+          ref={panelRef}
           role="dialog"
           aria-label="Metric card visibility"
+          tabIndex={-1}
           style={{
             position: 'absolute',
             top: '100%',

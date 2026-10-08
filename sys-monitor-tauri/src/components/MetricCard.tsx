@@ -3,6 +3,8 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
 import { computeChartPoints, type ChartPoint } from '../chartPoints';
+import { formatPercentRange } from '../cards/formatters';
+import { buildDualSeriesChartLabel, buildSingleSeriesChartLabel } from '../cards/chartLabels';
 import type { MetricValue } from '../types/metrics';
 
 const MAX_CHART_POINTS = 300;
@@ -126,6 +128,25 @@ export function MetricCard({
   // List-view min/max scans the whole window per render; same identity-based skip.
   const listMinMax = useMemo(() => historyMinMax(history ?? []), [history]);
 
+  // The chart is a graphic, not a control: it gets an accessible name that
+  // carries what a sighted user reads off the shape (current value plus the
+  // visible min/max) instead of being an unnamed, focusable `application`
+  // widget with an empty <title>.
+  //
+  // The "now" figure is read from the chart data's own latest point, NOT from
+  // the live `value` prop: live scalars merge on every ~250 ms tick, and a
+  // label derived from them would change 4x per second and defeat
+  // MetricChart's memo — re-mounting the Recharts subtree on every tick is the
+  // single largest main-thread cost this app has (see the fan-out guard in
+  // MetricChart.test.tsx). Keyed on `data`, the label changes only when the
+  // window's committed samples do (~1 Hz).
+  const resolvedChartLabel = useMemo(() => {
+    const latest = data[data.length - 1];
+    return hasSecondary
+      ? buildDualSeriesChartLabel(title, latest?.v ?? null, latest?.v2 ?? null)
+      : buildSingleSeriesChartLabel(title, latest?.v ?? null, listMinMax.min, listMinMax.max);
+  }, [data, hasSecondary, title, listMinMax.min, listMinMax.max]);
+
   const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
 
   const dragHandle = (
@@ -135,9 +156,9 @@ export function MetricCard({
       data-testid={`drag-handle-${id}`}
       {...(dragHandleProps?.attributes ?? {})}
       {...(dragHandleProps?.listeners ?? {})}
-      aria-label="Drag to reorder"
-      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#666', userSelect: 'none', background: 'transparent', border: 0 }}
-      title="Drag to reorder"
+      aria-label={`Reorder ${title} card`}
+      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#7a7a7a', userSelect: 'none', background: 'transparent', border: 0 }}
+      title={`Reorder ${title} card`}
     >
       <span aria-hidden="true">⠿</span>
     </button>
@@ -146,7 +167,7 @@ export function MetricCard({
   if (viewMode === 'list') {
     const { min, max } = listMinMax;
     const displayValue = listViewValue ?? value;
-    const displayMinMax = listViewMinMax ?? `Min: ${min.toFixed(1)}%  Max: ${max.toFixed(1)}%`;
+    const displayMinMax = listViewMinMax ?? formatPercentRange(min, max);
 
     return (
       <div
@@ -155,11 +176,13 @@ export function MetricCard({
         style={{
           background: '#1e1e1e',
           borderRadius: 8,
-          height: 50,
+          // Grows instead of clipping: a fixed 50px height with overflow:hidden
+          // cut the network card's wrapped range pills off entirely (measured
+          // scrollHeight 72 > clientHeight 50 at a 390px viewport).
+          minHeight: 50,
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'stretch',
-          overflow: 'hidden',
           opacity: isDragging ? 0.5 : 1,
         }}
       >
@@ -167,24 +190,35 @@ export function MetricCard({
           {dragHandle}
         </div>
 
-        {/* Left panel (30%) — title + value on line 1, min/max on line 2 */}
+        {/* Left panel — title + value on line 1, min/max on line 2. A flexible
+            basis with a minimum keeps long hardware names and value pills from
+            squeezing the title into an ellipsis. */}
         <div
           style={{
-            width: '30%',
+            flex: '1 1 55%',
+            maxWidth: '65%',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
             padding: '0 10px',
             gap: 2,
             minWidth: 0,
+            // Nothing may paint outside the panel: a value group wider than the
+            // panel (disk cards carry "Active Time n%" + "Avg: n ms") used to
+            // overflow onto the chart column instead of wrapping.
+            overflow: 'hidden',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, fontFamily: 'monospace', color: '#fff', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 13, fontFamily: 'monospace', color: '#fff', gap: 8 }}>
             <span
               data-testid={`metric-title-${id}`}
-              style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={title}
+              style={{ fontWeight: 600, minWidth: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             >{title}</span>
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{displayValue}</div>
+            {/* Not a flex row: inline content reflows (wrapping at spaces) when
+                the panel is narrow, so the value shrinks instead of overflowing
+                the panel or pushing the title into an ellipsis. */}
+            <div style={{ minWidth: 0, flexShrink: 1, textAlign: 'right' }}>{displayValue}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {typeof displayMinMax === 'string' ? (
@@ -195,14 +229,14 @@ export function MetricCard({
           </div>
         </div>
 
-        {/* Right panel (70%) — graph with left border and distinct background */}
+        {/* Right panel — chart with left border and distinct background */}
         <div
           style={{
-            width: '70%',
+            flex: '1 1 45%',
+            minWidth: 120,
             borderLeft: '1px solid #333',
             background: '#1a1a1a',
             padding: '4px 0',
-            minWidth: 0,
           }}
         >
           {hasChart && (
@@ -215,6 +249,7 @@ export function MetricCard({
                 secondaryColor={secondaryColor}
                 hasSecondary={hasSecondary}
                 showTimeAxis={false}
+                label={resolvedChartLabel}
               />
             </Suspense>
             </div>
@@ -281,10 +316,11 @@ export function MetricCard({
           {badge && (
             <div
               style={{
-                display: 'inline-flex',
+                display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                flexShrink: 0,
+                flexWrap: 'wrap',
+                minWidth: 0,
               }}
             >
               {badge}
@@ -302,6 +338,7 @@ export function MetricCard({
             secondaryColor={secondaryColor}
             hasSecondary={hasSecondary}
             showTimeAxis
+            label={resolvedChartLabel}
           />
         </Suspense>
         </div>

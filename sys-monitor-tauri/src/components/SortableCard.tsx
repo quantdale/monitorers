@@ -37,6 +37,9 @@ export function SortableCard(props: Props) {
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
+        // A grid item's automatic minimum size is its min-content width, which is
+        // what widened one tile column past its container at narrow viewports.
+        minWidth: 0,
       }}
     >
       <MetricCard

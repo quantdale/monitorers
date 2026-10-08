@@ -10,6 +10,11 @@ interface Props {
   hasSecondary: boolean;
   /** Default/tile views show the time axis; list view hides it. */
   showTimeAxis: boolean;
+  /** Accessible name for the chart graphic. The chart is a picture of the
+   *  window, not a control: Recharts 3 defaults `accessibilityLayer` on, which
+   *  otherwise leaves every chart as `<svg role="application" tabindex="0">`
+   *  with an empty <title> — an unnamed tab stop per card. */
+  label: string;
 }
 
 /**
@@ -26,12 +31,15 @@ interface Props {
  * roughly 3/4 of chart-body renders (686 → ~170 per 7 charts over a 12s
  * window), and the Recharts subtree dominates this app's long tasks.
  */
-export const MetricChart = memo(function MetricChart({ data, yDomain, color, secondaryColor, hasSecondary, showTimeAxis }: Props) {
+export const MetricChart = memo(function MetricChart({ data, yDomain, color, secondaryColor, hasSecondary, showTimeAxis, label }: Props) {
   const primaryFillOpacity = hasSecondary ? 0 : showTimeAxis ? 0.15 : 0.2;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart
         data={data}
+        role="img"
+        aria-label={label}
+        tabIndex={-1}
         margin={showTimeAxis ? { top: 2, right: 0, bottom: 0, left: 0 } : { top: 2, right: 4, bottom: 2, left: 0 }}
       >
         <YAxis domain={yDomain} hide />

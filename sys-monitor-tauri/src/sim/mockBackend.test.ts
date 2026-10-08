@@ -11,7 +11,7 @@ import {
   MAX_SIM_SPEED,
   type SimScenario,
 } from './mockBackend';
-import type { MetricsSnapshot } from '../types/metrics';
+import type { MetricsSnapshot, MetricValue } from '../types/metrics';
 // Safe to import here (the cycle ban is on mockBackend.ts importing useMetrics.ts,
 // which would be a bundle-time cycle; a test importing both is acyclic).
 import { EXPECTED_SCHEMA_VERSION, MAX_HISTORY } from '../hooks/useMetrics';
@@ -637,5 +637,66 @@ describe('MockBackend accumulating history ring', () => {
       return (await backend.getHistory(86_400)).timestamps.length;
     })();
     expect(observedCap).toBe(MAX_HISTORY);
+  });
+
+  // The mock must be range-faithful to the production payload: PDH-derived
+  // percentage counters cannot report a negative utilization, and the GPU engine
+  // counters never exceed 100. An unclamped synthetic series made the UI render
+  // `Min: -9.9%` (CPU was `30 + 40*sin`) and would let a defect that production
+  // cannot have "pass" in the mock lane.
+  it('emits utilizations inside the production 0-100 range on every channel', async () => {
+    const backend = makeBackend();
+    // The seeded ring spans one whole wave per channel, so it covers the
+    // unclamped extremes that previously went out of range.
+    const seeded = await backend.getHistory(86_400);
+    // Throughput channels are rates (KB/s), not utilizations: only the lower
+    // bound (no negative rate) applies to them. Gaps (null) are legitimate
+    // history entries; a null is checked for presence, not for range.
+    const rateChannels: MetricValue[][] = [seeded.net_recv, seeded.net_sent];
+    const utilizationChannels: MetricValue[][] = [
+      seeded.cpu,
+      seeded.mem,
+      ...seeded.disks.map((d) => d.values),
+      ...seeded.gpus.map((g) => g.values),
+    ];
+    for (const channel of [...rateChannels, ...utilizationChannels]) {
+      expect(channel.length).toBeGreaterThan(0);
+      for (const value of channel) {
+        expect(Number.isFinite(value)).toBe(true);
+        expect(value as number).toBeGreaterThanOrEqual(0);
+      }
+    }
+    for (const channel of utilizationChannels) {
+      for (const value of channel) {
+        expect(value as number).toBeLessThanOrEqual(100);
+      }
+    }
+
+    // Live emissions (not just the seed) must hold the same bound.
+    vi.useFakeTimers();
+    const seen: MetricsSnapshot[] = [];
+    backend.onSnapshot((s) => seen.push(s));
+    backend.start();
+    vi.advanceTimersByTime(120 * 250); // 120 ticks => 30 full ticks
+    vi.useRealTimers();
+    backend.stop();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const snapshot of seen) {
+      for (const rate of [snapshot.net_recv_kib_s, snapshot.net_sent_kib_s]) {
+        expect(rate).toBeGreaterThanOrEqual(0);
+      }
+      for (const value of [snapshot.cpu, snapshot.mem]) {
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThanOrEqual(100);
+      }
+      for (const disk of snapshot.disks) {
+        expect(disk.active).toBeGreaterThanOrEqual(0);
+        expect(disk.active).toBeLessThanOrEqual(100);
+      }
+      for (const gpu of snapshot.gpus) {
+        expect(gpu.util).toBeGreaterThanOrEqual(0);
+        expect(gpu.util).toBeLessThanOrEqual(100);
+      }
+    }
   });
 });

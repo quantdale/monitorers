@@ -348,7 +348,12 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         width: open ? SIDEBAR_WIDTH : 0,
         flexShrink: 0,
         overflow: 'hidden',
-        transition: 'width 250ms ease',
+        // `visibility` (discrete, but interpolated as "visible until the
+        // transition ends") keeps the collapse animated while removing the
+        // closed sidebar's controls and status text from the accessibility tree
+        // and the tab order. Collapsing by width alone leaves both reachable.
+        visibility: open ? 'visible' : 'hidden',
+        transition: 'width 250ms ease, visibility 250ms ease',
         background: '#0f0f0f',
         borderRight: open ? '1px solid #444' : 'none',
         display: 'flex',

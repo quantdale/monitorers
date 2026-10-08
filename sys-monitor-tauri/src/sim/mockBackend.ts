@@ -129,6 +129,19 @@ function sinAt(wave: Wave, t: number): number {
   return wave.base + wave.amp * Math.sin(t * wave.periodFactor + wave.phase);
 }
 
+/**
+ * Clamp a synthetic utilization to the range the production collector can
+ * report. PDH-derived percentage counters never go below 0 and never above 100,
+ * so a mock that lets a sine dip negative (CPU was `30 + 40*sin` → −10) or
+ * exceed 100 (the GPU wave spans base±amp) advertises values the real backend
+ * cannot produce — the mock lane would "pass" on a defect production cannot
+ * have, and the UI would render a negative percentage. Every utilization the
+ * mock emits goes through here.
+ */
+function clampUtilization(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
 /** Small deterministic string hash — gives hotplug-added hardware stable identities. */
 function hashKey(s: string): number {
   let h = 0;
@@ -817,14 +830,14 @@ export class MockBackend {
     this.freezeRemaining = 0;
     const t = this.simSeconds;
 
-    const cpu = sinAt({ base: 30, amp: 40, periodFactor: 0.3, phase: 0 }, t);
-    const mem = sinAt({ base: 50, amp: 35, periodFactor: 0.3, phase: 0.5 }, t);
+    const cpu = clampUtilization(sinAt({ base: 30, amp: 40, periodFactor: 0.3, phase: 0 }, t));
+    const mem = clampUtilization(sinAt({ base: 50, amp: 35, periodFactor: 0.3, phase: 0.5 }, t));
 
     const disks = this.disks.map((d) => {
       const wave = diskWave(d.key);
       return {
         key: d.key,
-        active: Math.max(0, sinAt(wave, t)),
+        active: clampUtilization(sinAt(wave, t)),
         read_mb_s: d.read_mb_s ?? wave.base + 4,
         write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
         avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
@@ -837,7 +850,7 @@ export class MockBackend {
         key: gpuKey(g, index),
         name: g.name,
         vendor: g.vendor ?? ('unknown' as GpuVendor),
-        util: Math.max(0, sinAt(wave, t)),
+        util: clampUtilization(sinAt(wave, t)),
         temp_c: (hashKey(g.name) % 25) + 40,
         nvidia: nvidiaStatsFor(g, index),
       };
@@ -1059,8 +1072,8 @@ export class MockBackend {
     for (let i = 0; i < n; i += 1) {
       const t = t0 + i * dt;
       timestamps.push(now - (n - 1 - i) * HISTORICAL_DENSITY);
-      cpu.push(30 + 40 * Math.sin(t * 4));
-      mem.push(50 + 35 * Math.sin(t * 4 + 0.5));
+      cpu.push(clampUtilization(30 + 40 * Math.sin(t * 4)));
+      mem.push(clampUtilization(50 + 35 * Math.sin(t * 4 + 0.5)));
       netRecv.push(Math.max(0, 100 + 200 * Math.sin(t * 4 + 2.5)));
       netSent.push(Math.max(0, 50 + 150 * Math.sin(t * 4 + 3)));
     }
@@ -1076,7 +1089,7 @@ export class MockBackend {
         const wave = diskWave(d.key);
         return {
           key: d.key,
-          values: Array.from({ length: n }, (_, i) => Math.max(0, sinAt(wave, i * dt))),
+          values: Array.from({ length: n }, (_, i) => clampUtilization(sinAt(wave, i * dt))),
           read_mb_s: d.read_mb_s ?? wave.base + 4,
           write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
           avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
@@ -1091,7 +1104,7 @@ export class MockBackend {
           key: gpuKey(g, index),
           name: g.name,
           vendor: g.vendor ?? 'unknown',
-          values: Array.from({ length: n }, (_, i) => Math.max(0, sinAt(wave, i * dt))),
+          values: Array.from({ length: n }, (_, i) => clampUtilization(sinAt(wave, i * dt))),
           temp_c: (hashKey(g.name) % 25) + 40,
           nvidia: nvidiaStatsFor(g, index),
           last_seen_ts: now,

@@ -165,7 +165,12 @@ export default function App() {
 
   const containerStyle =
     viewMode === 'tile'
-      ? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 } as React.CSSProperties
+      ? // auto-fit + minmax keeps the two Tile tracks EQUAL: a bare `1fr 1fr`
+        // resolves to minmax(auto, 1fr), so one card's min-content width widened
+        // its own track (measured 406px/180px inside a 358px container at the
+        // product's 400px minimum window). Below the track minimum the grid
+        // collapses to a single column instead of overflowing.
+        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 8 } as React.CSSProperties
       : { display: 'flex', flexDirection: 'column' as const, gap: 8 };
 
   const strategy = viewMode === 'tile' ? rectSortingStrategy : verticalListSortingStrategy;
@@ -173,6 +178,9 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} memTotalGb={metrics?.mem_total_gb ?? null} />
+      {/* Scroll container: a header landmark, then the main landmark that holds
+          the dashboard. A <header> nested inside <main> maps to no landmark, so
+          the two must be siblings here. */}
       <div
         style={{
           flex: 1,
@@ -274,10 +282,11 @@ export default function App() {
           Settings couldn't be saved — {saveError}. Changes are kept in memory for this session.
         </div>
       )}
+      <header>
       <div style={{ marginBottom: 4 }}>
-        <span style={{ fontSize: 18, fontWeight: 700, color: '#e0e0e0' }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700, color: '#e0e0e0', margin: 0 }}>
           System Monitor
-        </span>
+        </h1>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
@@ -318,7 +327,14 @@ export default function App() {
         </div>
         <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
       </div>
+      </header>
 
+      <main
+        style={{
+          flex: 1,
+          minWidth: 0,
+        }}
+      >
       {historyLoadError && metrics && (
         <div
           role="alert"
@@ -396,6 +412,7 @@ export default function App() {
           </SortableContext>
         </DndContext>
       )}
+      </main>
         </div>
       </div>
     </div>

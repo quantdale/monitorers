@@ -93,6 +93,7 @@ describe('MetricChart render-fan-out guard', () => {
               color="#4699e8"
               hasSecondary={false}
               showTimeAxis={false}
+              label="test chart"
             />
           </Profiler>
         );
@@ -121,5 +122,54 @@ describe('MetricChart render-fan-out guard', () => {
       expect(commitsAfterUnchangedRerender).toBeLessThanOrEqual(4);
       expect(commitsAfterDataChange).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it('exposes the chart as a named, non-focusable image', () => {
+    // Recharts 3 defaults `accessibilityLayer` on, which would otherwise leave
+    // every chart as <svg role="application" tabindex="0"> with an empty
+    // <title>: one unnamed tab stop per card. The chart is a graphic here (no
+    // tooltip, no interaction), so it must be an image with a real name.
+    class ResizeObserverStub {
+      callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(): void {
+        this.callback(
+          [
+            {
+              target: { clientWidth: 400, clientHeight: 140 } as unknown as Element,
+              contentRect: { width: 400, height: 140 } as unknown as DOMRectReadOnly,
+            } as unknown as ResizeObserverEntry,
+          ],
+          this as unknown as ResizeObserver
+        );
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    act(() => {
+      root = createRoot(container!);
+      root.render(
+        <MetricChart
+          data={[{ t: 1000, v: 10 }, { t: 2000, v: 40 }]}
+          yDomain={[0, 100]}
+          color="#4699e8"
+          hasSecondary={false}
+          showTimeAxis={false}
+          label="CPU trend, now 10.0%"
+        />
+      );
+    });
+
+    const surface = container!.querySelector('svg');
+    expect(surface).not.toBeNull();
+    expect(surface!.getAttribute('role')).toBe('img');
+    expect(surface!.getAttribute('tabindex')).toBe('-1');
+    expect(surface!.getAttribute('aria-label')).toBe('CPU trend, now 10.0%');
   });
 });

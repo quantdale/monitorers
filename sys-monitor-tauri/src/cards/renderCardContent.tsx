@@ -135,16 +135,16 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         }
         listViewValue={
           <>
-            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600 }}>↓ {formatThroughput(recv)}</span>
-            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600 }}>↑ {formatThroughput(sent)}</span>
+            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>↓ {formatThroughput(recv)}</span>
+            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>↑ {formatThroughput(sent)}</span>
           </>
         }
         listViewMinMax={
           <>
-            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
+            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
               ↓ {formatThroughput(minR)} – {formatThroughput(maxR)}
             </span>
-            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace' }}>
+            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
               ↑ {formatThroughput(minS)} – {formatThroughput(maxS)}
             </span>
           </>

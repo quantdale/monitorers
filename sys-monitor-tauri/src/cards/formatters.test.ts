@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clampPercent,
   formatCompactTempC,
   formatFanPercent,
   formatGigabytes,
@@ -7,6 +8,7 @@ import {
   formatMegabytesPerSecond,
   formatMegahertz,
   formatPercent,
+  formatPercentRange,
   formatResponseMs,
   formatThroughput,
   formatWatts,
@@ -39,5 +41,37 @@ describe('finite-safe metric formatters', () => {
     expect(formatMegahertz(1600.4)).toBe('1600 MHz');
     expect(formatMegahertz(Number.NaN)).toBe('—');
     expect(formatResponseMs(0)).toBe('Avg: —');
+  });
+});
+
+// The List view's window statistics scan the RAW windowed slice, so a single
+// out-of-range sample would otherwise advertise a percentage the collector
+// cannot produce (observed on the mock lane: `Min: -9.9%`).
+describe('percentage range formatting', () => {
+  it('formats a normal range', () => {
+    expect(formatPercentRange(0, 69.94)).toBe('Min: 0.0%  Max: 69.9%');
+  });
+
+  it('clamps both bounds into 0-100', () => {
+    expect(formatPercentRange(-9.9, 69.9)).toBe('Min: 0.0%  Max: 69.9%');
+    expect(formatPercentRange(-50, 180)).toBe('Min: 0.0%  Max: 100.0%');
+  });
+
+  it('preserves legitimate zero bounds', () => {
+    expect(formatPercentRange(0, 0)).toBe('Min: 0.0%  Max: 0.0%');
+  });
+
+  it('reports non-finite bounds instead of rendering NaN', () => {
+    expect(formatPercentRange(Number.NaN, 10)).toBe('Min: —%  Max: —%');
+    expect(formatPercentRange(0, Number.POSITIVE_INFINITY)).toBe('Min: —%  Max: —%');
+  });
+
+  it('clampPercent is the single clamping rule shared with formatPercent', () => {
+    expect(clampPercent(-0.4)).toBe(0);
+    expect(clampPercent(100.6)).toBe(100);
+    expect(formatPercent(clampPercent(-0.4))).toBe('0.0%');
+    expect(formatPercentRange(clampPercent(-0.4), clampPercent(100.6))).toBe(
+      'Min: 0.0%  Max: 100.0%'
+    );
   });
 });

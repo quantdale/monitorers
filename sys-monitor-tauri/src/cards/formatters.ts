@@ -13,6 +13,25 @@ export function formatPercent(v: number | null | undefined): string {
   return `${x.toFixed(1)}%`;
 }
 
+/** Percentages are 0-100 by definition: the production collector's rate
+ * counters cannot report a negative utilization, so neither can the UI. One
+ * formatter owns the rule for every card (see the range formatter below). */
+export function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+/**
+ * `Min: 0.0%  Max: 69.9%` for the List view's window statistics.
+ *
+ * Both bounds are clamped by `clampPercent`: the min/max scan reads the raw
+ * windowed history slice, and a single out-of-range sample would otherwise
+ * advertise an impossible value (observed: `Min: -9.9%`).
+ */
+export function formatPercentRange(min: number, max: number): string {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return 'Min: —%  Max: —%';
+  return `Min: ${clampPercent(min).toFixed(1)}%  Max: ${clampPercent(max).toFixed(1)}%`;
+}
+
 export function formatTempC(temp: number | null | undefined): string {
   if (temp == null || !Number.isFinite(temp)) return '— °C';
   return `${Math.round(temp)} °C`;
