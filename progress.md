@@ -4,7 +4,17 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: `2026-10-08` follow-up campaigns completed on `main` (branch `main`; local commits, not yet pushed). Three OpenSpec changes archived; no active change remains.**
+**Current phase: the dependency-queue disposition plus the chart-axis readability fix — `2026-10-09-disposition-open-dependency-queue` and `2026-10-09-harden-chart-axis-readability` — are archived on branch `agent/monitorers-dependency-queue-2026-10-09` (local commits, not pushed). No active OpenSpec change remains.**
+
+Latest campaign in this phase — **`2026-10-09-harden-chart-axis-readability`** (archived):
+Default/Tile time axes are now a readable scale — tick text `#888` (4.703:1) and
+axis stroke `#7a7a7a` (3.884:1) on the `#1e1e1e` card surface instead of
+recharts' `#666` default (2.903:1), a new pure `formatAxisTick(ms, spanMs)`
+helper that keeps `HH:MM:SS` under a five-minute span and drops seconds above
+it, `minTickGap` 80 and a 16px bottom margin. Verified locally: both `tsc`
+projects, 295 unit tests, production build, 33 E2E tests (11 new, including the
+300s seeded-span case), strict OpenSpec validation. **The packaged/real lane was
+not run and is not claimed for this change.**
 
 Campaigns completed on 2026-10-08, in order:
 
@@ -76,3 +86,4 @@ mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passe
 - [ ] **Merge PR #45** — the branch is qualified but not merged; merging is the maintainer's call.
 - [ ] **Push the four `main` commits.** `main` (`b4517f4`..`b2ef5d7`) is still ahead of `origin/main`; those four commits are also contained in the PR branch, so pushing `main` is a bookkeeping step, not lost work.
 - [ ] **Packaged real-app lane for the updated stack** — run locally it passes (see the schema-assertion change), but the *dispatch-only* hosted packaged lane has not run at this stack.
+- [x] **Harden chart axis readability** (`2026-10-09-harden-chart-axis-readability`, branch `agent/monitorers-dependency-queue-2026-10-09`, local): explicit `#888`/`#7a7a7a` axis colors on the `#1e1e1e` card surface, span-keyed `formatAxisTick` helper, `minTickGap` 80 + 16px bottom margin. A post-apply review's five corrections are closed (spec amended for a 1px sub-pixel inside-box tolerance; stroke + card background asserted on rendered pixels; unit gap test renamed as a floor guard; unit React roots unmounted; 300s seeded-span browser case added). Gates: both typechecks, 295 unit tests, build, 33 E2E, strict OpenSpec validation. Packaged lane not run, not claimed.

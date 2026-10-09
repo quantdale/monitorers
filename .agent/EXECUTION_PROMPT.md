@@ -1,6 +1,25 @@
 # Execution Prompt — Monitorers Dependency Runtime Modernization
 
-**Status: ACTIVE — execute the OpenSpec campaign below.**  
+**Status: SUPERSEDED — campaign executed and archived; nothing to resume.**
+
+This campaign (`dependency-runtime-modernization-and-qualification`) was
+executed to completion on branch
+`agent/monitorers-dependency-queue-2026-10-09` and archived as
+`openspec/changes/archive/2026-10-09-dependency-runtime-modernization-and-qualification/`
+with its evidence. The final state was recorded in `progress.md` and the
+follow-on queue disposition in
+`openspec/changes/archive/2026-10-09-disposition-open-dependency-queue/`;
+`2026-10-09-harden-chart-axis-readability` later shipped on the same branch.
+
+Three tasks remain open **by design** as external blockers — do not reopen
+them: `7.6` (multi-identical-Nvidia physical proof — hardware unavailable),
+`13.6` (hardware-profile key comparison on a real machine — host-dependent),
+and `16.4` (closing stale generated PRs through GitHub tooling — recorded as
+a maintainer action list in the archived evidence).
+
+A later `/goal` must not resume this prompt: there is no executable
+requirement left, and the remaining items are not actionable from this tree.
+
 **Planned:** 2026-08-26  
 **Planned-From:** `main@46ee499ab934663c4e0807f7ab8e995707b77471`  
 **Recommended target branch:** `agent/monitorers-dependency-runtime-modernization`  
