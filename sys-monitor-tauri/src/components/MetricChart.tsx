@@ -1,6 +1,18 @@
 import { memo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer } from 'recharts';
 import type { ChartPoint } from '../chartPoints';
+import { formatAxisTick } from '../cards/chartLabels';
+
+/** Tick text on the card surface (#1e1e1e): 4.7:1, above the 4.5:1 floor.
+ *  The chart library's default gray (#666) measures ~2.90:1 — unreadable. */
+const TICK_FILL = '#888';
+/** Axis stroke as a graphical object: 3.9:1, above the 3:1 floor. */
+const AXIS_STROKE = '#7a7a7a';
+/** The widest label (`HH:MM:SS` at 10px) fits in ~55px; 80 keeps adjacent
+ *  labels apart once Recharts thins ticks to honor minTickGap. */
+const TICK_MIN_GAP = 80;
+/** Room for the 10px label baseline inside the fixed 140px chart box. */
+const TIME_AXIS_BOTTOM_MARGIN = 16;
 
 interface Props {
   data: ChartPoint[];
@@ -33,6 +45,10 @@ interface Props {
  */
 export const MetricChart = memo(function MetricChart({ data, yDomain, color, secondaryColor, hasSecondary, showTimeAxis, label }: Props) {
   const primaryFillOpacity = hasSecondary ? 0 : showTimeAxis ? 0.15 : 0.2;
+  // Span of the points already passed in — a 250 ms scalar tick is not a prop
+  // here, so this recomputes only when the committed data does (~1 Hz) and
+  // keeps the axis format out of the memo-defeating render path.
+  const spanMs = data.length > 1 ? data[data.length - 1].t - data[0].t : 0;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart
@@ -40,7 +56,7 @@ export const MetricChart = memo(function MetricChart({ data, yDomain, color, sec
         role="img"
         aria-label={label}
         tabIndex={-1}
-        margin={showTimeAxis ? { top: 2, right: 0, bottom: 0, left: 0 } : { top: 2, right: 4, bottom: 2, left: 0 }}
+        margin={showTimeAxis ? { top: 2, right: 0, bottom: TIME_AXIS_BOTTOM_MARGIN, left: 0 } : { top: 2, right: 4, bottom: 2, left: 0 }}
       >
         <YAxis domain={yDomain} hide />
         {showTimeAxis ? (
@@ -48,14 +64,10 @@ export const MetricChart = memo(function MetricChart({ data, yDomain, color, sec
             dataKey="t"
             type="number"
             domain={['dataMin', 'dataMax']}
-            tickFormatter={(ms: number) =>
-              new Date(ms).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-              })
-            }
-            tick={{ fontSize: 10 }}
+            tickFormatter={(ms: number) => formatAxisTick(ms, spanMs)}
+            tick={{ fontSize: 10, fill: TICK_FILL }}
+            stroke={AXIS_STROKE}
+            minTickGap={TICK_MIN_GAP}
             interval="preserveStartEnd"
           />
         ) : (

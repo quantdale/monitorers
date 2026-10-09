@@ -5,6 +5,19 @@ import { act } from 'react-dom/test-utils';
 import { MetricChart } from './MetricChart';
 import type { ChartPoint } from '../chartPoints';
 
+// The time axis must be a readable scale: explicit colors (the library default
+// gray measured ~2.90:1 on the #1e1e1e card surface, below both contrast
+// floors), precision that follows the visible span, and enough bottom margin
+// that the label baseline sits inside the fixed 140px chart box.
+//
+// Recharts renders tick labels in a separate `recharts-xAxis-tick-labels`
+// layer (not inside `.recharts-xAxis`), so the queries below target
+// `.recharts-cartesian-axis-tick-value` text nodes. Tick thinning by
+// minTickGap needs real text measurement, which jsdom cannot do, so the gap
+// is asserted here as an observed-spacing floor and proven where the
+// thinning actually happens — the Playwright mock lane (chart-axis
+// readability spec, measurements on the seeded span and the 30s window).
+
 // Regression guard for the measured chart-render fan-out fix: the dashboard
 // rebuilds every card on each ~250ms scalar tick while chart data only changes
 // on 1 Hz history commits. MetricChart must stay memoized AND receive
@@ -171,5 +184,178 @@ describe('MetricChart render-fan-out guard', () => {
     expect(surface!.getAttribute('role')).toBe('img');
     expect(surface!.getAttribute('tabindex')).toBe('-1');
     expect(surface!.getAttribute('aria-label')).toBe('CPU trend, now 10.0%');
+  });
+});
+
+/** Renders a chart into a fresh container with a synchronous ResizeObserver
+ *  (jsdom has none; ResponsiveContainer needs a reported size to mount).
+ *  Every root and container created is registered on the describe-scoped
+ *  collections below so the afterEach hook can unmount and remove them — a
+ *  created React root is a live subscription and must not outlive its test. */
+const axisTestRoots: Root[] = [];
+const axisTestContainers: HTMLDivElement[] = [];
+
+function renderChart(data: ChartPoint[], showTimeAxis: boolean): HTMLDivElement {
+  class ResizeObserverStub {
+    callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+    observe(): void {
+      this.callback(
+        [
+          {
+            target: { clientWidth: 400, clientHeight: 140 } as unknown as Element,
+            contentRect: { width: 400, height: 140 } as unknown as DOMRectReadOnly,
+          } as unknown as ResizeObserverEntry,
+        ],
+        this as unknown as ResizeObserver
+      );
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  axisTestRoots.push(root);
+  axisTestContainers.push(container);
+  act(() => {
+    root.render(
+      <MetricChart
+        data={data}
+        yDomain={[0, 100]}
+        color="#4699e8"
+        hasSecondary={false}
+        showTimeAxis={showTimeAxis}
+        label="axis test chart"
+      />
+    );
+  });
+  return container;
+}
+
+function minuteAlignedPoints(seconds: number, stepMs = 1000): ChartPoint[] {
+  const t0 = new Date(2026, 9, 9, 13, 0, 0).getTime();
+  const points: ChartPoint[] = [];
+  for (let i = 0; i <= seconds; i += 1) {
+    points.push({ t: t0 + i * stepMs, v: (i * 7) % 100 });
+  }
+  return points;
+}
+
+function tickValueTexts(container: HTMLDivElement): string[] {
+  return Array.from(container.querySelectorAll('.recharts-cartesian-axis-tick-value')).map(
+    (node) => node.textContent ?? ''
+  );
+}
+
+describe('time-axis styling', () => {
+  let originalRO: typeof ResizeObserver | undefined;
+  let container: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    originalRO = globalThis.ResizeObserver;
+  });
+
+  afterEach(() => {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalRO;
+    for (const root of axisTestRoots) {
+      act(() => root.unmount());
+    }
+    axisTestRoots.length = 0;
+    for (const element of axisTestContainers) {
+      element.remove();
+    }
+    axisTestContainers.length = 0;
+    container = null;
+  });
+
+  it('paints tick text with the explicit #888, never the library default', () => {
+    container = renderChart(minuteAlignedPoints(59), true);
+
+    const ticks = container.querySelectorAll('.recharts-cartesian-axis-tick-value');
+    expect(ticks.length).toBeGreaterThan(1);
+    for (const tick of ticks) {
+      expect(tick.getAttribute('fill')).toBe('#888');
+      expect(tick.getAttribute('stroke')).toBe('none');
+    }
+  });
+
+  it('draws the axis and its tick lines with the #7a7a7a stroke', () => {
+    container = renderChart(minuteAlignedPoints(59), true);
+
+    const axisLine = container.querySelector('.recharts-cartesian-axis-line');
+    expect(axisLine?.getAttribute('stroke')).toBe('#7a7a7a');
+    const tickLines = container.querySelectorAll('.recharts-cartesian-axis-tick-line');
+    expect(tickLines.length).toBeGreaterThan(1);
+    for (const line of tickLines) {
+      expect(line.getAttribute('stroke')).toBe('#7a7a7a');
+    }
+  });
+
+  it('reserves 16px of bottom margin so tick labels sit inside the chart box', () => {
+    // Chart box height is 140 (the ResizeObserver stub). With the time-axis
+    // margin of { top: 2, bottom: 16 }, the plot area bottom is at
+    // 140 - 16 = 124 and recharts' 30px tick band starts at 94. A bottom
+    // margin of 0 would put the axis line at 108.
+    container = renderChart(minuteAlignedPoints(59), true);
+
+    const axisLine = container.querySelector('.recharts-cartesian-axis-line');
+    expect(axisLine?.getAttribute('y1')).toBe('94');
+    expect(axisLine?.getAttribute('y2')).toBe('94');
+
+    for (const tick of container.querySelectorAll('.recharts-cartesian-axis-tick-value')) {
+      // Baselines live inside the reserved band, not on the chart edge.
+      expect(Number(tick.getAttribute('y'))).toBeGreaterThan(100);
+      expect(Number(tick.getAttribute('y'))).toBeLessThanOrEqual(140 - 16);
+    }
+  });
+
+  it('renders tick labels no closer than the 80px gap floor (layout guard, not the thinning proof)', () => {
+    // DELIBERATELY NOT a minTickGap proof. jsdom cannot measure text, so
+    // recharts skips its minTickGap thinning entirely here — a probe that
+    // removed the prop produced byte-identical jsdom geometry. This assertion
+    // only guards the floor: whatever ticks jsdom does render must never sit
+    // closer than the specified gap. The live thinning proof is the
+    // Playwright lane, where labels are really measured.
+    container = renderChart(minuteAlignedPoints(59), true);
+
+    const xs = Array.from(container.querySelectorAll('.recharts-cartesian-axis-tick-value'))
+      .map((node) => Number(node.getAttribute('x')))
+      .sort((a, b) => a - b);
+    expect(xs.length).toBeGreaterThan(1);
+    for (let i = 1; i < xs.length; i += 1) {
+      expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(80);
+    }
+  });
+
+  it('formats ticks with seconds below the five-minute span and without them above', () => {
+    // A 59-second span keeps seconds.
+    container = renderChart(minuteAlignedPoints(59), true);
+    const shortLabels = tickValueTexts(container);
+    expect(shortLabels.length).toBeGreaterThan(1);
+    for (const label of shortLabels) {
+      expect(label).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    }
+    expect(shortLabels[0]).toBe('13:00:00');
+    expect(shortLabels[shortLabels.length - 1]).toBe('13:00:59');
+
+    // A one-hour span drops seconds.
+    container = renderChart(minuteAlignedPoints(3600), true);
+    const longLabels = tickValueTexts(container);
+    expect(longLabels.length).toBeGreaterThan(1);
+    for (const label of longLabels) {
+      expect(label).toMatch(/^\d{2}:\d{2}$/);
+    }
+  });
+
+  it('draws no time-axis tick text when the axis is hidden (list view)', () => {
+    container = renderChart(minuteAlignedPoints(59), false);
+
+    expect(container.querySelectorAll('.recharts-cartesian-axis-tick-value').length).toBe(0);
+    expect(container.querySelector('.recharts-cartesian-axis-line')).toBeNull();
   });
 });

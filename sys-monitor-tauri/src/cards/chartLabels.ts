@@ -32,3 +32,40 @@ export function buildDualSeriesChartLabel(
 ): string {
   return `${title}, now down ${formatThroughput(latestDown)} and up ${formatThroughput(latestUp)} over the selected window`;
 }
+
+/** A visible span at or above this drops the seconds field from tick labels. */
+const SECONDS_SPAN_CUTOFF_MS = 300_000;
+
+function zeroPad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/**
+ * Time-axis tick text for a chart, keyed on the **visible span** so label
+ * width stays predictable: `HH:MM:SS` while the span is under five minutes,
+ * `HH:MM` once it is five minutes or longer (the long form is half as wide,
+ * so a long window no longer crowds labels into each other).
+ *
+ * A missing span (no data) or a single-sample span (zero elapsed time) counts
+ * as short — there is nothing long to compress, and `HH:MM:SS` is still a
+ * truthful local clock reading.
+ *
+ * Local `Date` fields, zero-padded, on purpose: `toLocaleTimeString` emits
+ * locale-dependent width (e.g. `AM/PM`), which makes both the overlap budget
+ * and the unit test unknowable. The chart's accessible name (built above)
+ * carries the value, not the axis text, so a 24-hour clock here is not a
+ * regression.
+ *
+ * Pure and cheap: callers pass timestamps already in the chart's point array,
+ * so this can run inside MetricChart's memoized body without turning a 250 ms
+ * scalar tick into a chart rebuild.
+ */
+export function formatAxisTick(ms: number, spanMs?: number): string {
+  const date = new Date(ms);
+  const hh = zeroPad(date.getHours());
+  const mm = zeroPad(date.getMinutes());
+  if (spanMs != null && spanMs >= SECONDS_SPAN_CUTOFF_MS) {
+    return `${hh}:${mm}`;
+  }
+  return `${hh}:${mm}:${zeroPad(date.getSeconds())}`;
+}
