@@ -159,7 +159,7 @@ function assertAxisReadable(charts: ChartMeasurement[], context: string): void {
       expect(
         current.left,
         `${chart.id} (${context}) labels "${previous.text}" and "${current.text}" overlap`
-      ).toBeGreaterThanOrEqual(previous.right - 0.5);
+      ).toBeGreaterThanOrEqual(previous.right);
     }
   }
   expect(labelledCharts, `every chart in ${context} shows a time axis`).toBe(charts.length);

@@ -20,6 +20,12 @@ a maintainer action list in the archived evidence).
 A later `/goal` must not resume this prompt: there is no executable
 requirement left, and the remaining items are not actionable from this tree.
 
+## STOP
+
+Everything below this heading is the historical prompt, kept so the original
+plan can be audited. It is not an instruction. Do not execute it, do not
+reopen its tasks, and do not treat "you are expected to execute" as current.
+
 **Planned:** 2026-08-26  
 **Planned-From:** `main@46ee499ab934663c4e0807f7ab8e995707b77471`  
 **Recommended target branch:** `agent/monitorers-dependency-runtime-modernization`  

@@ -108,7 +108,10 @@ computed fill: rgb(136, 136, 136)
 ### 2c. Overlap
 
 **No two adjacent labels overlap.** The smallest edge-to-edge gap measured is
-112.37px, against a 36.7–37.3px label width. Tick counts fall to 3 at the
+112.37px, against a 36.7–37.3px label width. The browser assertion requires
+`current.left >= previous.right` with no overlap slack; the earlier 0.5px
+allowance was removed because the spec forbids overlap and the measured gap
+does not need it. Tick counts fall to 3 at the
 narrow viewport and to 3 in Tile at 900px, which is `minTickGap` doing its job
 where it matters. **List view draws no tick text at all**
 (`showTimeAxis={false}` path): 0 `.recharts-cartesian-axis-tick-value` nodes
