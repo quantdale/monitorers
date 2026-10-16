@@ -4,9 +4,46 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: the dependency-queue disposition plus the chart-axis readability fix — `2026-10-09-disposition-open-dependency-queue` and `2026-10-09-harden-chart-axis-readability` — are archived and on `main` at `ef8737d` (pushed to `origin/main`). No active OpenSpec change remains.**
+**Current phase: the repository-wide audit campaign — `2026-10-17-stabilize-five-minute-axis-label-boundary` and `2026-10-17-enforce-react-hooks-linting` — is archived and on `main`. No active OpenSpec change remains.**
 
-Latest campaign in this phase — **`2026-10-09-harden-chart-axis-readability`** (archived):
+Campaigns in this phase (2026-10-17, in order):
+
+1. **`2026-10-17-stabilize-five-minute-axis-label-boundary`** (archived). The
+   E2E gate was **red on a clean `main`**: the chart-axis campaign's
+   seeded-span case failed 2 of 3 local runs (`seeded-span label "06:01"
+   keeps seconds`). Root cause was both a test race AND a product boundary
+   wart: the 300-second window's visible span can reach exactly 300 000 ms
+   when its oldest sample lands on the window cutoff (deterministic on the
+   mock's 1 s grid), and `formatAxisTick` dropped seconds at `>= 300_000`, so
+   the whole axis flipped `HH:MM:SS` ↔ `HH:MM` on sampling phase alone. The
+   boundary is now inclusive on the seconds side (seconds kept up to and
+   including exactly five minutes, dropped strictly beyond — the 300 s
+   window's format is constant over its whole life), the
+   `chart-axis-readability` spec carries the amended requirement plus a
+   boundary scenario, and the seeded-span case passed 8/8 isolated re-runs
+   (both reachable mock spans keep seconds) and the full suite 33/33.
+2. **`2026-10-17-enforce-react-hooks-linting`** (archived). The long-recorded
+   "React-hooks rules are a known gap" is **closed**: oxlint 1.88.0 (exact
+   pin, native TS parsing — `typescript-eslint` stays peer-blocked on TS 7)
+   with a committed `.oxlintrc.json` enabling exactly `react/rules-of-hooks`
+   + `react/exhaustive-deps` as errors over `src/` + `e2e/`, run as
+   `npm run lint` inside `scripts/verify.mjs`'s frontend lane (CI frontend
+   job + pre-push, no workflow edits). The gate's first run found four real
+   findings — including an actual `rules-of-hooks` violation (the
+   provider-less fallback in `useSettings()` called a hook after an early
+   return) and a render-churn bug (`settings.cardOrder ?? []` allocated per
+   render, defeating the Recharts fan-out memos) — all fixed structurally,
+   zero suppressions, plus a mutation check proving the gate fires. New spec:
+   `react-hooks-lint-gate`. Docs (AGENTS/CLAUDE/.cursorrules) now describe
+   the gate instead of the gap.
+
+Verified on the combined final tree: both `tsc` projects, `npm run lint`
+clean, 296 unit tests (22 files), production build, 33 E2E, mock simulation
+lane 4 passed, `npm run verify:frontend` green end-to-end (now including the
+lint step), strict OpenSpec validation. **The packaged/real lane was not run
+and is not claimed for these changes.**
+
+Latest campaign before this phase — **`2026-10-09-harden-chart-axis-readability`** (archived):
 Default/Tile time axes are now a readable scale — tick text `#888` (4.703:1) and
 axis stroke `#7a7a7a` (3.884:1) on the `#1e1e1e` card surface instead of
 recharts' `#666` default (2.903:1), a new pure `formatAxisTick(ms, spanMs)`
@@ -14,7 +51,8 @@ helper that keeps `HH:MM:SS` under a five-minute span and drops seconds above
 it, `minTickGap` 80 and a 16px bottom margin. Verified locally: both `tsc`
 projects, 295 unit tests, production build, 33 E2E tests (11 new, including the
 300s seeded-span case), strict OpenSpec validation. **The packaged/real lane was
-not run and is not claimed for this change.**
+not run and is not claimed for this change.** (The 2026-10-17 boundary change
+above supersedes the "under/above" wording of the formatter rule.)
 
 Campaigns completed on 2026-10-08, in order:
 
@@ -87,3 +125,5 @@ mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passe
 - [x] **Push `main`.** The old "four `main` commits" bookkeeping item is included in `b4517f4..ef8737d`. Not a force-push.
 - [ ] **Packaged real-app lane for the updated stack** — run locally it passes (see the schema-assertion change), but the *dispatch-only* hosted packaged lane has not run at this stack.
 - [x] **Harden chart axis readability** (`2026-10-09-harden-chart-axis-readability`, now on `main` at `ef8737d`): explicit `#888`/`#7a7a7a` axis colors on the `#1e1e1e` card surface, span-keyed `formatAxisTick` helper, `minTickGap` 80 + 16px bottom margin. A post-apply review's five corrections are closed (spec amended for a 1px sub-pixel inside-box tolerance; stroke + card background asserted on rendered pixels; unit gap test renamed as a floor guard; unit React roots unmounted; 300s seeded-span browser case added). Gates: both typechecks, 295 unit tests, build, 33 E2E, strict OpenSpec validation. Packaged lane not run, not claimed.
+- [x] **Repository-wide audit: find and fix everything wrong** (2026-10-17). Full gate sweep plus fresh review found two real defects on a green-looking tree: the E2E gate was red/flaky (seeded-span axis case, 2/3 failures — root-caused to the phase-dependent five-minute boundary, fixed product-side with the spec amended) and the recorded React-hooks lint gap had materialized into four findings including a true `rules-of-hooks` violation (fixed with a provider-required `useSettings()` + exported engine, a stable empty-order constant, and a static complete dep array; gate added via oxlint and wired into `verify:frontend`). Docs reconciled (AGENTS/CLAUDE/.cursorrules). Both changes archived with evidence.
+- [x] **Close the React-hooks lint gap** (`2026-10-17-enforce-react-hooks-linting`): `npm run lint` (oxlint 1.88.0 exact pin, two rules in scope) enforced through the canonical frontend lane; 0 findings, mutation-checked.
