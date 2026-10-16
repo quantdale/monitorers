@@ -11,10 +11,11 @@ import { waitForFirstMetrics, chartTimeSpanMs } from './helpers';
 //
 // The Vite mock seeds a 300-point, one-second-per-point ring, so the widest
 // labels this lane can paint are `HH:MM:SS`. The seeded-span case selects the
-// 300-second window so the visible span is the whole seed (~299s, still under
-// the five-minute cut); the long-span `HH:MM` rule is proven on the pure
-// helper in src/cards/chartLabels.test.ts — this lane never selects 30m/1h and
-// never pretends that paints an hour-long span.
+// 300-second window, whose visible span reaches at most exactly five minutes
+// (299s on the seed-only ring, 300s once the window is full) — both keep
+// seconds under the inclusive boundary. The long-span `HH:MM` rule is proven
+// on the pure helper in src/cards/chartLabels.test.ts — this lane never
+// selects 30m/1h and never pretends that paints an hour-long span.
 
 /** #888 as the browser resolves it in a computed style. */
 const TICK_FILL_RGB = 'rgb(136, 136, 136)';
@@ -205,9 +206,12 @@ test.describe('time-axis readability (seeded span)', () => {
   }) => {
     // Design.md Decision 4: the browser lane must cover the span the harness
     // actually seeds (300 one-second points ≈ 299s), not only truncated
-    // windows. The 300-second window shows the whole ring, still under the
-    // five-minute cut, so labels keep seconds — the widest label text this
-    // lane can paint. 30m/1h are deliberately not selected: they would not
+    // windows. The 300-second window shows the whole ring; its span is 299s
+    // on the seed-only ring and exactly 300s once a live commit lands (the
+    // oldest sample sits on the window cutoff), and BOTH keep seconds under
+    // the inclusive five-minute boundary — the widest label text this lane
+    // can paint, deterministic either way the freeze races the mock's first
+    // live commit. 30m/1h are deliberately not selected: they would not
     // paint a longer span than the seed.
     await page.setViewportSize({ width: 400, height: 300 });
     const charts = await readChartsForView(page, 'Default', '300');
@@ -222,9 +226,11 @@ test.describe('time-axis readability (seeded span)', () => {
 
     assertAxisReadable(charts, 'default 400x300 300s seeded');
 
-    // A span under five minutes keeps seconds — asserted on rendered labels
-    // here as well as on the pure helper, because this is the only browser
-    // case that renders the full seed.
+    // A span of at most five minutes keeps seconds — asserted on rendered
+    // labels here as well as on the pure helper, because this is the only
+    // browser case that renders the full seed. The self-check above admits
+    // both reachable spans (299s and exactly 300s); the inclusive boundary
+    // keeps seconds on both, so this assertion is deterministic.
     const frames = await page
       .locator('.recharts-cartesian-axis-tick-value')
       .evaluateAll((nodes) => nodes.map((n) => n.textContent ?? '').filter((t) => t.length > 0));

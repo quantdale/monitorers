@@ -30,8 +30,14 @@ describe('formatAxisTick', () => {
     expect(formatAxisTick(t, 299_999)).toBe(localHHMMSS(t));
   });
 
-  it('drops seconds at exactly five minutes and beyond', () => {
-    expect(formatAxisTick(t, 300_000)).toBe(localHHMM(t));
+  // Boundary regression: the 300 s history window's visible span can reach
+  // EXACTLY 300 000 ms when its oldest sample lands on the window cutoff, so
+  // an exclusive boundary made the five-minute window's label precision
+  // depend on the phase of the sample spacing. Exactly five minutes keeps
+  // seconds; only strictly beyond drops them.
+  it('keeps seconds at exactly five minutes and drops them strictly beyond', () => {
+    expect(formatAxisTick(t, 300_000)).toBe(localHHMMSS(t));
+    expect(formatAxisTick(t, 300_001)).toBe(localHHMM(t));
     expect(formatAxisTick(t, 3_600_000)).toBe(localHHMM(t));
   });
 

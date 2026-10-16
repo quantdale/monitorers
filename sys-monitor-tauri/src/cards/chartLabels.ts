@@ -33,7 +33,7 @@ export function buildDualSeriesChartLabel(
   return `${title}, now down ${formatThroughput(latestDown)} and up ${formatThroughput(latestUp)} over the selected window`;
 }
 
-/** A visible span at or above this drops the seconds field from tick labels. */
+/** A visible span strictly longer than this drops the seconds field from tick labels. */
 const SECONDS_SPAN_CUTOFF_MS = 300_000;
 
 function zeroPad(value: number): string {
@@ -42,9 +42,19 @@ function zeroPad(value: number): string {
 
 /**
  * Time-axis tick text for a chart, keyed on the **visible span** so label
- * width stays predictable: `HH:MM:SS` while the span is under five minutes,
- * `HH:MM` once it is five minutes or longer (the long form is half as wide,
- * so a long window no longer crowds labels into each other).
+ * width stays predictable: `HH:MM:SS` up to and including a five-minute span,
+ * `HH:MM` beyond it (the long form is half as wide, so a long window no
+ * longer crowds labels into each other).
+ *
+ * The boundary is inclusive on the seconds side on purpose. The visible span
+ * of the 300-second history window can reach exactly 300 000 ms whenever its
+ * oldest included sample lands exactly on the window cutoff (every included
+ * sample is at or after `newest - 300 s`, so the span never exceeds it). A
+ * `>=` cutoff made that first-class window's label precision depend on the
+ * phase of the sample spacing — the same chart flipped between `HH:MM:SS` and
+ * `HH:MM` with nothing user-visible changing. Keeping seconds at exactly
+ * five minutes makes the five-minute window's format constant over its whole
+ * life, while genuinely longer spans still compress.
  *
  * A missing span (no data) or a single-sample span (zero elapsed time) counts
  * as short — there is nothing long to compress, and `HH:MM:SS` is still a
@@ -64,7 +74,7 @@ export function formatAxisTick(ms: number, spanMs?: number): string {
   const date = new Date(ms);
   const hh = zeroPad(date.getHours());
   const mm = zeroPad(date.getMinutes());
-  if (spanMs != null && spanMs >= SECONDS_SPAN_CUTOFF_MS) {
+  if (spanMs != null && spanMs > SECONDS_SPAN_CUTOFF_MS) {
     return `${hh}:${mm}`;
   }
   return `${hh}:${mm}:${zeroPad(date.getSeconds())}`;
