@@ -2,21 +2,30 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
-import { useSettings, migratePersistedSettings, FutureSettingsVersionError, SETTINGS_VERSION } from './useSettings';
+import {
+  useSettings,
+  useSettingsState,
+  migratePersistedSettings,
+  FutureSettingsVersionError,
+  SETTINGS_VERSION,
+} from './useSettings';
 
 interface RenderResult {
-  result: () => ReturnType<typeof useSettings>;
+  result: () => ReturnType<typeof useSettingsState>;
   rerender: () => void;
   unmount: () => void;
 }
 
+// The provider-less engine (useSettingsState) is what SettingsProvider mounts;
+// these tests pin its standalone behavior directly. useSettings() itself
+// requires a provider and is pinned in the last describe below.
 function renderUseSettings(): RenderResult {
-  let hookValue: ReturnType<typeof useSettings> | undefined;
+  let hookValue: ReturnType<typeof useSettingsState> | undefined;
   const container = document.createElement('div');
   let root: Root;
 
   function TestComponent() {
-    hookValue = useSettings();
+    hookValue = useSettingsState();
     return null;
   }
 
@@ -181,6 +190,31 @@ describe('persisted settings migration', () => {
       viewMode: 'default',
       windowSecs: 60,
     });
+  });
+});
+
+// useSettings() is the provider-required context hook. Without a provider it
+// must fail loudly instead of silently falling back: the old fallback called
+// a hook after an early return (a rules-of-hooks violation), so the hook count
+// differed between renders with and without a provider. This pin keeps the
+// thrown contract from being softened back into a fallback.
+describe('useSettings without a provider', () => {
+  it('throws with an actionable message', () => {
+    const container = document.createElement('div');
+    let root: Root;
+
+    function OrphanConsumer() {
+      useSettings();
+      return null;
+    }
+
+    expect(() => {
+      act(() => {
+        root = createRoot(container);
+        root.render(React.createElement(OrphanConsumer));
+      });
+    }).toThrow(/SettingsProvider/);
+    act(() => root.unmount());
   });
 });
 

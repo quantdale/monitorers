@@ -56,6 +56,12 @@ function frontend() {
   // the production typecheck so a test-side type error fails fast, before the
   // slower unit-test run and the production build.
   runNpm('frontend test-source typecheck', ['run', 'typecheck:test'], appRoot);
+  // React-hooks rules (rules-of-hooks + exhaustive-deps) via oxlint — the
+  // lint gate that closes the old "no linter enforces hooks rules" gap. It is
+  // cheap, so it runs before the unit tests and the build; a conditional hook
+  // call or a missing dependency fails the lane here. The rules it enforces
+  // are scoped in .oxlintrc.json (no other rule families are in gate scope).
+  runNpm('frontend React-hooks lint', ['run', 'lint'], appRoot);
   runNpm('frontend unit tests', ['test', '--', '--run'], appRoot);
   runNpm('frontend build', ['run', 'build'], appRoot);
 }

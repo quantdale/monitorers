@@ -11,6 +11,16 @@ import {
   persistSidebarCardOrder,
 } from './HardwareSidebar';
 import type { HardwareProfile } from '../hooks/useHardwareProfile';
+import { SettingsProvider } from '../hooks/useSettings';
+
+/** HardwareSidebar consumes useSettings(), which requires a SettingsProvider. */
+function renderSidebar(root: Root, props: React.ComponentProps<typeof HardwareSidebar>): void {
+  act(() => {
+    root.render(
+      React.createElement(SettingsProvider, null, React.createElement(HardwareSidebar, props))
+    );
+  });
+}
 
 function profile(overrides: Partial<HardwareProfile> = {}): HardwareProfile {
   return {
@@ -188,8 +198,8 @@ describe('HardwareSidebar (render)', () => {
 
     act(() => {
       root = createRoot(container);
-      root.render(React.createElement(HardwareSidebar, { open: true, profile: p, memTotalGb: null }));
     });
+    renderSidebar(root, { open: true, profile: p, memTotalGb: null });
 
     expect(container.textContent).toContain('Intel Core i7');
     expect(container.textContent).toContain('GeForce RTX 4050');
@@ -210,8 +220,8 @@ describe('HardwareSidebar (render)', () => {
 
     act(() => {
       root = createRoot(container);
-      root.render(React.createElement(HardwareSidebar, { open: true, profile: p, memTotalGb: null }));
     });
+    renderSidebar(root, { open: true, profile: p, memTotalGb: null });
 
     const ids = Array.from(container.querySelectorAll('[data-sb-id]'))
       .map((n) => n.getAttribute('data-sb-id'))
@@ -231,8 +241,8 @@ describe('HardwareSidebar (render)', () => {
 
     act(() => {
       root = createRoot(container);
-      root.render(React.createElement(HardwareSidebar, { open: true, profile: null, memTotalGb: null }));
     });
+    renderSidebar(root, { open: true, profile: null, memTotalGb: null });
 
     expect(container.textContent).toContain('Detecting hardware');
   });

@@ -148,7 +148,13 @@ const SettingsContext = createContext<SettingsContextValue | null>(null);
  * one store — a dashboard reorder and a sidebar reorder can't clobber each
  * other's writes from separate stale caches.
  */
-function useSettingsState(): SettingsContextValue {
+/**
+ * The provider-less settings engine: a full standalone settings state with its
+ * own load effect and save queue. This is `SettingsProvider`'s implementation
+ * and the seam unit tests use to pin settings behavior without mounting the
+ * provider. The app never calls it directly.
+ */
+export function useSettingsState(): SettingsContextValue {
   const [settings, setSettings] = useState<Settings>(DEFAULTS);
   const [store, setStore] = useState<Store | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -249,11 +255,20 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   return createElement(SettingsContext.Provider, { value }, children);
 }
 
+/**
+ * App-wide settings from the single `SettingsProvider` mounted in `main.tsx`.
+ *
+ * Throws without a provider, on purpose. The previous implementation fell
+ * back to a fresh `useSettingsState()` after an early return — a
+ * `rules-of-hooks` violation: the hook count differed between renders with
+ * and without a provider, so a consumer that ever rendered both ways would
+ * silently corrupt hook order. The `react/rules-of-hooks` gate now enforces
+ * this; failing loudly at the call site is the contract.
+ */
 export function useSettings(): SettingsContextValue {
   const context = useContext(SettingsContext);
-  if (context) return context;
-  // No provider in the tree (unit tests that pin the hook's standalone
-  // behavior). The app itself mounts SettingsProvider once, so all production
-  // consumers share a single store instance and a single save() path.
-  return useSettingsState();
+  if (!context) {
+    throw new Error('useSettings requires a <SettingsProvider> ancestor (mounted once in main.tsx)');
+  }
+  return context;
 }

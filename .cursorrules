@@ -51,6 +51,7 @@ If cargo clippy --all-targets --all-features -- -D warnings fails:
 Run from sys-monitor-tauri:
   npx tsc --noEmit
   npm run typecheck:test
+  npm run lint
   npm test -- --run
   npm run build
 
@@ -61,12 +62,17 @@ invocation in any lane has ever seen a test file. tsconfig.test.json owns
 src/** with its tests; e2e/tsconfig.sim.json owns e2e/** and src/sim/**.
 The three projects together cover every first-party .ts/.tsx in the repo.
 
-Frontend linting is currently NOT enforced: no ESLint (or other linter) is
-configured, there is no `lint` script, and no linter dev dependency exists.
-`typescript-eslint` cannot be adopted today — every published version
-declares `peer typescript ">=4.8.4 <6.1.0"` while this project is pinned to
-TypeScript 7 — so adopting it would require a `--force`/`--legacy-peer-deps`
-resolution. React-hooks rules are therefore a known gap, tracked as such.
+Frontend React-hooks linting IS enforced: `npm run lint` runs oxlint with a
+committed `.oxlintrc.json` that enables exactly `react/rules-of-hooks` and
+`react/exhaustive-deps` as errors over src/ and e2e/ (all other oxlint rule
+families are deliberately out of gate scope). The step lives in
+`scripts/verify.mjs`'s frontend lane, so CI's `frontend` job and
+`.husky/pre-push` enforce it. oxlint parses TypeScript natively, which is why
+this gate exists despite `typescript-eslint` being unadoptable (every
+published version declares `peer typescript ">=4.8.4 <6.1.0"` while this
+project is pinned to TypeScript 7). A React-hooks suppression must name the
+rule and state its reason in the comment; structural fixes (unconditional
+hooks, static complete dependency arrays) are the default.
 
 npm ci is run by CI but not required locally if node_modules exists.
 If node_modules is missing or package.json changed: run npm install.

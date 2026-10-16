@@ -24,6 +24,7 @@ npm test -- --run           # frontend tests (Vitest; count intentionally drifts
 npm run e2e                 # Playwright e2e — mock-data harness on the Vite dev server (count comes from the runner)
 npx tsc --noEmit            # frontend type check (production sources)
 npm run typecheck:test      # frontend type check for the Vitest sources (tsconfig.test.json)
+npm run lint                # React-hooks lint gate (oxlint: rules-of-hooks + exhaustive-deps)
 npm run sim:typecheck       # type check for the Playwright simulation platform + src/sim bridge
 
 cd src-tauri && cargo test                  # Rust tests (Cargo reports the current count)
@@ -43,7 +44,7 @@ The frontend lane audits **two scopes** and labels each one: the application sco
 
 Never commit with fmt/clippy/tsc/test failing. Fix clippy warnings rather than `#[allow(...)]`-ing them. Test counts are intentionally not hard-coded in documentation; use the command results as evidence.
 
-Three TypeScript projects own the source tree and between them type-check **every** first-party `.ts`/`.tsx`: `tsconfig.json` (production `src/**`, tests excluded), `tsconfig.test.json` (`src/**` **including** the Vitest sources — the only project that sees a test file), and `e2e/tsconfig.sim.json` (a shim extending `e2e/tsconfig.json`, so editors and language servers — which resolve the nearest `tsconfig.json`, not a sibling `*.sim.json` — find the `@types/node` these files need; it owns `e2e/**` + `src/sim/**`, including the simulation bridge's own tests). Frontend linting is **not** enforced: there is no ESLint config, `lint` script, or linter dev dependency, and `typescript-eslint` cannot be adopted while the repo is on TypeScript 7 (every published version declares `peer typescript ">=4.8.4 <6.1.0"`). React-hooks rules are a recorded gap.
+Three TypeScript projects own the source tree and between them type-check **every** first-party `.ts`/`.tsx`: `tsconfig.json` (production `src/**`, tests excluded), `tsconfig.test.json` (`src/**` **including** the Vitest sources — the only project that sees a test file), and `e2e/tsconfig.sim.json` (a shim extending `e2e/tsconfig.json`, so editors and language servers — which resolve the nearest `tsconfig.json`, not a sibling `*.sim.json` — find the `@types/node` these files need; it owns `e2e/**` + `src/sim/**`, including the simulation bridge's own tests). Frontend **React-hooks linting is enforced**: `npm run lint` runs oxlint 1.88 (pinned exact) with the committed `.oxlintrc.json`, which enables exactly `react/rules-of-hooks` and `react/exhaustive-deps` as errors over `src/` + `e2e/` — every other oxlint rule family is deliberately out of gate scope. The step runs inside `scripts/verify.mjs`'s frontend lane, so CI's `frontend` job and `.husky/pre-push` enforce it. Oxlint parses TypeScript natively, which is why this gate exists despite `typescript-eslint` being unadoptable on TypeScript 7 (every published version declares `peer typescript ">=4.8.4 <6.1.0"`). A hooks-lint suppression must name the rule and state its reason; structural fixes (unconditional hooks, static complete dependency arrays) are the default.
 
 ## Backend architecture (`src-tauri/src/`)
 

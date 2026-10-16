@@ -31,20 +31,23 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { Store: FakeStore };
 });
 
-import { useSettings, SettingsProvider } from './useSettings';
+// The standalone harness pins the provider-less engine (what SettingsProvider
+// mounts); the shared-instance describe below drives useSettings() through a
+// real SettingsProvider.
+import { useSettings, useSettingsState, SettingsProvider } from './useSettings';
 
 interface RenderResult {
-  result: () => ReturnType<typeof useSettings>;
+  result: () => ReturnType<typeof useSettingsState>;
   unmount: () => void;
 }
 
 function renderUseSettings(): RenderResult {
-  let hookValue: ReturnType<typeof useSettings> | undefined;
+  let hookValue: ReturnType<typeof useSettingsState> | undefined;
   const container = document.createElement('div');
   let root: Root;
 
   function TestComponent() {
-    hookValue = useSettings();
+    hookValue = useSettingsState();
     return null;
   }
 

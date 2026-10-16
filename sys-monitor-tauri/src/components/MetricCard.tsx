@@ -78,6 +78,12 @@ export function MetricCard({
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
+  // The channel the chart actually plots: the secondary series participates
+  // only when it is real (non-empty AND colored). Hoisted out of the memo so
+  // the dependency array is static and exhaustive-deps-checkable while keeping
+  // the identity rule below — when hasSecondary is false the secondary channel
+  // is not read at all, so its churn must not recompute identical points.
+  const secondarySeries = hasSecondary ? secondaryHistory : undefined;
 
   // Resampling a full ring (up to MAX_HISTORY=3600 samples) down to chart
   // points runs per card on every render. The channel arrays keep stable
@@ -102,7 +108,7 @@ export function MetricCard({
     const data = computeChartPoints({
       history: history!,
       timestamps,
-      secondaryHistory: hasSecondary ? secondaryHistory : undefined,
+      secondaryHistory: secondarySeries,
       maxPoints: MAX_CHART_POINTS,
     });
     return {
@@ -115,14 +121,7 @@ export function MetricCard({
         'data-chart-span-ms': data.length > 1 ? data[data.length - 1].t - data[0].t : 0,
       },
     };
-    // The dependency array is intentionally partial. `secondaryHistory` only
-    // participates when `hasSecondary` is true, so it is expressed as
-    // `hasSecondary ? secondaryHistory : undefined`: when hasSecondary is
-    // false the secondary channel is not read at all, and depending on the
-    // raw object would recompute identical data. There is no linter in this
-    // project enforcing exhaustive-deps, so this note is the record of intent —
-    // do not read a missing eslint-disable here as an oversight.
-  }, [history, hasSecondary ? secondaryHistory : undefined, timestamps]);
+  }, [hasChart, history, timestamps, secondarySeries]);
   const { data, metadata: chartMetadata } = chart;
 
   // List-view min/max scans the whole window per render; same identity-based skip.

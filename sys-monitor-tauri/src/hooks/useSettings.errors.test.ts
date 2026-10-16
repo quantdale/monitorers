@@ -32,20 +32,22 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { Store: FakeStore };
 });
 
-import { resolveStorePath, useSettings } from './useSettings';
+// The provider-less engine is the harness target: these tests pin load/error
+// behavior of the settings state itself, which is what SettingsProvider mounts.
+import { resolveStorePath, useSettingsState } from './useSettings';
 
 interface RenderResult {
-  result: () => ReturnType<typeof useSettings>;
+  result: () => ReturnType<typeof useSettingsState>;
   unmount: () => void;
 }
 
 function renderUseSettings(): RenderResult {
-  let hookValue: ReturnType<typeof useSettings> | undefined;
+  let hookValue: ReturnType<typeof useSettingsState> | undefined;
   const container = document.createElement('div');
   let root: Root;
 
   function TestComponent() {
-    hookValue = useSettings();
+    hookValue = useSettingsState();
     return null;
   }
 

@@ -51,9 +51,16 @@ const TIME_OPTIONS = WINDOW_SECS_OPTIONS.map((value) => ({
   label: TIME_OPTION_LABELS[value],
 }));
 
+// Stable identity for "no saved order yet": `settings.cardOrder ?? []` built a
+// fresh array every render while the value was null, which changed the
+// visibleCardOrder memo's dependency every render and rebuilt the whole card
+// (Recharts) tree on every scalar tick — exactly the churn that memo exists to
+// prevent. Module-level so the fallback has one identity forever.
+const EMPTY_CARD_ORDER: string[] = [];
+
 export default function App() {
   const { settings, save, loaded, error: settingsError, saveError } = useSettings();
-  const cardOrder = settings.cardOrder ?? [];
+  const cardOrder = settings.cardOrder ?? EMPTY_CARD_ORDER;
   const hiddenCardIds = useMemo(() => new Set(settings.hiddenCardIds), [settings.hiddenCardIds]);
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;

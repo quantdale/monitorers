@@ -18,6 +18,7 @@
     "sim:real": "cross-env SIM_LANE=real playwright test --config e2e/sim/playwright.config.ts",
     "verify:packaged": "playwright test --config e2e/qualify.playwright.config.ts",
     "sim:typecheck": "tsc -p e2e/tsconfig.sim.json --noEmit",
+    "lint": "oxlint src e2e",
     "audit:app": "npm audit --audit-level=high",
     "assert:webview2-policy-absent": "node scripts/assert-webview2-policy-absent.mjs",
     "verify:frontend": "node scripts/verify.mjs frontend",
@@ -50,6 +51,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "cross-env": "^10.1.0",
     "jsdom": "^30.1.1",
+    "oxlint": "1.88.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^4.1.11"
