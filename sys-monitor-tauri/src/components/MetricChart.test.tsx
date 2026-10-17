@@ -4,11 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { MetricChart } from './MetricChart';
 import type { ChartPoint } from '../chartPoints';
+import { chartAxisStroke, chartTickFill } from '../design/tokens';
 
-// The time axis must be a readable scale: explicit colors (the library default
-// gray measured ~2.90:1 on the #1e1e1e card surface, below both contrast
-// floors), precision that follows the visible span, and enough bottom margin
-// that the label baseline sits inside the fixed 140px chart box.
+// The time axis must be a readable scale: explicit token colors (the library
+// default gray measured ~2.90:1 on the old #1e1e1e card surface, below both
+// contrast floors), precision that follows the visible span, and enough
+// bottom margin that the label baseline sits inside the fixed 140px chart box.
 //
 // Recharts renders tick labels in a separate `recharts-xAxis-tick-labels`
 // layer (not inside `.recharts-xAxis`), so the queries below target
@@ -273,26 +274,26 @@ describe('time-axis styling', () => {
     container = null;
   });
 
-  it('paints tick text with the explicit #888, never the library default', () => {
+  it('paints tick text with the explicit token gray, never the library default', () => {
     container = renderChart(minuteAlignedPoints(59), true);
 
     const ticks = container.querySelectorAll('.recharts-cartesian-axis-tick-value');
     expect(ticks.length).toBeGreaterThan(1);
     for (const tick of ticks) {
-      expect(tick.getAttribute('fill')).toBe('#888');
+      expect(tick.getAttribute('fill')).toBe(chartTickFill);
       expect(tick.getAttribute('stroke')).toBe('none');
     }
   });
 
-  it('draws the axis and its tick lines with the #7a7a7a stroke', () => {
+  it('draws the axis and its tick lines with the token stroke', () => {
     container = renderChart(minuteAlignedPoints(59), true);
 
     const axisLine = container.querySelector('.recharts-cartesian-axis-line');
-    expect(axisLine?.getAttribute('stroke')).toBe('#7a7a7a');
+    expect(axisLine?.getAttribute('stroke')).toBe(chartAxisStroke);
     const tickLines = container.querySelectorAll('.recharts-cartesian-axis-tick-line');
     expect(tickLines.length).toBeGreaterThan(1);
     for (const line of tickLines) {
-      expect(line.getAttribute('stroke')).toBe('#7a7a7a');
+      expect(line.getAttribute('stroke')).toBe(chartAxisStroke);
     }
   });
 

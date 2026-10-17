@@ -19,9 +19,15 @@ import {
   gpuVendorBadgeStyle,
   gpuVendorLabel,
 } from './formatters';
-
-const DISK_COLORS = ['#e88246', '#c46be8', '#e8d446', '#46e8d4'];
-const GPU_COLORS = ['#64b4ff', '#78c888', '#e8a050', '#c080e0'];
+import {
+  cpuSeries,
+  diskSeries,
+  gpuSeries,
+  memorySeries,
+  netDownSeries,
+  netUpSeries,
+  textMuted,
+} from '../design/tokens';
 
 /** Hoisted so the network card passes an identity-stable yDomain to the
  * memoized MetricChart (see MetricChart.tsx for why this matters). */
@@ -45,7 +51,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         value={formatPercent(metrics.latestCpu)}
         history={metrics.cpu}
         timestamps={metrics.timestamps}
-        color="#4699e8"
+        color={cpuSeries}
         badge={<span style={badgeStyle}>{formatTempC(metrics.cpu_temp_c)}</span>}
         viewMode={viewMode}
       />
@@ -61,7 +67,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         value={formatPercent(metrics.mem.at(-1))}
         history={metrics.mem}
         timestamps={metrics.timestamps}
-        color="#4ed87a"
+        color={memorySeries}
         badge={
           <span style={badgeStyle}>
             {`${formatGigabytes(metrics.mem_used_gb)} / ${formatGigabytes(metrics.mem_total_gb)} GB`}
@@ -83,14 +89,15 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         key={id}
         id={id}
         title={`Disk ${disk.key}`}
-        value={`Active Time ${formatPercent(disk.values.at(-1))}`}
+        valueLabel="Active Time"
+        value={formatPercent(disk.values.at(-1))}
         history={disk.values}
         timestamps={metrics.timestamps}
-        color={DISK_COLORS[diskIdx % DISK_COLORS.length]}
+        color={diskSeries[diskIdx % diskSeries.length]}
         listViewValue={
           <>
             <span>Active Time {formatPercent(disk.values.at(-1))}</span>
-            <span style={{ color: '#888', marginLeft: 4 }}>{avgStr}</span>
+            <span style={{ color: textMuted, marginLeft: 4 }}>{avgStr}</span>
           </>
         }
         badge={
@@ -124,27 +131,27 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         history={metrics.net_recv}
         secondaryHistory={metrics.net_sent}
         timestamps={metrics.timestamps}
-        color="#50d8f0"
-        secondaryColor="#e88a50"
+        color={netDownSeries}
+        secondaryColor={netUpSeries}
         yDomain={Y_DOMAIN_AUTO}
         badge={
           <>
-            <span style={{ ...badgeStyle, border: '1px solid rgba(80, 216, 240, 0.55)' }}>↓ {formatThroughput(recv)}</span>
-            <span style={{ ...badgeStyle, border: '1px solid rgba(232, 138, 80, 0.55)' }}>↑ {formatThroughput(sent)}</span>
+            <span style={{ ...badgeStyle, border: `1px solid ${netDownSeries}66` }}>↓ {formatThroughput(recv)}</span>
+            <span style={{ ...badgeStyle, border: `1px solid ${netUpSeries}66` }}>↑ {formatThroughput(sent)}</span>
           </>
         }
         listViewValue={
           <>
-            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>↓ {formatThroughput(recv)}</span>
-            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 13, fontFamily: 'monospace', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>↑ {formatThroughput(sent)}</span>
+            <span style={{ ...badgeStyle, border: `1px solid ${netDownSeries}66` }}>↓ {formatThroughput(recv)}</span>
+            <span style={{ ...badgeStyle, border: `1px solid ${netUpSeries}66` }}>↑ {formatThroughput(sent)}</span>
           </>
         }
         listViewMinMax={
           <>
-            <span style={{ border: '1px solid rgba(80, 216, 240, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+            <span style={{ ...badgeStyle, border: `1px solid ${netDownSeries}66` }}>
               ↓ {formatThroughput(minR)} – {formatThroughput(maxR)}
             </span>
-            <span style={{ border: '1px solid rgba(232, 138, 80, 0.55)', display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: 11, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+            <span style={{ ...badgeStyle, border: `1px solid ${netUpSeries}66` }}>
               ↑ {formatThroughput(minS)} – {formatThroughput(maxS)}
             </span>
           </>
@@ -178,7 +185,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         value={formatPercent(gpu.latest)}
         history={gpu.values}
         timestamps={metrics.timestamps}
-        color={GPU_COLORS[gpuIdx % GPU_COLORS.length]}
+        color={gpuSeries[gpuIdx % gpuSeries.length]}
         badge={
           <>
             <span style={gpuVendorBadgeStyle(gpu.vendor)}>

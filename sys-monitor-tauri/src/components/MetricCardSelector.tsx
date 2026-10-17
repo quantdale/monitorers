@@ -1,4 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
+import {
+  accent,
+  controlShell,
+  fontSans,
+  radius,
+  shadowPopover,
+  surface,
+  surfaceHover,
+  textPrimary,
+  type,
+} from '../design/tokens';
 
 interface Item {
   id: string;
@@ -57,15 +68,14 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
         aria-expanded={open}
         aria-controls="metric-card-selector-panel"
         style={{
-          padding: '4px 12px',
-          borderRadius: 4,
-          border: '1px solid #444',
-          background: '#1e1e1e',
-          color: '#fff',
-          cursor: 'pointer',
-          fontSize: 12,
+          ...controlShell,
+          padding: '5px 12px',
+          fontSize: type.label,
           fontWeight: 600,
-          fontFamily: 'inherit',
+          fontFamily: fontSans,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
         }}
       >
         Metrics ({visibleCount}/{items.length}) ▾
@@ -82,16 +92,16 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
             position: 'absolute',
             top: '100%',
             right: 0,
-            marginTop: 4,
-            minWidth: 200,
+            marginTop: 6,
+            minWidth: 220,
             maxHeight: 320,
             overflowY: 'auto',
-            background: '#1e1e1e',
-            border: '1px solid #444',
-            borderRadius: 6,
-            padding: 8,
+            background: surface,
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: radius.card,
+            padding: 6,
             zIndex: 100,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            boxShadow: shadowPopover,
           }}
         >
           {items.map((item) => {
@@ -103,18 +113,21 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '6px 8px',
+                  padding: '7px 8px',
                   cursor: 'pointer',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  color: '#fff',
+                  borderRadius: radius.control,
+                  fontSize: type.body,
+                  fontFamily: fontSans,
+                  color: textPrimary,
                 }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = surfaceHover; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
                 <input
                   type="checkbox"
                   checked={isVisible}
                   onChange={(e) => onToggle(item.id, e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: '#4699e8' }}
+                  style={{ cursor: 'pointer', accentColor: accent }}
                 />
                 <span style={{ flex: 1 }}>{item.label}</span>
               </label>

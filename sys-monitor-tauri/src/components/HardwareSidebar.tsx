@@ -25,20 +25,29 @@ import type { HardwareProfile, HardwareProfileState } from '../hooks/useHardware
 import { useSettings } from '../hooks/useSettings';
 import { SortableSidebarCard } from './SortableSidebarCard';
 import { formatGigabytes } from '../cards/formatters';
+import {
+  cardShell,
+  dangerText,
+  divider,
+  fontSans,
+  surfaceSunken,
+  textMuted,
+  textPrimary,
+  textSecondary,
+  type,
+} from '../design/tokens';
 
 const SIDEBAR_WIDTH = 220;
 const cardStyle: React.CSSProperties = {
-  background: '#1e1e1e',
-  border: '1px solid #444',
-  borderRadius: 8,
+  ...cardShell,
   padding: 12,
 };
 const titleStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: type.micro,
   fontWeight: 600,
-  color: '#888',
+  color: textMuted,
   textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
+  letterSpacing: '0.06em',
   marginBottom: 8,
   display: 'flex',
   alignItems: 'center',
@@ -48,11 +57,11 @@ const rowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  fontSize: 12,
+  fontSize: type.label,
   marginTop: 4,
 };
-const labelStyle: React.CSSProperties = { color: '#888' };
-const valueStyle: React.CSSProperties = { color: '#fff', fontWeight: 500 };
+const labelStyle: React.CSSProperties = { color: textMuted };
+const valueStyle: React.CSSProperties = { color: textPrimary, fontWeight: 500 };
 
 function cpuVendorDisplay(v: string): string {
   const lower = v.toLowerCase();
@@ -229,13 +238,13 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Cpu size={14} color="#888" />
+            <Cpu size={14} color={textSecondary} />
             Processor
           </div>
-          <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={{ marginBottom: 6 }}>
-              <div style={{ color: '#888', fontSize: 11, marginBottom: 2 }}>Model</div>
-              <div style={{ color: '#fff', fontSize: 12, fontWeight: 600, wordBreak: 'break-word', lineHeight: 1.4 }}>
+              <div style={{ color: textMuted, fontSize: type.micro, marginBottom: 2 }}>Model</div>
+              <div style={{ color: textPrimary, fontSize: type.label, fontWeight: 600, wordBreak: 'break-word', lineHeight: 1.4 }}>
                 {profile.cpu_name}
               </div>
             </div>
@@ -256,10 +265,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Monitor size={14} color="#888" />
+            <Monitor size={14} color={textSecondary} />
             {profile.gpus.length > 1 ? `Graphics (${idx + 1} of ${profile.gpus.length})` : 'Graphics'}
           </div>
-          <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Name</span>
               <span style={{ ...valueStyle, maxWidth: '60%', textAlign: 'right' }}>{gpu.name}</span>
@@ -281,10 +290,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <MemoryStick size={14} color="#888" />
+            <MemoryStick size={14} color={textSecondary} />
             Memory
           </div>
-          <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Total RAM</span>
               <span style={valueStyle}>
@@ -305,10 +314,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <HardDrive size={14} color="#888" />
+            <HardDrive size={14} color={textSecondary} />
             Storage
           </div>
-          <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Name</span>
               <span style={{ ...valueStyle, maxWidth: '60%', textAlign: 'right' }}>{disk.name}</span>
@@ -326,10 +335,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Network size={14} color="#888" />
+            <Network size={14} color={textSecondary} />
             Network
           </div>
-          <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Interface</span>
               <span style={valueStyle}>Monitoring active interface</span>
@@ -354,10 +363,11 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         // and the tab order. Collapsing by width alone leaves both reachable.
         visibility: open ? 'visible' : 'hidden',
         transition: 'width 250ms ease, visibility 250ms ease',
-        background: '#0f0f0f',
-        borderRight: open ? '1px solid #444' : 'none',
+        background: surfaceSunken,
+        borderRight: open ? divider : 'none',
         display: 'flex',
         flexDirection: 'column',
+        fontFamily: fontSans,
       }}
     >
       <div
@@ -372,17 +382,17 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         }}
       >
         {profileError && (
-          <div role="alert" style={{ color: '#ffd6d3', fontSize: 12, padding: 8 }}>
+          <div role="alert" style={{ color: dangerText, fontSize: type.label, padding: 8 }}>
             <div>Hardware detection failed — {profileError}</div>
             {profileState && <button type="button" onClick={profileState.retry} style={{ marginTop: 8 }}>Retry</button>}
           </div>
         )}
         {profile === null && loading ? (
-          <div role="status" aria-live="polite" style={{ color: '#888', fontSize: 12, padding: 8 }}>
+          <div role="status" aria-live="polite" style={{ color: textMuted, fontSize: type.label, padding: 8 }}>
             Detecting hardware…
           </div>
         ) : profile === null ? (
-          <div role="status" style={{ color: '#888', fontSize: 12, padding: 8 }}>
+          <div role="status" style={{ color: textMuted, fontSize: type.label, padding: 8 }}>
             No hardware profile is available yet.
           </div>
         ) : profile !== null ? (

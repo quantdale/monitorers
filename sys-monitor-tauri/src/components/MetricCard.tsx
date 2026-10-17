@@ -6,6 +6,18 @@ import { computeChartPoints, type ChartPoint } from '../chartPoints';
 import { formatPercentRange } from '../cards/formatters';
 import { buildDualSeriesChartLabel, buildSingleSeriesChartLabel } from '../cards/chartLabels';
 import type { MetricValue } from '../types/metrics';
+import {
+  cardShell,
+  divider,
+  fontMono,
+  radius,
+  surfaceSunken,
+  textFaint,
+  textMuted,
+  textPrimary,
+  textSecondary,
+  type,
+} from '../design/tokens';
 
 const MAX_CHART_POINTS = 300;
 
@@ -20,7 +32,7 @@ const DEFAULT_Y_DOMAIN: [number, number | 'auto'] = [0, 100];
 const MetricChart = lazy(() => import('./MetricChart').then((m) => ({ default: m.MetricChart })));
 
 /** Accessible placeholder while the chart chunk loads; reserves the exact
- * chart box so nothing shifts when the real chart mounts. #888 on #1a1a1a
+ * chart box so nothing shifts when the real chart mounts. The muted token
  * keeps the status text above the WCAG AA 4.5:1 bar. */
 function ChartLoading({ height }: { height: number | '100%' }) {
   return (
@@ -29,7 +41,7 @@ function ChartLoading({ height }: { height: number | '100%' }) {
       aria-label="Rendering chart"
       style={{ width: '100%', height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
     >
-      <span style={{ color: '#888', fontSize: 11, fontFamily: 'monospace' }}>Rendering chart…</span>
+      <span style={{ color: textMuted, fontSize: type.micro, fontFamily: fontMono }}>Rendering chart…</span>
     </div>
   );
 }
@@ -43,6 +55,11 @@ interface Props {
   id: string;
   title: string;
   value: string;
+  /** Optional small label rendered just before the big value ("Active Time
+   *  42.0%" splits into a muted label + a large number, the label-over-value
+   *  hierarchy from the reference lock). The trailing space is part of the
+   *  label text so card textContent still reads `"Active Time 42.0%"`. */
+  valueLabel?: string;
   history?: MetricValue[];
   timestamps?: number[];
   color: string;
@@ -63,6 +80,7 @@ export function MetricCard({
   id,
   title,
   value,
+  valueLabel,
   history,
   timestamps,
   color,
@@ -146,8 +164,6 @@ export function MetricCard({
       : buildSingleSeriesChartLabel(title, latest?.v ?? null, listMinMax.min, listMinMax.max);
   }, [data, hasSecondary, title, listMinMax.min, listMinMax.max]);
 
-  const borderStyle = { border: '1px solid #444', padding: '4px 8px', borderRadius: 4 };
-
   const dragHandle = (
     <button
       type="button"
@@ -156,7 +172,7 @@ export function MetricCard({
       {...(dragHandleProps?.attributes ?? {})}
       {...(dragHandleProps?.listeners ?? {})}
       aria-label={`Reorder ${title} card`}
-      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: '#7a7a7a', userSelect: 'none', background: 'transparent', border: 0 }}
+      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: textFaint, userSelect: 'none', background: 'transparent', border: 0 }}
       title={`Reorder ${title} card`}
     >
       <span aria-hidden="true">⠿</span>
@@ -173,8 +189,7 @@ export function MetricCard({
         className="metric-card"
         data-testid={`metric-card-${id}`}
         style={{
-          background: '#1e1e1e',
-          borderRadius: 8,
+          ...cardShell,
           // Grows instead of clipping: a fixed 50px height with overflow:hidden
           // cut the network card's wrapped range pills off entirely (measured
           // scrollHeight 72 > clientHeight 50 at a 390px viewport).
@@ -208,11 +223,11 @@ export function MetricCard({
             overflow: 'hidden',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 13, fontFamily: 'monospace', color: '#fff', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: type.body, fontFamily: fontMono, color: textPrimary, gap: 8 }}>
             <span
               data-testid={`metric-title-${id}`}
               title={title}
-              style={{ fontWeight: 600, minWidth: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              style={{ color: textSecondary, fontWeight: 600, minWidth: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             >{title}</span>
             {/* Not a flex row: inline content reflows (wrapping at spaces) when
                 the panel is narrow, so the value shrinks instead of overflowing
@@ -221,20 +236,21 @@ export function MetricCard({
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {typeof displayMinMax === 'string' ? (
-              <span style={{ fontSize: 11, color: '#888', fontFamily: 'monospace' }}>{displayMinMax}</span>
+              <span style={{ fontSize: type.micro, color: textMuted, fontFamily: fontMono }}>{displayMinMax}</span>
             ) : (
               displayMinMax
             )}
           </div>
         </div>
 
-        {/* Right panel — chart with left border and distinct background */}
+        {/* Right panel — chart inset on a sunken well, separated by a hairline */}
         <div
           style={{
             flex: '1 1 45%',
             minWidth: 120,
-            borderLeft: '1px solid #333',
-            background: '#1a1a1a',
+            borderLeft: divider,
+            background: surfaceSunken,
+            borderRadius: `0 ${radius.card}px ${radius.card}px 0`,
             padding: '4px 0',
           }}
         >
@@ -265,9 +281,8 @@ export function MetricCard({
       className="metric-card"
       data-testid={`metric-card-${id}`}
       style={{
-        background: '#1e1e1e',
-        borderRadius: 8,
-        padding: '12px 16px',
+        ...cardShell,
+        padding: '14px 16px 12px',
         opacity: isDragging ? 0.5 : 1,
         display: 'flex',
         flexDirection: 'column',
@@ -281,35 +296,40 @@ export function MetricCard({
             flexWrap: 'wrap',
             alignItems: 'center',
             gap: 8,
-            marginBottom: hasChart ? 6 : 0,
+            marginBottom: hasChart ? 8 : 0,
             flex: 1,
           }}
         >
           <span
             data-testid={`metric-title-${id}`}
             style={{
-              color: '#fff',
-              fontSize: 13,
+              color: textSecondary,
+              fontSize: type.label,
               fontWeight: 600,
-              fontFamily: 'monospace',
-              ...borderStyle,
+              letterSpacing: 0.2,
             }}
           >
             {title}
           </span>
           {value !== '' && (
-            <span
-              style={{
-                color: '#fff',
-                fontSize: 13,
-                fontWeight: 600,
-                fontFamily: 'monospace',
-                border: '1px solid #444',
-                padding: '4px 8px',
-                borderRadius: 4,
-              }}
-            >
-              {value}
+            <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+              {valueLabel !== undefined && (
+                <span style={{ color: textMuted, fontSize: type.label, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {valueLabel}{' '}
+                </span>
+              )}
+              <span
+                style={{
+                  color: textPrimary,
+                  fontSize: type.metric,
+                  fontWeight: 600,
+                  fontFamily: fontMono,
+                  letterSpacing: '-0.02em',
+                  lineHeight: 1.1,
+                }}
+              >
+                {value}
+              </span>
             </span>
           )}
           {badge && (
@@ -317,9 +337,10 @@ export function MetricCard({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8,
+                gap: 6,
                 flexWrap: 'wrap',
                 minWidth: 0,
+                marginLeft: 'auto',
               }}
             >
               {badge}

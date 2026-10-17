@@ -1,4 +1,13 @@
 import { Component, ReactNode } from 'react';
+import {
+  accent,
+  border,
+  cardShell,
+  fontSans,
+  radius,
+  textMuted,
+  type,
+} from '../design/tokens';
 
 interface Props {
   children: ReactNode;
@@ -57,12 +66,11 @@ export class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) return this.props.fallback;
       return (
         <div style={{
+          ...cardShell,
           padding: '12px 16px',
-          background: '#1e1e1e',
-          border: '1px solid #444',
-          borderRadius: 6,
-          color: '#888',
-          fontSize: 13,
+          color: textMuted,
+          fontSize: type.body,
+          fontFamily: fontSans,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -73,13 +81,13 @@ export class ErrorBoundary extends Component<Props, State> {
             type="button"
             onClick={this.handleRetry}
             style={{
-              padding: '2px 8px',
-              borderRadius: 4,
-              border: '1px solid #444',
+              padding: '3px 10px',
+              borderRadius: radius.control,
+              border,
               background: 'transparent',
-              color: '#4699e8',
+              color: accent,
               cursor: 'pointer',
-              fontSize: 12,
+              fontSize: type.label,
             }}
           >
             Retry

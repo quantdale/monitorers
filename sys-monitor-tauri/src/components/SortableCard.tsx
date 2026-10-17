@@ -8,6 +8,8 @@ interface Props {
   id: string;
   title: string;
   value: string;
+  /** Optional small label before the big value (see MetricCard.valueLabel). */
+  valueLabel?: string;
   history?: MetricValue[];
   timestamps?: number[];
   color: string;

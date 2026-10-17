@@ -1,4 +1,12 @@
 import type { CSSProperties } from 'react';
+import {
+  border,
+  fontMono,
+  radius,
+  textPrimary,
+  textSecondary,
+  type,
+} from '../design/tokens';
 
 export function formatThroughput(kb: number | null | undefined): string {
   if (kb == null || !Number.isFinite(kb) || kb < 0) return '—';
@@ -94,32 +102,36 @@ export function gpuVendorLabel(vendor: string): string {
   return 'GPU';
 }
 
+/** Quiet metadata chip: telemetry readings sit on the card as small mono
+ *  pills, never as bordered form fields (the old chip look). */
 export const badgeStyle: CSSProperties = {
-  border: '1px solid #444',
-  padding: '4px 8px',
-  borderRadius: 4,
-  fontSize: 13,
-  fontFamily: 'monospace',
-  color: '#fff',
-  fontWeight: 600,
+  background: 'rgba(255, 255, 255, 0.05)',
+  border,
+  padding: '3px 8px',
+  borderRadius: radius.chip,
+  fontSize: type.micro,
+  fontFamily: fontMono,
+  color: textSecondary,
+  fontWeight: 500,
+  whiteSpace: 'nowrap',
 };
 
 export function gpuVendorBadgeStyle(vendor: string): CSSProperties {
-  let border = '#555';
-  let background = 'rgba(255,255,255,0.04)';
-  let color = '#ddd';
+  let border = '1px solid rgba(255, 255, 255, 0.12)';
+  let background = 'rgba(255, 255, 255, 0.05)';
+  let color = textPrimary;
   if (vendor === 'nvidia') {
-    border = 'rgba(46, 204, 113, 0.7)';
-    background = 'rgba(46, 204, 113, 0.08)';
-    color = '#c8f7c5';
+    border = '1px solid rgba(46, 204, 113, 0.45)';
+    background = 'rgba(46, 204, 113, 0.12)';
+    color = '#8FE9B7';
   } else if (vendor === 'intel') {
-    border = 'rgba(52, 152, 219, 0.7)';
-    background = 'rgba(52, 152, 219, 0.08)';
-    color = '#d0e9ff';
+    border = '1px solid rgba(52, 152, 219, 0.45)';
+    background = 'rgba(52, 152, 219, 0.12)';
+    color = '#9FD1F7';
   } else if (vendor === 'amd') {
-    border = 'rgba(231, 76, 60, 0.7)';
-    background = 'rgba(231, 76, 60, 0.08)';
-    color = '#ffd6d3';
+    border = '1px solid rgba(231, 76, 60, 0.45)';
+    background = 'rgba(231, 76, 60, 0.12)';
+    color = '#FFB0A8';
   }
   return {
     ...badgeStyle,

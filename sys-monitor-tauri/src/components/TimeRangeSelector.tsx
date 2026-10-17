@@ -1,3 +1,5 @@
+import { controlShell, fontSans, type } from '../design/tokens';
+
 interface Option {
   label: string;
   value: number;
@@ -16,19 +18,16 @@ export function TimeRangeSelector({ options, value, onChange }: Props) {
       onChange={(e) => onChange(Number(e.target.value))}
       aria-label="History time range"
       style={{
-        padding: '4px 12px',
-        borderRadius: 4,
-        border: '1px solid #444',
-        background: '#1e1e1e',
-        color: '#fff',
-        cursor: 'pointer',
-        fontSize: 12,
+        ...controlShell,
+        padding: '5px 10px',
+        fontSize: type.label,
         fontWeight: 600,
-        fontFamily: 'inherit',
+        fontFamily: fontSans,
+        cursor: 'pointer',
       }}
     >
       {options.map((opt) => (
-        <option key={opt.value} value={opt.value} style={{ background: '#1e1e1e', color: '#fff' }}>
+        <option key={opt.value} value={opt.value} style={{ background: '#15181E', color: '#F2F4F8' }}>
           {opt.label}
         </option>
       ))}

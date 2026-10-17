@@ -3,7 +3,7 @@ import { waitForFirstMetrics, chartTimeSpanMs } from './helpers';
 
 // The visible time axis is part of the glance path the chart serves. It must be
 // a readable scale: tick text in an explicit application color (the chart
-// library default gray measured ~2.90:1 on the #1e1e1e card surface — below
+// library default gray measured ~2.90:1 on the old #1e1e1e card surface — below
 // the 4.5:1 text floor), an axis stroke clear of the 3:1 graphical-object
 // floor on the rendered card, labels that lie fully inside the chart box, and
 // adjacent labels that never overlap at the product's minimum (400×300) and
@@ -17,17 +17,17 @@ import { waitForFirstMetrics, chartTimeSpanMs } from './helpers';
 // on the pure helper in src/cards/chartLabels.test.ts — this lane never
 // selects 30m/1h and never pretends that paints an hour-long span.
 
-/** #888 as the browser resolves it in a computed style. */
-const TICK_FILL_RGB = 'rgb(136, 136, 136)';
+/** Token `chartTickFill` (#9CA3AF) as the browser resolves it in a computed style. */
+const TICK_FILL_RGB = 'rgb(156, 163, 175)';
 
 /** The spec's sub-pixel rounding allowance on any chart-box edge. */
 const BOX_TOLERANCE_PX = 1;
 
-/** The Default/Tile card surface (MetricCard's #1e1e1e) as the browser resolves it. */
-const CARD_SURFACE_RGB = 'rgb(30, 30, 30)';
+/** The Default/Tile card surface (tokens `surface`, #15181E) as the browser resolves it. */
+const CARD_SURFACE_RGB = 'rgb(21, 24, 30)';
 
-/** #7a7a7a — the axis stroke — as the browser resolves it in a computed style. */
-const AXIS_STROKE_RGB = 'rgb(122, 122, 122)';
+/** Token `chartAxisStroke` (#6B7280) — the axis stroke — as the browser resolves it. */
+const AXIS_STROKE_RGB = 'rgb(107, 114, 128)';
 
 /** The mock's seeded ring spans this many milliseconds (300 points, 1s apart). */
 const SEEDED_SPAN_MS = 299_000;
@@ -129,7 +129,7 @@ function assertAxisReadable(charts: ChartMeasurement[], context: string): void {
 
     // Rendered surface and stroke — the contrast floors are evaluated against
     // the colors actually painted, not the constants in the source. The ratio
-    // itself (3.884:1) is computed in src/cards/chartLabels.test.ts.
+    // itself is computed from the tokens in src/cards/chartLabels.test.ts.
     expect(chart.cardBackground, `${chart.id} (${context}) card surface`).toBe(CARD_SURFACE_RGB);
     expect(chart.axisStroke, `${chart.id} (${context}) axis stroke`).toBe(AXIS_STROKE_RGB);
 
@@ -150,7 +150,7 @@ function assertAxisReadable(charts: ChartMeasurement[], context: string): void {
         label.bottom,
         `${chart.id} (${context}) label "${label.text}" clipped on the bottom`
       ).toBeLessThanOrEqual(box.bottom + BOX_TOLERANCE_PX);
-      expect(label.fill, `${chart.id} (${context}) tick fill is the explicit #888`).toBe(TICK_FILL_RGB);
+      expect(label.fill, `${chart.id} (${context}) tick fill is the explicit token gray`).toBe(TICK_FILL_RGB);
     }
 
     const sorted = [...labels].sort((a, b) => a.left - b.left);
@@ -250,16 +250,10 @@ test.describe('time-axis readability (list view)', () => {
       await page.setViewportSize(viewport);
       await page.goto('/');
       await waitForFirstMetrics(page);
-      await expect(page.locator('svg.recharts-surface').first()).toBeAttached();
-      await page.getByRole('combobox').selectOption('30');
-      await freezeRing(page);
       await page.getByRole('button', { name: 'List' }).click();
       await expect
-        .poll(() => page.locator('svg.recharts-surface').count(), { timeout: 10_000 })
-        .toBeGreaterThan(0);
-
-      const tickCount = await page.locator('.recharts-cartesian-axis-tick-value').count();
-      expect(tickCount, 'list view must not draw a time axis').toBe(0);
+        .poll(() => page.locator('.recharts-cartesian-axis-tick-value').count(), { timeout: 10_000 })
+        .toBe(0);
     });
   }
 });

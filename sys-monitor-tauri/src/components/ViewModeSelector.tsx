@@ -1,4 +1,13 @@
 import type { ViewMode } from '../utils';
+import {
+  accentTint,
+  controlShell,
+  fontSans,
+  radius,
+  textMuted,
+  textPrimary,
+  type,
+} from '../design/tokens';
 
 interface Props {
   value: ViewMode;
@@ -11,9 +20,21 @@ const MODES: { key: ViewMode; label: string }[] = [
   { key: 'list',    label: 'List' },
 ];
 
+/** Segmented control (Polar's time-filter pattern): one quiet shell, the
+ *  active mode filled with the accent tint. Keeps the role="group"/aria-pressed
+ *  contract the accessibility specs assert. */
 export function ViewModeSelector({ value, onChange }: Props) {
   return (
-    <div role="group" aria-label="Dashboard view mode" style={{ display: 'flex', gap: 6 }}>
+    <div
+      role="group"
+      aria-label="Dashboard view mode"
+      style={{
+        ...controlShell,
+        display: 'flex',
+        gap: 2,
+        padding: 2,
+      }}
+    >
       {MODES.map(({ key, label }) => {
         const active = key === value;
         return (
@@ -23,15 +44,16 @@ export function ViewModeSelector({ value, onChange }: Props) {
             aria-pressed={active}
             onClick={() => onChange(key)}
             style={{
-              padding: '4px 12px',
-              borderRadius: 4,
-              border: active ? '1px solid #4699e8' : '1px solid #444',
-              background: active ? 'rgba(70, 153, 232, 0.2)' : 'transparent',
-              color: active ? '#4699e8' : '#888',
+              padding: '3px 12px',
+              borderRadius: radius.control - 2,
+              border: 'none',
+              background: active ? accentTint : 'transparent',
+              color: active ? textPrimary : textMuted,
               cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: active ? 600 : 400,
-              transition: 'all 0.15s ease',
+              fontSize: type.label,
+              fontFamily: fontSans,
+              fontWeight: active ? 600 : 500,
+              transition: 'background 0.15s ease, color 0.15s ease',
             }}
           >
             {label}

@@ -1,3 +1,7 @@
+/* Global base layer for the design system (src/design/tokens.ts owns the
+ * palette). A plain global stylesheet is CSP-safe ('self'); everything
+ * component-specific stays inline styles per repo convention. */
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -6,33 +10,38 @@
 
 html, body, #root {
   height: 100%;
-  background: #141414;
+  background: #0A0C10;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
-  color: #fff;
+  text-rendering: optimizeLegibility;
+  color: #F2F4F8;
 }
 
-/* Remove default button styles so TimeRangeSelector can fully control them */
+/* Remove default button styles so the token control chrome fully controls them */
 button {
   font-family: inherit;
   cursor: pointer;
   outline: none;
+  border: none;
+  background: none;
+  color: inherit;
 }
 button:focus-visible {
-  outline: 2px solid #4699e8;
+  outline: 2px solid #4D8DFF;
   outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* Same focus treatment for the window-time selector — the inline styles on
-   the <select> must not set outline: none, or this rule can't take over */
+ * the <select> must not set outline: none, or this rule can't take over */
 select {
   outline: none;
 }
 select:focus-visible {
-  outline: 2px solid #4699e8;
+  outline: 2px solid #4D8DFF;
   outline-offset: 2px;
 }
 
@@ -53,8 +62,17 @@ select:focus-visible {
 }
 
 .sidebar-drag-handle:focus-visible {
-  outline: 2px solid #4699e8;
+  outline: 2px solid #4D8DFF;
   outline-offset: 2px;
+}
+
+/* Cards lift gently on hover — the one motion cue in the shell */
+.metric-card {
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.metric-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -66,17 +84,18 @@ select:focus-visible {
   }
 }
 
-/* Scrollbar styling for dark theme */
+/* Scrollbar styling for the dark canvas */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #444;
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: rgba(255, 255, 255, 0.22);
 }

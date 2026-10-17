@@ -34,6 +34,31 @@ import {
 } from './cardIdentity';
 import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
 import { PanelLeft } from 'lucide-react';
+import {
+  accent,
+  border,
+  controlShell,
+  danger,
+  dangerBorder,
+  dangerText,
+  dangerTint,
+  fontSans,
+  ok,
+  okBorder,
+  okText,
+  okTint,
+  pageBg,
+  radius,
+  surfaceSunken,
+  textMuted,
+  textPrimary,
+  textSecondary,
+  type,
+  warn,
+  warnBorder,
+  warnText,
+  warnTint,
+} from './design/tokens';
 
 // Labels for the legal history-window sizes (values come from WINDOW_SECS_OPTIONS
 // in useSettings.ts, the single source of truth for what windowSecs is valid).
@@ -57,6 +82,44 @@ const TIME_OPTIONS = WINDOW_SECS_OPTIONS.map((value) => ({
 // (Recharts) tree on every scalar tick — exactly the churn that memo exists to
 // prevent. Module-level so the fallback has one identity forever.
 const EMPTY_CARD_ORDER: string[] = [];
+
+// Collector-state → status pill presentation (the glance-layer counterpart to
+// the banners below; the banners keep their testids and live-region semantics).
+const STATUS_DOT: Record<string, string> = {
+  starting: accent,
+  healthy: ok,
+  recovering: warn,
+  failed: danger,
+  stopping: textMuted,
+};
+const STATUS_TEXT: Record<string, string> = {
+  starting: textSecondary,
+  healthy: okText,
+  recovering: warnText,
+  failed: dangerText,
+  stopping: textMuted,
+};
+const STATUS_TINT: Record<string, string> = {
+  starting: surfaceSunken,
+  healthy: okTint,
+  recovering: warnTint,
+  failed: dangerTint,
+  stopping: surfaceSunken,
+};
+const STATUS_BORDER: Record<string, string> = {
+  starting: border,
+  healthy: okBorder,
+  recovering: warnBorder,
+  failed: dangerBorder,
+  stopping: border,
+};
+const STATUS_LABEL: Record<string, string> = {
+  starting: 'Starting',
+  healthy: 'Healthy',
+  recovering: 'Recovering',
+  failed: 'Failed',
+  stopping: 'Stopping',
+};
 
 export default function App() {
   const { settings, save, loaded, error: settingsError, saveError } = useSettings();
@@ -105,24 +168,24 @@ export default function App() {
     return (
       <div
         style={{
-          background: '#141414',
+          background: pageBg,
           minHeight: '100vh',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          fontFamily: fontSans,
         }}
       >
         <div
           role="alert"
           aria-live="assertive"
           style={{
-            background: 'rgba(231, 76, 60, 0.15)',
-            border: '1px solid rgba(231, 76, 60, 0.7)',
-            borderRadius: 4,
-            color: '#ffd6d3',
-            padding: '12px 16px',
-            fontSize: 14,
+            background: dangerTint,
+            border: dangerBorder,
+            borderRadius: radius.card,
+            color: dangerText,
+            padding: '14px 18px',
+            fontSize: type.body,
             maxWidth: 480,
             textAlign: 'center',
           }}
@@ -134,7 +197,15 @@ export default function App() {
   }
 
   if (!loaded) {
-    return <div role="status" aria-live="polite" style={{ background: '#141414', color: '#888', minHeight: '100vh', padding: 24 }}>Loading settings…</div>;
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        style={{ background: pageBg, color: textMuted, minHeight: '100vh', padding: 24, fontFamily: fontSans }}
+      >
+        Loading settings…
+      </div>
+    );
   }
 
   function handleMetricToggle(id: string, visible: boolean) {
@@ -177,13 +248,13 @@ export default function App() {
         // its own track (measured 406px/180px inside a 358px container at the
         // product's 400px minimum window). Below the track minimum the grid
         // collapses to a single column instead of overflowing.
-        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 8 } as React.CSSProperties
-      : { display: 'flex', flexDirection: 'column' as const, gap: 8 };
+        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 } as React.CSSProperties
+      : { display: 'flex', flexDirection: 'column' as const, gap: 12 };
 
   const strategy = viewMode === 'tile' ? rectSortingStrategy : verticalListSortingStrategy;
 
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
+    <div style={{ display: 'flex', height: '100vh', background: pageBg, fontFamily: fontSans }}>
       <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} memTotalGb={metrics?.mem_total_gb ?? null} />
       {/* Scroll container: a header landmark, then the main landmark that holds
           the dashboard. A <header> nested inside <main> maps to no landmark, so
@@ -197,12 +268,11 @@ export default function App() {
       >
         <div
           style={{
-            background: '#141414',
+            background: pageBg,
             minHeight: '100vh',
-            padding: '12px 16px',
+            padding: '16px 20px',
             overflowY: 'auto',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-            color: '#fff',
+            color: textPrimary,
           }}
         >
       {collectorState === 'recovering' && (
@@ -211,13 +281,13 @@ export default function App() {
           role="status"
           aria-live="polite"
           style={{
-            background: 'rgba(243, 156, 18, 0.12)',
-            border: '1px solid rgba(243, 156, 18, 0.7)',
-            borderRadius: 4,
-            color: '#ffeaa7',
+            background: warnTint,
+            border: warnBorder,
+            borderRadius: radius.control,
+            color: warnText,
             padding: '8px 12px',
             marginBottom: 12,
-            fontSize: 14,
+            fontSize: type.body,
           }}
         >
           Metrics collection interrupted. Recovering…
@@ -229,13 +299,13 @@ export default function App() {
           role="alert"
           aria-live="assertive"
           style={{
-            background: 'rgba(231, 76, 60, 0.15)',
-            border: '1px solid rgba(231, 76, 60, 0.7)',
-            borderRadius: 4,
-            color: '#ffd6d3',
+            background: dangerTint,
+            border: dangerBorder,
+            borderRadius: radius.control,
+            color: dangerText,
             padding: '8px 12px',
             marginBottom: 12,
-            fontSize: 14,
+            fontSize: type.body,
             fontWeight: 600,
             display: 'flex',
             alignItems: 'center',
@@ -257,13 +327,14 @@ export default function App() {
               disabled={retryPending}
               aria-label={retryPending ? 'Retrying metrics collection' : 'Retry metrics collection'}
               style={{
-                padding: '4px 10px',
-                borderRadius: 4,
-                border: '1px solid rgba(231, 76, 60, 0.9)',
-                background: '#1e1e1e',
-                color: '#ffd6d3',
+                padding: '5px 12px',
+                borderRadius: radius.control,
+                border: dangerBorder,
+                background: dangerTint,
+                color: dangerText,
                 cursor: retryPending ? 'wait' : 'pointer',
                 fontWeight: 600,
+                fontSize: type.label,
               }}
             >
               Retry metrics
@@ -277,27 +348,51 @@ export default function App() {
           role="alert"
           aria-live="polite"
           style={{
-            background: 'rgba(243, 156, 18, 0.15)',
-            border: '1px solid rgba(243, 156, 18, 0.7)',
-            borderRadius: 4,
-            color: '#ffeaa7',
+            background: warnTint,
+            border: warnBorder,
+            borderRadius: radius.control,
+            color: warnText,
             padding: '8px 12px',
             marginBottom: 12,
-            fontSize: 14,
+            fontSize: type.body,
           }}
         >
           Settings couldn't be saved — {saveError}. Changes are kept in memory for this session.
         </div>
       )}
       <header>
-      <div style={{ marginBottom: 4 }}>
-        <h1 style={{ fontSize: 18, fontWeight: 700, color: '#e0e0e0', margin: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: type.pageTitle, fontWeight: 650, color: textPrimary, margin: 0, letterSpacing: '-0.01em' }}>
           System Monitor
         </h1>
+        {collectorState && (
+          <span
+            data-testid="collector-status-pill"
+            title={`Metrics collection is ${STATUS_LABEL[collectorState] ?? collectorState}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '3px 10px',
+              borderRadius: radius.pill,
+              border: STATUS_BORDER[collectorState] ?? border,
+              background: STATUS_TINT[collectorState] ?? surfaceSunken,
+              fontSize: type.micro,
+              fontWeight: 600,
+              color: STATUS_TEXT[collectorState] ?? textMuted,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{ width: 6, height: 6, borderRadius: 3, background: STATUS_DOT[collectorState] ?? textMuted }}
+            />
+            {STATUS_LABEL[collectorState] ?? collectorState}
+          </span>
+        )}
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setSidebarOpen((prev) => !prev)}
@@ -306,15 +401,12 @@ export default function App() {
             aria-expanded={sidebarOpen}
             aria-controls="hardware-sidebar"
             style={{
-              padding: '4px 8px',
-              borderRadius: 4,
-              border: '1px solid #444',
-              background: '#1e1e1e',
-              color: '#fff',
-              cursor: 'pointer',
+              ...controlShell,
+              padding: '6px 8px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              color: sidebarOpen ? accent : textSecondary,
             }}
           >
             <PanelLeft size={16} />
@@ -347,13 +439,13 @@ export default function App() {
           role="alert"
           aria-live="polite"
           style={{
-            color: '#ffd6d3',
+            color: dangerText,
             padding: '8px 12px',
             marginBottom: 12,
-            fontSize: 14,
-            background: 'rgba(231, 76, 60, 0.15)',
-            border: '1px solid rgba(231, 76, 60, 0.7)',
-            borderRadius: 4,
+            fontSize: type.body,
+            background: dangerTint,
+            border: dangerBorder,
+            borderRadius: radius.control,
           }}
         >
           Couldn't refresh metrics history — {historyLoadError}. Showing previous data.
@@ -365,10 +457,10 @@ export default function App() {
           role="alert"
           aria-live="assertive"
           style={{
-            color: '#ffd6d3',
+            color: dangerText,
             padding: '32px 0',
             textAlign: 'center',
-            fontSize: 14,
+            fontSize: type.body,
           }}
         >
           Couldn't load metrics history — {historyLoadError}. Try restarting the app.
@@ -376,10 +468,10 @@ export default function App() {
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
         <div
           style={{
-            color: '#888',
+            color: textMuted,
             padding: '32px 0',
             textAlign: 'center',
-            fontSize: 14,
+            fontSize: type.body,
           }}
         >
           All metrics hidden — use the Metrics selector to show cards
@@ -387,10 +479,10 @@ export default function App() {
       ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div
           style={{
-            color: '#888',
+            color: textMuted,
             padding: '32px 0',
             textAlign: 'center',
-            fontSize: 14,
+            fontSize: type.body,
           }}
         >
           Collecting metrics…
