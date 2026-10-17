@@ -4,7 +4,7 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: the repository-wide audit campaign — `2026-10-17-stabilize-five-minute-axis-label-boundary` and `2026-10-17-enforce-react-hooks-linting` — is archived and on `main`. No active OpenSpec change remains.**
+**Current phase: the repository-wide audit campaign — five 2026-10-17 changes (`stabilize-five-minute-axis-label-boundary`, `enforce-react-hooks-linting`, `align-cadence-test-with-deadline-grid`, `make-sensor-interval-gate-time-injectable`, `bound-unit-gate-worker-parallelism`) — is archived and on `main`. No active OpenSpec change remains.**
 
 Campaigns in this phase (2026-10-17, in order):
 
@@ -36,12 +36,49 @@ Campaigns in this phase (2026-10-17, in order):
    zero suppressions, plus a mutation check proving the gate fires. New spec:
    `react-hooks-lint-gate`. Docs (AGENTS/CLAUDE/.cursorrules) now describe
    the gate instead of the gap.
+3. **`2026-10-17-align-cadence-test-with-deadline-grid`** (archived). The
+   five-matrix `verify:fast` gate went red again:
+   `test_first_poll_waits_for_initial_deadline_after_rate_priming` failed
+   with "second poll fired 614.7809ms after priming — cadence collapsed" —
+   the cadence was HEALTHY; the assertion `second >= first + floor` measured
+   spacing from the actual (load-delayed) first emit and double-counted its
+   lateness, encoding period-after-prior-start semantics that
+   `collector-time-fidelity` explicitly disclaims. Fixed to the sound grid
+   bound `second >= 2×TICK_INTERVAL` (`deadline_k ≥ epoch + k·250 ms` under
+   every rebase path). Repetition evidence: 20/20 + 20/20 (the second batch
+   immediately after the full five-matrix run — the load class that exposed
+   the flake).
+4. **`2026-10-17-make-sensor-interval-gate-time-injectable`** (archived).
+   Third flaky gate defect, same class:
+   `test_interval_gated_provider_polls_on_time_not_every_call` failed with
+   `[true, false, false, true, false]` — again against CORRECT behavior
+   (`sleep(250)` overshoot under load had genuinely elapsed 1000 ms by
+   call 4). `SensorRegistry::poll_all` now takes a caller-supplied
+   `now: Instant` (one sample per pass; the tick loop passes it at the same
+   sampling point) so the interval arithmetic is testable with synthetic
+   instants; the test keeps its exact five-element pin with zero sleeps.
+   20/20 determinism batch.
+5. **`2026-10-17-bound-unit-gate-worker-parallelism`** (archived). The
+   vitest lane died twice in worker startup ("Failed to start forks worker …
+   Timeout waiting for worker to respond" — 19 then 4 files) while three
+   FOREIGN pipelines (`tryMC_v3`, `browser-blackhole`,
+   `superhabits-overnight`) saturated the host (25 node processes, no repo
+   orphans); vitest 4.1.11 hardcodes a 60 s worker handshake timeout.
+   `maxWorkers: 4` bounds the fork storm (19→4 residual), and the unit-test
+   step in `verify.mjs` retries ONCE only for the worker-startup infra class
+   behind the unit-tested `scripts/verify-retry-policy.mjs` seam — a counted
+   test failure is never retried (flaky tests must surface; this session
+   fixed three). Policy tests 4/4 with fixtures from the real captured
+   output.
 
-Verified on the combined final tree: both `tsc` projects, `npm run lint`
-clean, 296 unit tests (22 files), production build, 33 E2E, mock simulation
-lane 4 passed, `npm run verify:frontend` green end-to-end (now including the
-lint step), strict OpenSpec validation. **The packaged/real lane was not run
-and is not claimed for these changes.**
+Verified on the combined final tree (2026-10-17): both `tsc` projects,
+`npm run lint` clean, 300 unit tests (23 files), production build, 33 E2E,
+mock simulation lane 4 passed, `npm run verify:frontend` green end-to-end
+(including the lint step), **`npm run verify:fast` exit 0 end-to-end** — the
+shared green run for the three gate-hardening changes (frontend lane +
+five-matrix Rust lane + clippy `-D warnings` + `cargo audit`) — and strict
+OpenSpec validation. **The packaged/real lane was not run and is not claimed
+for these changes.**
 
 Latest campaign before this phase — **`2026-10-09-harden-chart-axis-readability`** (archived):
 Default/Tile time axes are now a readable scale — tick text `#888` (4.703:1) and
@@ -125,5 +162,7 @@ mock simulation lane **4 passed**, `openspec validate --all --strict` **22 passe
 - [x] **Push `main`.** The old "four `main` commits" bookkeeping item is included in `b4517f4..ef8737d`. Not a force-push.
 - [ ] **Packaged real-app lane for the updated stack** — run locally it passes (see the schema-assertion change), but the *dispatch-only* hosted packaged lane has not run at this stack.
 - [x] **Harden chart axis readability** (`2026-10-09-harden-chart-axis-readability`, now on `main` at `ef8737d`): explicit `#888`/`#7a7a7a` axis colors on the `#1e1e1e` card surface, span-keyed `formatAxisTick` helper, `minTickGap` 80 + 16px bottom margin. A post-apply review's five corrections are closed (spec amended for a 1px sub-pixel inside-box tolerance; stroke + card background asserted on rendered pixels; unit gap test renamed as a floor guard; unit React roots unmounted; 300s seeded-span browser case added). Gates: both typechecks, 295 unit tests, build, 33 E2E, strict OpenSpec validation. Packaged lane not run, not claimed.
-- [x] **Repository-wide audit: find and fix everything wrong** (2026-10-17). Full gate sweep plus fresh review found two real defects on a green-looking tree: the E2E gate was red/flaky (seeded-span axis case, 2/3 failures — root-caused to the phase-dependent five-minute boundary, fixed product-side with the spec amended) and the recorded React-hooks lint gap had materialized into four findings including a true `rules-of-hooks` violation (fixed with a provider-required `useSettings()` + exported engine, a stable empty-order constant, and a static complete dep array; gate added via oxlint and wired into `verify:frontend`). Docs reconciled (AGENTS/CLAUDE/.cursorrules). Both changes archived with evidence.
+- [x] **Repository-wide audit: find and fix everything wrong** (2026-10-17). Full gate sweep plus fresh review found **five real defects** (two on the code, three in the verification gates themselves) across five OpenSpec changes: (1) the E2E gate was red/flaky (seeded-span axis case, 2/3 failures — root-caused to the phase-dependent five-minute label boundary, fixed product-side with the spec amended); (2) the recorded React-hooks lint gap had materialized into four findings including a true `rules-of-hooks` violation (fixed structurally; oxlint gate added and wired into `verify:frontend`); (3) the run_loop cadence test asserted a gap bound that double-counted load lateness and contradicted `collector-time-fidelity` (fixed to the grid bound); (4) the sensor interval test drove real sleeps and failed against CORRECT gating (fixed by injecting the gate's time sample); (5) the vitest lane's unbounded fork storm died in worker startup under host saturation (bounded to `maxWorkers: 4` + one infra-class-only retry behind a unit-tested policy seam). Docs reconciled (AGENTS/CLAUDE/.cursorrules). All five changes archived with evidence.
 - [x] **Close the React-hooks lint gap** (`2026-10-17-enforce-react-hooks-linting`): `npm run lint` (oxlint 1.88.0 exact pin, two rules in scope) enforced through the canonical frontend lane; 0 findings, mutation-checked.
+- [x] **Make the Rust gate timing tests sound** (`2026-10-17-align-cadence-test-with-deadline-grid` + `2026-10-17-make-sensor-interval-gate-time-injectable`): both flaky tests asserted wall-clock patterns `sleep`/scheduling never promised and both failed against correct behavior under load; now grid-bound and synthetic-clock respectively (20/20 × 3 repetition batches).
+- [x] **Harden the unit gate against host saturation** (`2026-10-17-bound-unit-gate-worker-parallelism`): `maxWorkers: 4` bounds the fork storm; the unit-test step retries once only for worker-startup infrastructure failures (`scripts/verify-retry-policy.mjs`, 4/4 policy pins) — counted test failures are never retried.
