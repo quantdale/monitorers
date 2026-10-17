@@ -174,12 +174,19 @@ impl SensorRegistry {
         self.entries.is_empty()
     }
 
+    /// Poll every provider whose interval has elapsed, decided against ONE
+    /// caller-supplied time sample per pass. The caller owns the clock so the
+    /// tick loop and this gate share a single sample per tick (the same
+    /// single-clock discipline as the history ring), and so the interval
+    /// arithmetic is deterministically unit-testable with synthetic instants
+    /// instead of real `sleep` accumulation (which overshoots under load and
+    /// made the gate test fail against CORRECT gating behavior).
     pub fn poll_all(
         &mut self,
         state: &mut CollectorState,
         wmi_con: Option<&wmi::WMIConnection>,
+        now: Instant,
     ) -> Vec<Option<RawPoll>> {
-        let now = Instant::now();
         self.entries
             .iter_mut()
             .map(|entry| {
@@ -249,22 +256,33 @@ mod tests {
 
     // Exercises the interval-gating branch of poll_all: a provider with a 1000ms
     // interval is polled on the first call (due immediately) and again on the
-    // 5th call (~1000ms later), but not on calls 2-4 (still within the window).
-    // This maps to the 250ms tick cadence, where such a provider fires on ticks
-    // 0 and 4 of the registry schedule, not ticks 1-3.
+    // 5th call (exactly 1000ms later), but not on calls 2-4 (still within the
+    // window). This maps to the 250ms tick cadence, where such a provider fires
+    // on ticks 0 and 4 of the registry schedule, not ticks 1-3.
+    //
+    // The time sample is injected (synthetic instants 250ms apart) so the
+    // expectation is exact at any load. The previous sleep-based version
+    // asserted the same pattern through four real `sleep(250ms)` calls — but
+    // `sleep` only guarantees a LOWER bound, and under host load the four
+    // sleeps overshot past 1000ms by call 4, so the gate fired early
+    // (correctly) and the test failed with [true, false, false, true, false]
+    // against behavior that was right. Timing gates get synthetic clocks,
+    // never wall-clock sleeps.
     #[test]
     fn test_interval_gated_provider_polls_on_time_not_every_call() {
         let mut registry = SensorRegistry::new();
         registry.register(IntervalProvider { poll_count: 0 });
         let mut state = CollectorState::new();
 
+        let t0 = Instant::now();
         let mut due = Vec::new();
-        for i in 0..5 {
-            let raw = registry.poll_all(&mut state, None);
+        for k in 0..5u64 {
+            let raw = registry.poll_all(
+                &mut state,
+                None,
+                t0 + std::time::Duration::from_millis(250 * k),
+            );
             due.push(raw[0].is_some());
-            if i < 4 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
         }
 
         assert_eq!(due, vec![true, false, false, false, true]);

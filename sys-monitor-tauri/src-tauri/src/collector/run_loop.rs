@@ -250,7 +250,7 @@ pub fn run_collector_loop(
             };
             let registry_started = Instant::now();
             let reg_raw = if !full_poll_tick {
-                registry.poll_all(&mut *state, wmi_con)
+                registry.poll_all(&mut *state, wmi_con, Instant::now())
             } else {
                 (0..registry.len()).map(|_| None).collect()
             };
@@ -559,9 +559,23 @@ mod tests {
             "first poll fired {first:?} after baseline priming — a fresh session must wait for its initial {TICK_INTERVAL:?} deadline before polling"
         );
         let second = emit_times[1];
+        // Grid bound, NOT a gap bound. The loop schedules on a fixed deadline
+        // grid (`deadline_k >= epoch + k * TICK_INTERVAL`; `rebase_deadline`
+        // only ever moves a deadline right), so `deadline_2` is at least two
+        // full periods after priming at any load — and `started` precedes the
+        // loop epoch, so this threshold is a strict lower bound. A gap-based
+        // bound (`second >= first + floor`) is UNSOUND: when tick 0 is
+        // delayed by scheduling load but lands before its successor's grid
+        // point, the second emit legitimately closes up behind it (observed:
+        // first ~430ms, second 614.78ms on a healthy grid). That contradicts
+        // collector-time-fidelity's contract — "Work time SHALL NOT be added
+        // to the period… the next scheduled tick is due at the next 250 ms
+        // deadline from the monotonic schedule, not 330 ms after the prior
+        // start". The pre-fix loop still trips this bound: both of its polls
+        // landed inside one period.
         assert!(
-            second >= first + floor,
-            "second poll fired {second:?} after priming — cadence collapsed"
+            second >= TICK_INTERVAL * 2,
+            "second poll fired {second:?} after priming — cadence collapsed (must respect the {TICK_INTERVAL:?} deadline grid)"
         );
     }
 
