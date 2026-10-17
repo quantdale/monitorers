@@ -38,9 +38,7 @@ export const textFaint = '#7A7A7A';
 
 /** The single interactive accent: buttons, active segments, focus rings. */
 export const accent = '#4D8DFF';
-export const accentHover = '#6BA0FF';
 export const accentTint = 'rgba(77, 141, 255, 0.16)';
-export const accentBorder = 'rgba(77, 141, 255, 0.55)';
 
 export const ok = '#3ECF8E';
 export const okTint = 'rgba(62, 207, 142, 0.12)';
@@ -100,11 +98,9 @@ export const type = {
 export const radius = { card: 12, control: 8, chip: 6, pill: 999 } as const;
 
 export const border = '1px solid rgba(255, 255, 255, 0.08)';
-export const borderStrong = '1px solid rgba(255, 255, 255, 0.16)';
 export const divider = '1px solid rgba(255, 255, 255, 0.06)';
 
 export const shadowCard = '0 1px 2px rgba(0, 0, 0, 0.25)';
-export const shadowLift = '0 6px 24px rgba(0, 0, 0, 0.4)';
 export const shadowPopover = '0 12px 32px rgba(0, 0, 0, 0.55)';
 
 /** Standard card shell — every card/panel starts here. */
