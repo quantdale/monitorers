@@ -45,6 +45,18 @@ export default defineConfig(async () => ({
   test: {
     environment: 'jsdom',
     globals: true,
+    // Bound the fork pool. Each test file boots its own jsdom environment in
+    // its own child process; the default maxWorkers (CPU count − 1) can ask a
+    // high-core host for ~20 simultaneous boots, and under load the pool's
+    // worker handshake misses its response timeout and the whole run aborts
+    // with "Failed to start forks worker … Timeout waiting for worker to
+    // respond" BEFORE any test executes (observed: 19 such errors while
+    // three unrelated Playwright/vite pipelines saturated the host). Four
+    // workers keep 22 jsdom files fast (setup dominates per-file cost) while
+    // making the startup storm impossible — the gate degrades in speed under
+    // load, never in verdict. Raise the number if the suite grows; do not
+    // remove the bound.
+    maxWorkers: 4,
     setupFiles: ['src/test/setup.ts'],
     // Playwright SPECS under e2e/ are run by `npm run e2e`, not by vitest.
     // Plain *.test.ts files under e2e/ (driver unit seams, no browser/hive)

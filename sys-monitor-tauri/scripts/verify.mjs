@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { unitRetryWarrantsRetry } from './verify-retry-policy.mjs';
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(appRoot, '..');
@@ -26,6 +27,52 @@ function runNpm(label, args, cwd) {
   } else {
     run(label, npm, args, cwd);
   }
+}
+
+/** Like `run`, but captures output (echoed after completion) for inspection. */
+function runCaptured(label, command, args, cwd) {
+  console.log(`\n=== ${label} ===`);
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    env: process.env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) throw new Error(`${label} could not start: ${result.error.message}`);
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  return result;
+}
+
+/**
+ * The unit-test step gets the gate's ONE retry, and only for the vitest
+ * worker-startup infrastructure class (see verify-retry-policy.mjs): those
+ * runs die in the pool's worker handshake before test verdicts exist, under
+ * host starvation, because vitest 4.1.11 hardcodes a 60s handshake timeout.
+ * A counted test failure never matches the policy and stays red on first
+ * failure — flaky TESTS must surface, not be retried away.
+ */
+function runUnitTestsStep(label, args, cwd) {
+  const command = process.platform === 'win32' ? process.execPath : npm;
+  const fullArgs = process.platform === 'win32' ? [npmCli, ...args] : args;
+  const first = runCaptured(label, command, fullArgs, cwd);
+  if (first.status === 0) return;
+  const output = `${first.stdout ?? ''}\n${first.stderr ?? ''}`;
+  if (!unitRetryWarrantsRetry(output)) {
+    throw new Error(`${label} failed with exit code ${String(first.status)}`);
+  }
+  console.log(
+    `\n=== ${label}: RETRYING ONCE — worker-startup infrastructure failure ` +
+      "(vitest's hardcoded 60s worker handshake timed out under host load); " +
+      'no test verdict is being retried ==='
+  );
+  const second = runCaptured(`${label} (retry after worker-startup failure)`, command, fullArgs, cwd);
+  if (second.status !== 0) {
+    throw new Error(
+      `${label} failed with exit code ${String(second.status)} even after the worker-startup retry`
+    );
+  }
+  console.log(`=== ${label}: recovered on retry — the first run died in worker startup, not in any test ===`);
 }
 
 function frontend() {
@@ -62,7 +109,7 @@ function frontend() {
   // call or a missing dependency fails the lane here. The rules it enforces
   // are scoped in .oxlintrc.json (no other rule families are in gate scope).
   runNpm('frontend React-hooks lint', ['run', 'lint'], appRoot);
-  runNpm('frontend unit tests', ['test', '--', '--run'], appRoot);
+  runUnitTestsStep('frontend unit tests', ['test', '--', '--run'], appRoot);
   runNpm('frontend build', ['run', 'build'], appRoot);
 }
 
