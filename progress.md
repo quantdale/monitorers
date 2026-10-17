@@ -4,7 +4,7 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: the repository-wide audit campaign — five 2026-10-17 changes (`stabilize-five-minute-axis-label-boundary`, `enforce-react-hooks-linting`, `align-cadence-test-with-deadline-grid`, `make-sensor-interval-gate-time-injectable`, `bound-unit-gate-worker-parallelism`) — is archived and on `main`. No active OpenSpec change remains.**
+**Current phase: the 2026-10-17 campaign — the five gate/audit changes plus the visual-design overhaul (`modernize-dashboard-visual-design`) — is archived and on `main`. No active OpenSpec change remains.**
 
 Campaigns in this phase (2026-10-17, in order):
 
@@ -70,9 +70,25 @@ Campaigns in this phase (2026-10-17, in order):
    test failure is never retried (flaky tests must surface; this session
    fixed three). Policy tests 4/4 with fixtures from the real captured
    output.
+6. **`2026-10-17-modernize-dashboard-visual-design`** (archived). Major
+   frontend overhaul grounded in Refero research (Polar's dark-minimal admin
+   language as primary; steel.dev's label-over-value metric rows and
+   chargetrip's per-card accent series borrowed; light themes and external
+   fonts rejected). A single token module (`src/design/tokens.ts`) now owns
+   palette/typography/radii/elevation; the flat `#1e1e1e`-box UI became a
+   deep-charcoal canvas with hairline elevated cards, 30px tight metric
+   numerals over 12px muted labels (label-over-value `valueLabel` split so
+   composite values fit the narrowest tile track), gradient-filled charts on
+   faint dotted gridlines, a segmented view control, pill controls, a
+   collector status pill, and token-chrome banners/sidebar. All behavioral
+   contracts preserved: E2E 33/33 with only literal rgb pins re-bound to the
+   tokens, contrast floors re-proven from the token values (7.06:1 tick text,
+   3.70:1 axis stroke, AA text tiers and banner tints), 302 unit tests,
+   mock sim lane 4/4, six rendered screenshots at 400×300/900×1100 recorded
+   under `e2e-results/qa/visual-overhaul/`.
 
 Verified on the combined final tree (2026-10-17): both `tsc` projects,
-`npm run lint` clean, 300 unit tests (23 files), production build, 33 E2E,
+`npm run lint` clean, 302 unit tests (23 files), production build, 33 E2E,
 mock simulation lane 4 passed, `npm run verify:frontend` green end-to-end
 (including the lint step), **`npm run verify:fast` exit 0 end-to-end** — the
 shared green run for the three gate-hardening changes (frontend lane +
