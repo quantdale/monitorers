@@ -4,7 +4,9 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: `2026-10-24-overlay-narrow-hardware-sidebar` is archived. No active OpenSpec change remains.**
+**Current phase: `2026-10-24-dashboard-readability` is archived. No active OpenSpec change remains.**
+
+**`2026-10-24-dashboard-readability`** (archived). Reorder handles are visible at rest, the hardware toggle shows the word Hardware at a 32px target, default/tile cards show window min/max, and the network card shows peak down/up because its chart has no Y-axis. The all-hidden state is a card with a Choose metrics action; the metrics dialog traps Tab and has a visible heading. A profile disk model renders as a subtitle under the stable `Disk <key>` title. Gates: Playwright 40/40, targeted unit tests 40/40, `tsc --noEmit` clean. Packaged/real lane not run, not claimed.
 
 **`2026-10-24-overlay-narrow-hardware-sidebar`** (archived). Opening the hardware sidebar at the 400×300 minimum window used to shrink the dashboard to a 140px column and clip disk/GPU badges (measured scrollWidth 230 inside a 138px card). Below 640px the rail is now a fixed overlay drawer (scrim, Close, Escape, focus returned to the toggle); at 640px and above it still pushes. Long sidebar model names wrap inside the 220px rail. Same tree: the Network card shows a Down glance numeral instead of an empty value, and the all-hidden / collecting messages are polite live regions. Gates: sidebar-overlay E2E 3/3, accessibility E2E including the empty-state case, `tsc --noEmit`, oxlint on the touched sources, sidebar unit tests, `openspec validate --all --strict` 26 passed. Packaged/real lane not run, not claimed.
 

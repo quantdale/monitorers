@@ -45,20 +45,17 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-/* Drag handle — hidden by default, shown on card hover */
+/* Drag handle — resting visibility so pointer users can discover reorder.
+   Focus-visible still supplies the ring (global button rule). */
 .drag-handle {
-  opacity: 0;
-  transition: opacity 0.15s ease;
+  opacity: 1;
   cursor: grab;
-}
-.metric-card:hover .drag-handle {
-  opacity: 1;
-}
-.drag-handle:focus-visible {
-  opacity: 1;
 }
 .drag-handle:active {
   cursor: grabbing;
+}
+.sidebar-drag-handle {
+  color: #7A7A7A;
 }
 
 .sidebar-drag-handle:focus-visible {

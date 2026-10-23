@@ -19,7 +19,8 @@ export function TimeRangeSelector({ options, value, onChange }: Props) {
       aria-label="History time range"
       style={{
         ...controlShell,
-        padding: '5px 10px',
+        padding: '6px 10px',
+        minHeight: 32,
         fontSize: type.label,
         fontWeight: 600,
         fontFamily: fontSans,

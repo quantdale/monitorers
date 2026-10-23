@@ -7,6 +7,7 @@ import type { MetricValue } from '../types/metrics';
 interface Props {
   id: string;
   title: string;
+  subtitle?: string;
   value: string;
   /** Optional small label before the big value (see MetricCard.valueLabel). */
   valueLabel?: string;
@@ -20,6 +21,7 @@ interface Props {
   secondaryColor?: string;
   listViewValue?: string | React.ReactNode;
   listViewMinMax?: string | React.ReactNode;
+  rangeCaption?: string;
 }
 
 export function SortableCard(props: Props) {

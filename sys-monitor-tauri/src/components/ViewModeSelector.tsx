@@ -44,7 +44,8 @@ export function ViewModeSelector({ value, onChange }: Props) {
             aria-pressed={active}
             onClick={() => onChange(key)}
             style={{
-              padding: '3px 12px',
+              padding: '6px 12px',
+              minHeight: 32,
               borderRadius: radius.control - 2,
               border: 'none',
               background: active ? accentTint : 'transparent',

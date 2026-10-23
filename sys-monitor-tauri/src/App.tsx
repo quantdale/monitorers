@@ -39,6 +39,7 @@ import { PanelLeft } from 'lucide-react';
 import {
   accent,
   border,
+  cardShell,
   controlShell,
   danger,
   dangerBorder,
@@ -123,6 +124,43 @@ const STATUS_LABEL: Record<string, string> = {
   stopping: 'Stopping',
 };
 
+function EmptyDashboard({
+  title,
+  detail,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  detail: string;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        ...cardShell,
+        padding: '28px 20px',
+        textAlign: 'center',
+        maxWidth: 420,
+        margin: '24px auto',
+      }}
+    >
+      <div style={{ color: textPrimary, fontSize: type.body, fontWeight: 650, marginBottom: 6 }}>{title}</div>
+      <div style={{ color: textMuted, fontSize: type.label, lineHeight: 1.45, marginBottom: 14 }}>{detail}</div>
+      <button
+        type="button"
+        data-testid="empty-metrics-action"
+        onClick={onAction}
+        style={{ ...controlShell, padding: '8px 14px', minHeight: 32, fontSize: type.label, fontWeight: 600, color: accent }}
+      >
+        {actionLabel}
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const { settings, save, loaded, error: settingsError, saveError } = useSettings();
   const cardOrder = settings.cardOrder ?? EMPTY_CARD_ORDER;
@@ -132,6 +170,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const sidebarOverlay = useMediaQuery(SIDEBAR_OVERLAY_MEDIA);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const metricsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocus = useRef(false);
 
   const closeSidebar = useCallback(() => {
@@ -196,6 +235,13 @@ export default function App() {
   );
 
   const hasNvidiaData = computeHasNvidiaData(metrics);
+  const diskNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const disk of hardwareProfileState.profile?.disks ?? []) {
+      if (disk.name) names.set(disk.key, disk.name);
+    }
+    return names;
+  }, [hardwareProfileState.profile]);
   // Memoized derived state: element identity changes only when metrics, view
   // mode, or visibility change, so unrelated re-renders (drag start/end,
   // sidebar toggle, selector open/close) reuse the exact card tree and React
@@ -208,10 +254,10 @@ export default function App() {
     () =>
       visibleCardOrder.map((id) => (
         <ErrorBoundary key={id + '_boundary'}>
-          {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData }) : null}
+          {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames }) : null}
         </ErrorBoundary>
       )),
-    [visibleCardOrder, metrics, viewMode, hasNvidiaData],
+    [visibleCardOrder, metrics, viewMode, hasNvidiaData, diskNames],
   );
 
   if (settingsError) {
@@ -477,14 +523,19 @@ export default function App() {
             aria-controls="hardware-sidebar"
             style={{
               ...controlShell,
-              padding: '6px 8px',
-              display: 'flex',
+              padding: '6px 10px',
+              minHeight: 32,
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: 6,
               color: sidebarOpen ? accent : textSecondary,
+              fontSize: type.label,
+              fontWeight: 600,
             }}
           >
-            <PanelLeft size={16} />
+            <PanelLeft size={16} aria-hidden="true" />
+            <span>Hardware</span>
           </button>
           <TimeRangeSelector
             options={TIME_OPTIONS}
@@ -493,6 +544,7 @@ export default function App() {
           />
           {metrics && cardOrder.length > 0 && (
             <MetricCardSelector
+              triggerRef={metricsTriggerRef}
               items={cardOrder.filter(id => isCardPresent(id, metrics)).map(id => ({ id, label: getCardLabel(id) }))}
               hiddenIds={hiddenCardIds}
               onToggle={handleMetricToggle}
@@ -541,30 +593,22 @@ export default function App() {
           Couldn't load metrics history — {historyLoadError}. Try restarting the app.
         </div>
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
-        <div
-          role="status"
-          aria-live="polite"
-          style={{
-            color: textMuted,
-            padding: '32px 0',
-            textAlign: 'center',
-            fontSize: type.body,
-          }}
-        >
-          All metrics hidden — use the Metrics selector to show cards
-        </div>
+        <EmptyDashboard
+          title="All metrics hidden"
+          detail="Choose which cards to show. Nothing is deleted."
+          actionLabel="Choose metrics"
+          onAction={() => metricsTriggerRef.current?.click()}
+        />
       ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
-        <div
-          role="status"
-          aria-live="polite"
-          style={{
-            color: textMuted,
-            padding: '32px 0',
-            textAlign: 'center',
-            fontSize: type.body,
-          }}
-        >
-          Collecting metrics…
+        <div role="status" aria-live="polite" style={{ color: textMuted, fontSize: type.body }}>
+          <div style={{ padding: '8px 0 12px' }}>
+            <div style={{ color: textPrimary, fontWeight: 600, marginBottom: 4 }}>Collecting metrics…</div>
+            <div>The first sample usually arrives within a second.</div>
+          </div>
+          <div aria-hidden="true" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ ...cardShell, height: 96 }} />
+            <div style={{ ...cardShell, height: 96, opacity: 0.7 }} />
+          </div>
         </div>
       ) : (
         <DndContext

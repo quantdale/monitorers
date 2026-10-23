@@ -1,7 +1,9 @@
 ## Purpose
 
 Defines the keyboard-accessibility contract for card drag-reorder: drag handles become visible on keyboard focus, focus indicators are not globally suppressed, keyboard reordering moves cards to adjacent siblings (not fixed pixel offsets), and every drag handle exposes a correct accessible name.
+
 ## Requirements
+
 ### Requirement: Drag handles are visible when keyboard-focused
 Every drag handle in the application (main dashboard cards and hardware sidebar cards) SHALL be visually revealed when it receives keyboard focus, not only on mouse hover.
 
@@ -45,3 +47,10 @@ Dashboard and sidebar drag handles SHALL be labeled interactive controls with a 
 #### Scenario: Keyboard reorder preserves stable identity
 - **WHEN** a user moves a sidebar device with the keyboard
 - **THEN** the persisted order changes for that device's stable key, not its old enumeration index
+
+### Requirement: Dashboard reorder handles are visible at rest
+Dashboard card reorder handles SHALL be visible without requiring hover or keyboard focus, so a pointer user can discover reorder. Keyboard focus SHALL still show a visible focus indicator.
+
+#### Scenario: Handle is visible before interaction
+- **WHEN** a dashboard card is rendered and the pointer is not over it
+- **THEN** its reorder handle is visible (not `opacity: 0`)

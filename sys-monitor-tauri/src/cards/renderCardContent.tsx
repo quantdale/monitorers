@@ -19,6 +19,7 @@ import {
   gpuVendorBadgeStyle,
   gpuVendorLabel,
 } from './formatters';
+import { buildNetworkScaleCaption } from './chartLabels';
 import {
   cpuSeries,
   diskSeries,
@@ -38,10 +39,12 @@ export interface RenderCardContentParams {
   metrics: SlicedHistory;
   viewMode: ViewMode;
   hasNvidiaData: boolean;
+  /** Profile display names keyed by stable disk key. Presentation only. */
+  diskNames?: ReadonlyMap<string, string>;
 }
 
 // Maps a card ID back to the correct SortableCard with its props.
-export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: RenderCardContentParams): ReactNode | null {
+export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames }: RenderCardContentParams): ReactNode | null {
   if (id === 'cpu') {
     return (
       <SortableCard
@@ -84,11 +87,13 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
     if (diskIdx === -1) return null;
     const disk = metrics.disks[diskIdx];
     const avgStr = formatResponseMs(disk.avg_response_ms);
+    const diskModel = diskNames?.get(disk.key);
     return (
       <SortableCard
         key={id}
         id={id}
         title={`Disk ${disk.key}`}
+        subtitle={diskModel}
         valueLabel="Active Time"
         value={formatPercent(disk.values.at(-1))}
         history={disk.values}
@@ -140,6 +145,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         color={netDownSeries}
         secondaryColor={netUpSeries}
         yDomain={Y_DOMAIN_AUTO}
+        rangeCaption={buildNetworkScaleCaption(maxR, maxS)}
         badge={
           <>
             <span style={{ ...badgeStyle, border: `1px solid ${netDownSeries}66` }}>↓ {formatThroughput(recv)}</span>

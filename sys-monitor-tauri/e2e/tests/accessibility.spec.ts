@@ -161,10 +161,10 @@ test.describe('accessible controls', () => {
     const count = await boxes.count();
     for (let i = 0; i < count; i++) await boxes.nth(i).click();
     await page.keyboard.press('Escape');
-    const empty = page.getByText('All metrics hidden');
+    const empty = page.getByRole('status').filter({ hasText: 'All metrics hidden' });
     await expect(empty).toBeVisible();
-    await expect(empty).toHaveAttribute('role', 'status');
-    await expect(empty).toHaveAttribute('aria-live', 'polite');
+    await page.getByTestId('empty-metrics-action').click();
+    await expect(page.getByRole('dialog', { name: 'Metric card visibility' })).toBeVisible();
   });
 
   test('returns focus to the metric selector trigger on Escape', async ({ page }) => {

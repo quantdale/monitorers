@@ -94,6 +94,7 @@ describe('renderCardContent', () => {
       renderCardContent({ id: 'disk_C:', metrics: m, viewMode: 'default', hasNvidiaData: false })
     );
     expect(c.textContent).toContain('Disk C:');
+    expect(c.textContent).toContain('Min: 10.0%');
     expect(c.textContent).toContain('Active Time 42.0%');
     expect(c.textContent).toContain('R: 10.0 MB/s · W: 5.0 MB/s');
     expect(c.textContent).toContain('Avg: 3.2 ms');
@@ -108,6 +109,24 @@ describe('renderCardContent', () => {
     expect(c.textContent).toContain('1.2 MB/s');
     expect(c.textContent).toContain('↓ 1.2 MB/s');
     expect(c.textContent).toContain('↑ 500 KB/s');
+    expect(c.textContent).toContain('Peak down 1.2 MB/s, peak up 500 KB/s');
+  });
+
+  it('disk card shows the profile model without replacing the stable key', async () => {
+    const m = sliced({
+      disks: [{ key: 'C:', values: [10, 42], read_mb_s: 10, write_mb_s: 5, avg_response_ms: 3.2 }],
+    });
+    const c = await mount(
+      renderCardContent({
+        id: 'disk_C:',
+        metrics: m,
+        viewMode: 'default',
+        hasNvidiaData: false,
+        diskNames: new Map([['C:', 'Samsung SSD 970']]),
+      })
+    );
+    expect(c.textContent).toContain('Disk C:');
+    expect(c.textContent).toContain('Samsung SSD 970');
   });
 
   it('gpu card with nvidia data — vendor badge, temp, power/vram/fan/clock', async () => {

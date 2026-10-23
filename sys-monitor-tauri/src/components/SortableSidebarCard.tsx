@@ -33,7 +33,7 @@ export function SortableSidebarCard({ id, children }: Props) {
       style={{
         padding: '0 2px',
         cursor: 'grab',
-        color: '#555',
+        color: '#7A7A7A',
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,

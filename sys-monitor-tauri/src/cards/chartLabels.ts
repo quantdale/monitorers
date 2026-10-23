@@ -33,6 +33,11 @@ export function buildDualSeriesChartLabel(
   return `${title}, now down ${formatThroughput(latestDown)} and up ${formatThroughput(latestUp)} over the selected window`;
 }
 
+/** Visible scale for an auto-domain network chart, which has no Y-axis ticks. */
+export function buildNetworkScaleCaption(maxDown: number, maxUp: number): string {
+  return `Peak down ${formatThroughput(maxDown)}, peak up ${formatThroughput(maxUp)}`;
+}
+
 /** A visible span strictly longer than this drops the seconds field from tick labels. */
 const SECONDS_SPAN_CUTOFF_MS = 300_000;
 

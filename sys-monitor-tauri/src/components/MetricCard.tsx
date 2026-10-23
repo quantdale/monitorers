@@ -54,6 +54,8 @@ interface DragHandleProps {
 interface Props {
   id: string;
   title: string;
+  /** Optional model/identity line under the title. Presentation only. */
+  subtitle?: string;
   value: string;
   /** Optional small label rendered just before the big value ("Active Time
    *  42.0%" splits into a muted label + a large number, the label-over-value
@@ -74,11 +76,14 @@ interface Props {
   /** Custom list view value and min/max when default formatting doesn't apply (e.g. network KB/s). */
   listViewValue?: string | React.ReactNode;
   listViewMinMax?: string | React.ReactNode;
+  /** Default/tile scale line. Percent cards derive one from the window; network passes a throughput peak. */
+  rangeCaption?: string;
 }
 
 export function MetricCard({
   id,
   title,
+  subtitle,
   value,
   valueLabel,
   history,
@@ -93,6 +98,7 @@ export function MetricCard({
   secondaryColor,
   listViewValue,
   listViewMinMax,
+  rangeCaption,
 }: Props) {
   const hasChart = history != null && history.length > 0;
   const hasSecondary = secondaryHistory != null && secondaryHistory.length > 0 && secondaryColor != null;
@@ -226,7 +232,7 @@ export function MetricCard({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: type.body, fontFamily: fontMono, color: textPrimary, gap: 8 }}>
             <span
               data-testid={`metric-title-${id}`}
-              title={title}
+              title={subtitle ? `${title} — ${subtitle}` : title}
               style={{ color: textSecondary, fontWeight: 600, minWidth: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             >{title}</span>
             {/* Not a flex row: inline content reflows (wrapping at spaces) when
@@ -274,6 +280,8 @@ export function MetricCard({
     );
   }
 
+  const scaleCaption = rangeCaption ?? (hasChart ? formatPercentRange(listMinMax.min, listMinMax.max) : '');
+
   // Default and tile views share the same markup.
   // Tile width is controlled by the parent CSS grid (2-column), not the card itself.
   return (
@@ -300,16 +308,21 @@ export function MetricCard({
             flex: 1,
           }}
         >
-          <span
-            data-testid={`metric-title-${id}`}
-            style={{
-              color: textSecondary,
-              fontSize: type.label,
-              fontWeight: 600,
-              letterSpacing: 0.2,
-            }}
-          >
-            {title}
+          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <span
+              data-testid={`metric-title-${id}`}
+              style={{
+                color: textSecondary,
+                fontSize: type.label,
+                fontWeight: 600,
+                letterSpacing: 0.2,
+              }}
+            >
+              {title}
+            </span>
+            {subtitle && (
+              <span style={{ color: textMuted, fontSize: type.micro, lineHeight: 1.3 }}>{subtitle}</span>
+            )}
           </span>
           {value !== '' && (
             <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
@@ -361,6 +374,20 @@ export function MetricCard({
             label={resolvedChartLabel}
           />
         </Suspense>
+        </div>
+      )}
+      {scaleCaption !== '' && (
+        <div
+          data-testid={`metric-range-${id}`}
+          style={{
+            marginTop: 8,
+            color: textMuted,
+            fontSize: type.micro,
+            fontFamily: fontMono,
+            lineHeight: 1.4,
+          }}
+        >
+          {scaleCaption}
         </div>
       )}
     </div>

@@ -356,7 +356,10 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
           <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Interface</span>
-              <span style={wrappedValueStyle}>Monitoring active interface</span>
+              <span style={wrappedValueStyle}>Not reported by this host</span>
+            </div>
+            <div style={{ color: textMuted, fontSize: type.micro, marginTop: 6, lineHeight: 1.4 }}>
+              Live rates are on the Network card.
             </div>
           </div>
         </div>
@@ -412,19 +415,21 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
           gap: 8,
         }}
       >
-        {drawer && (
+        {open && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <span style={{ ...titleStyle, marginBottom: 0 }}>Hardware</span>
-            <button
-              type="button"
-              ref={closeRef}
-              data-testid="hardware-sidebar-close"
-              aria-label="Close hardware info"
-              onClick={onClose}
-              style={{ ...controlShell, padding: '4px 8px', fontSize: type.micro, fontWeight: 600 }}
-            >
-              Close
-            </button>
+            {drawer && (
+              <button
+                type="button"
+                ref={closeRef}
+                data-testid="hardware-sidebar-close"
+                aria-label="Close hardware info"
+                onClick={onClose}
+                style={{ ...controlShell, padding: '4px 8px', fontSize: type.micro, fontWeight: 600 }}
+              >
+                Close
+              </button>
+            )}
           </div>
         )}
         {profileError && (

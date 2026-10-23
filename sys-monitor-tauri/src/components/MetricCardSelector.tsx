@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type RefObject } from 'react';
 import {
   accent,
   controlShell,
@@ -20,13 +20,20 @@ interface Props {
   items: Item[];
   hiddenIds: Set<string>;
   onToggle: (id: string, visible: boolean) => void;
+  /** Optional so an empty-state action can open the same trigger. */
+  triggerRef?: RefObject<HTMLButtonElement | null>;
 }
 
-export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
+export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: externalTriggerRef }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  function setTrigger(node: HTMLButtonElement | null) {
+    triggerRef.current = node;
+    if (externalTriggerRef) externalTriggerRef.current = node;
+  }
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -38,6 +45,22 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
       if (e.key === 'Escape') {
         setOpen(false);
         triggerRef.current?.focus();
+        return;
+      }
+      if (e.key !== 'Tab' || !panelRef.current) return;
+      const items = Array.from(
+        panelRef.current.querySelectorAll<HTMLElement>('input, button, [href], [tabindex]:not([tabindex="-1"])'),
+      ).filter((el) => !el.hasAttribute('disabled'));
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
       }
     }
     if (open) {
@@ -62,14 +85,15 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         type="button"
-        ref={triggerRef}
+        ref={setTrigger}
         onClick={() => setOpen(!open)}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls="metric-card-selector-panel"
         style={{
           ...controlShell,
-          padding: '5px 12px',
+          padding: '6px 12px',
+          minHeight: 32,
           fontSize: type.label,
           fontWeight: 600,
           fontFamily: fontSans,
@@ -104,6 +128,9 @@ export function MetricCardSelector({ items, hiddenIds, onToggle }: Props) {
             boxShadow: shadowPopover,
           }}
         >
+          <div style={{ padding: '6px 8px 4px', fontSize: type.label, fontWeight: 600, color: textPrimary }}>
+            Show or hide cards
+          </div>
           {items.map((item) => {
             const isVisible = !hiddenIds.has(item.id);
             return (

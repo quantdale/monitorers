@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAxisTick } from './chartLabels';
+import { buildNetworkScaleCaption, formatAxisTick } from './chartLabels';
 import {
   chartAxisStroke,
   chartTickFill,
@@ -30,6 +30,12 @@ function localHHMM(ms: number): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+describe('buildNetworkScaleCaption', () => {
+  it('names both peaks so an auto-scaled network chart has a readable scale', () => {
+    expect(buildNetworkScaleCaption(148, 1200)).toBe('Peak down 148 KB/s, peak up 1.2 MB/s');
+  });
+});
 
 describe('formatAxisTick', () => {
   // A fixed local timestamp: 2026-10-09 13:07:42 local time. Built from Date
