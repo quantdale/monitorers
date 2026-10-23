@@ -127,7 +127,13 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData }: Rend
         key={id}
         id={id}
         title="Network"
-        value=""
+        // Download is the chart's primary series. An empty value left this
+        // card as the only one without a glance numeral — the rates lived
+        // only in corner badges. The label names the direction so the number
+        // is not mistaken for a combined total; the colored badges stay as
+        // the two-series legend.
+        valueLabel="Down"
+        value={formatThroughput(recv)}
         history={metrics.net_recv}
         secondaryHistory={metrics.net_sent}
         timestamps={metrics.timestamps}

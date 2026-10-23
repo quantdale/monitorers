@@ -153,6 +153,20 @@ test.describe('accessible controls', () => {
     await expect(sidebarToggle).toHaveAttribute('aria-expanded', 'false');
   });
 
+  test('announces the all-hidden empty state', async ({ page }) => {
+    await page.goto('/');
+    await waitForFirstMetrics(page);
+    await page.getByRole('button', { name: /Metrics/ }).click();
+    const boxes = page.getByRole('checkbox');
+    const count = await boxes.count();
+    for (let i = 0; i < count; i++) await boxes.nth(i).click();
+    await page.keyboard.press('Escape');
+    const empty = page.getByText('All metrics hidden');
+    await expect(empty).toBeVisible();
+    await expect(empty).toHaveAttribute('role', 'status');
+    await expect(empty).toHaveAttribute('aria-live', 'polite');
+  });
+
   test('returns focus to the metric selector trigger on Escape', async ({ page }) => {
     await page.goto('/');
     await waitForFirstMetrics(page);

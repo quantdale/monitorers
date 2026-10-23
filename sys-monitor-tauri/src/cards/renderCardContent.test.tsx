@@ -104,6 +104,8 @@ describe('renderCardContent', () => {
       renderCardContent({ id: 'network', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })
     );
     expect(c.textContent).toContain('Network');
+    expect(c.textContent).toContain('Down');
+    expect(c.textContent).toContain('1.2 MB/s');
     expect(c.textContent).toContain('↓ 1.2 MB/s');
     expect(c.textContent).toContain('↑ 500 KB/s');
   });

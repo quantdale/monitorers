@@ -1,4 +1,4 @@
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -27,6 +27,7 @@ import { SortableSidebarCard } from './SortableSidebarCard';
 import { formatGigabytes } from '../cards/formatters';
 import {
   cardShell,
+  controlShell,
   dangerText,
   divider,
   fontSans,
@@ -36,8 +37,9 @@ import {
   textSecondary,
   type,
 } from '../design/tokens';
+import { SIDEBAR_WIDTH_PX } from '../sidebarLayout';
 
-const SIDEBAR_WIDTH = 220;
+const SIDEBAR_WIDTH = SIDEBAR_WIDTH_PX;
 const cardStyle: React.CSSProperties = {
   ...cardShell,
   padding: 12,
@@ -62,6 +64,15 @@ const rowStyle: React.CSSProperties = {
 };
 const labelStyle: React.CSSProperties = { color: textMuted };
 const valueStyle: React.CSSProperties = { color: textPrimary, fontWeight: 500 };
+/** Long model names must wrap inside the 220px rail instead of painting out of the card. */
+const wrappedValueStyle: React.CSSProperties = {
+  ...valueStyle,
+  minWidth: 0,
+  maxWidth: '62%',
+  textAlign: 'right',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
 
 function cpuVendorDisplay(v: string): string {
   const lower = v.toLowerCase();
@@ -177,6 +188,9 @@ export function mergeDraggedSidebarOrder(
 
 interface Props {
   open: boolean;
+  /** Narrow windows present the rail as a fixed drawer so it does not crush the dashboard. */
+  overlay?: boolean;
+  onClose?: () => void;
   profileState?: HardwareProfileState;
   /** Kept for focused component tests and embedders that already have a profile. */
   profile?: HardwareProfile | null;
@@ -189,7 +203,8 @@ interface Props {
 // Memoized: App re-renders every metrics tick, but every prop here is a
 // primitive or a stable object (profileState is useMemo'd in
 // useHardwareProfile), so the whole sidebar subtree skips those renders.
-export const HardwareSidebar = memo(function HardwareSidebar({ open, profileState, profile: suppliedProfile, memTotalGb }: Props) {
+export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = false, onClose, profileState, profile: suppliedProfile, memTotalGb }: Props) {
+  const closeRef = useRef<HTMLButtonElement>(null);
   const { settings, save } = useSettings();
   const profile = suppliedProfile !== undefined ? suppliedProfile : profileState?.profile ?? null;
   const loading = suppliedProfile === undefined ? profileState?.loading ?? false : profile === null;
@@ -271,7 +286,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
           <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Name</span>
-              <span style={{ ...valueStyle, maxWidth: '60%', textAlign: 'right' }}>{gpu.name}</span>
+              <span style={wrappedValueStyle}>{gpu.name}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>Vendor</span>
@@ -320,7 +335,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
           <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Name</span>
-              <span style={{ ...valueStyle, maxWidth: '60%', textAlign: 'right' }}>{disk.name}</span>
+              <span style={wrappedValueStyle}>{disk.name}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>Type</span>
@@ -341,7 +356,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
           <div style={{ borderTop: divider, paddingTop: 8 }}>
             <div style={rowStyle}>
               <span style={labelStyle}>Interface</span>
-              <span style={valueStyle}>Monitoring active interface</span>
+              <span style={wrappedValueStyle}>Monitoring active interface</span>
             </div>
           </div>
         </div>
@@ -350,9 +365,19 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
     return null;
   }
 
+  const drawer = overlay && open;
+
+  useEffect(() => {
+    if (drawer) closeRef.current?.focus();
+  }, [drawer]);
+
   return (
     <div
       id="hardware-sidebar"
+      role={drawer ? 'dialog' : 'complementary'}
+      aria-modal={drawer ? true : undefined}
+      aria-label="Hardware info"
+      data-sidebar-presentation={overlay ? 'overlay' : 'push'}
       style={{
         width: open ? SIDEBAR_WIDTH : 0,
         flexShrink: 0,
@@ -362,12 +387,18 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
         // closed sidebar's controls and status text from the accessibility tree
         // and the tab order. Collapsing by width alone leaves both reachable.
         visibility: open ? 'visible' : 'hidden',
-        transition: 'width 250ms ease, visibility 250ms ease',
+        // Push mode keeps the width/visibility transition so a collapsing rail
+        // stays out of the tab order only once the animation ends. Overlay snaps:
+        // a width animation from 0 clips the Close control and focus() misses it.
+        transition: overlay ? 'none' : 'width 250ms ease, visibility 250ms ease',
         background: surfaceSunken,
         borderRight: open ? divider : 'none',
         display: 'flex',
         flexDirection: 'column',
         fontFamily: fontSans,
+        // Overlay is taken out of flow so the dashboard keeps the width it has
+        // when the rail is closed. Push mode stays an in-flow flex sibling.
+        ...(overlay ? { position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 40 } : {}),
       }}
     >
       <div
@@ -381,6 +412,21 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, profileStat
           gap: 8,
         }}
       >
+        {drawer && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ ...titleStyle, marginBottom: 0 }}>Hardware</span>
+            <button
+              type="button"
+              ref={closeRef}
+              data-testid="hardware-sidebar-close"
+              aria-label="Close hardware info"
+              onClick={onClose}
+              style={{ ...controlShell, padding: '4px 8px', fontSize: type.micro, fontWeight: 600 }}
+            >
+              Close
+            </button>
+          </div>
+        )}
         {profileError && (
           <div role="alert" style={{ color: dangerText, fontSize: type.label, padding: 8 }}>
             <div>Hardware detection failed — {profileError}</div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -33,6 +33,8 @@ import {
   shouldShowLoadingState,
 } from './cardIdentity';
 import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
+import { useMediaQuery } from './hooks/useMediaQuery';
+import { SIDEBAR_OVERLAY_MEDIA } from './sidebarLayout';
 import { PanelLeft } from 'lucide-react';
 import {
   accent,
@@ -128,6 +130,54 @@ export default function App() {
   const viewMode = settings.viewMode;
   const windowSecs = settings.windowSecs;
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarOverlay = useMediaQuery(SIDEBAR_OVERLAY_MEDIA);
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+  const restoreSidebarFocus = useRef(false);
+
+  const closeSidebar = useCallback(() => {
+    restoreSidebarFocus.current = true;
+    setSidebarOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarOpen && restoreSidebarFocus.current) {
+      restoreSidebarFocus.current = false;
+      sidebarToggleRef.current?.focus();
+    }
+  }, [sidebarOpen]);
+
+  // Crossing back to the push rail unmounts the drawer's Close button. Put
+  // focus on the toggle, which is visible again beside the in-flow rail.
+  const overlayWhileOpen = useRef(false);
+  useEffect(() => {
+    if (sidebarOpen && sidebarOverlay) overlayWhileOpen.current = true;
+    if (sidebarOpen && !sidebarOverlay && overlayWhileOpen.current) {
+      overlayWhileOpen.current = false;
+      sidebarToggleRef.current?.focus();
+    }
+    if (!sidebarOpen) overlayWhileOpen.current = false;
+  }, [sidebarOpen, sidebarOverlay]);
+
+  // Drawer dismissal. Deferred so a keyboard-drag Escape (dnd-kit preventDefault
+  // on the same document keydown, registered after this listener) cancels the
+  // drag instead of also closing the panel.
+  useEffect(() => {
+    if (!sidebarOverlay || !sidebarOpen) return;
+    let cancelled = false;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      window.setTimeout(() => {
+        if (cancelled || event.defaultPrevented) return;
+        restoreSidebarFocus.current = true;
+        setSidebarOpen(false);
+      }, 0);
+    }
+    document.addEventListener('keydown', onKey);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [sidebarOverlay, sidebarOpen]);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const hardwareProfileState = useHardwareProfile();
   const { metrics, historyLoadError, lifecycle, retryMetrics } = useMetrics(windowSecs);
@@ -255,11 +305,35 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: pageBg, fontFamily: fontSans }}>
-      <HardwareSidebar open={sidebarOpen} profileState={hardwareProfileState} memTotalGb={metrics?.mem_total_gb ?? null} />
+      <HardwareSidebar
+        open={sidebarOpen}
+        overlay={sidebarOverlay}
+        onClose={closeSidebar}
+        profileState={hardwareProfileState}
+        memTotalGb={metrics?.mem_total_gb ?? null}
+      />
+      {sidebarOverlay && sidebarOpen && (
+        <button
+          type="button"
+          data-testid="hardware-sidebar-scrim"
+          aria-label="Dismiss hardware info"
+          onClick={closeSidebar}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 30,
+            border: 0,
+            padding: 0,
+            background: 'rgba(10, 12, 16, 0.55)',
+          }}
+        />
+      )}
       {/* Scroll container: a header landmark, then the main landmark that holds
           the dashboard. A <header> nested inside <main> maps to no landmark, so
-          the two must be siblings here. */}
+          the two must be siblings here. Inert while the narrow-window drawer is
+          open so keyboard focus stays in the dialog instead of the covered page. */}
       <div
+        inert={sidebarOverlay && sidebarOpen ? true : undefined}
         style={{
           flex: 1,
           overflow: 'auto',
@@ -395,6 +469,7 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
+            ref={sidebarToggleRef}
             onClick={() => setSidebarOpen((prev) => !prev)}
             title={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
             aria-label={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
@@ -467,6 +542,8 @@ export default function App() {
         </div>
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             color: textMuted,
             padding: '32px 0',
@@ -478,6 +555,8 @@ export default function App() {
         </div>
       ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             color: textMuted,
             padding: '32px 0',

@@ -4,7 +4,11 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: the 2026-10-17 campaign — the five gate/audit changes plus the visual-design overhaul (`modernize-dashboard-visual-design`) — is archived and on `main`. No active OpenSpec change remains.**
+**Current phase: `2026-10-24-overlay-narrow-hardware-sidebar` is archived. No active OpenSpec change remains.**
+
+**`2026-10-24-overlay-narrow-hardware-sidebar`** (archived). Opening the hardware sidebar at the 400×300 minimum window used to shrink the dashboard to a 140px column and clip disk/GPU badges (measured scrollWidth 230 inside a 138px card). Below 640px the rail is now a fixed overlay drawer (scrim, Close, Escape, focus returned to the toggle); at 640px and above it still pushes. Long sidebar model names wrap inside the 220px rail. Same tree: the Network card shows a Down glance numeral instead of an empty value, and the all-hidden / collecting messages are polite live regions. Gates: sidebar-overlay E2E 3/3, accessibility E2E including the empty-state case, `tsc --noEmit`, oxlint on the touched sources, sidebar unit tests, `openspec validate --all --strict` 26 passed. Packaged/real lane not run, not claimed.
+
+The 2026-10-17 campaign — the five gate/audit changes plus the visual-design overhaul (`modernize-dashboard-visual-design`) — remains archived on `main`.
 
 Campaigns in this phase (2026-10-17, in order):
 
