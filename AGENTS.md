@@ -115,3 +115,9 @@ reg delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArgu
 
 `simulation-real` and both release-qualification jobs assert this with `if: always()`, so a failed run is checked too. A non-elevated host cannot write the value at all (access denied) and the driver falls back to the environment variable; that is expected, not a leak.
 - Rust tests are `#[cfg(test)]` modules co-located in source files; PDH/WMI functions needing real handles are not unit-tested — only their pure parsing helpers.
+
+## Cross-project UX, DX, and AX principles
+
+Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
+
+Make the best decision that will elevate all three: the user experience (UX), developer experience (DX), and agent experience (AX) always, without breaking anything.
