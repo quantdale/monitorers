@@ -6,7 +6,7 @@ Desktop system monitor built with **Tauri 2** (Rust backend) and **React + TypeS
 
 ## Prerequisites
 
-- **Node.js** (v24+, matching CI)
+- **Node.js 24.15 or newer in the 24.x line** (matching CI and jsdom's engine floor). `.nvmrc` records the minimum supported local version.
 - **Rust** ([rustup](https://rustup.rs))
 - **Windows:** WebView2 (usually already installed on Windows 10/11)
 - **Tauri CLI** is installed as a dev dependency; no global install needed.

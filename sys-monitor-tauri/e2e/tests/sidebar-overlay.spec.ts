@@ -53,6 +53,36 @@ test.describe('hardware sidebar presentation', () => {
     await expect(page.getByRole('button', { name: 'Show hardware info' })).toBeFocused();
   });
 
+  test('modal drawer keeps forward and reverse Tab inside', async ({ page }) => {
+    await page.setViewportSize({ width: 400, height: 300 });
+    await page.goto('/');
+    await waitForFirstMetrics(page);
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    const close = page.getByRole('button', { name: 'Close hardware info' });
+    await expect(close).toBeFocused();
+    for (const key of ['Tab', 'Shift+Tab', 'Tab', 'Shift+Tab']) {
+      await page.keyboard.press(key);
+      await expect(close).toBeFocused();
+    }
+    await close.click();
+    await expect(page.getByRole('button', { name: 'Show hardware info' })).toBeFocused();
+  });
+
+  test('resizing the open rail changes presentation without losing focus or overflow', async ({ page }) => {
+    await page.setViewportSize({ width: 640, height: 700 });
+    await page.goto('/');
+    await waitForFirstMetrics(page);
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    await expect(page.locator('#hardware-sidebar')).toHaveAttribute('data-sidebar-presentation', 'push');
+    await page.setViewportSize({ width: 639, height: 300 });
+    await expect(page.getByRole('button', { name: 'Close hardware info' })).toBeFocused();
+    await expect(page.getByRole('dialog', { name: 'Hardware info' })).toBeVisible();
+    expect(await overflowingCards(page)).toBe(0);
+    await page.setViewportSize({ width: 900, height: 700 });
+    await expect(page.getByRole('button', { name: 'Hide hardware info' })).toBeFocused();
+    await expect(page.getByTestId('hardware-sidebar-scrim')).toHaveCount(0);
+  });
+
   test('wide window still pushes the dashboard aside', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 1100 });
     await page.goto('/');

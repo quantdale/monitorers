@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
+import { useFocusBoundary } from '../hooks/useFocusBoundary';
 import {
   DndContext,
   closestCenter,
@@ -204,7 +205,7 @@ interface Props {
 // primitive or a stable object (profileState is useMemo'd in
 // useHardwareProfile), so the whole sidebar subtree skips those renders.
 export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = false, onClose, profileState, profile: suppliedProfile, memTotalGb }: Props) {
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const { settings, save } = useSettings();
   const profile = suppliedProfile !== undefined ? suppliedProfile : profileState?.profile ?? null;
   const loading = suppliedProfile === undefined ? profileState?.loading ?? false : profile === null;
@@ -358,9 +359,6 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
               <span style={labelStyle}>Interface</span>
               <span style={wrappedValueStyle}>Not reported by this host</span>
             </div>
-            <div style={{ color: textMuted, fontSize: type.micro, marginTop: 6, lineHeight: 1.4 }}>
-              Live rates are on the Network card.
-            </div>
           </div>
         </div>
       );
@@ -370,13 +368,14 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
 
   const drawer = overlay && open;
 
-  useEffect(() => {
-    if (drawer) closeRef.current?.focus();
-  }, [drawer]);
+  useFocusBoundary(drawer, panelRef);
 
   return (
     <div
       id="hardware-sidebar"
+      ref={panelRef}
+      tabIndex={-1}
+      inert={!open ? true : undefined}
       role={drawer ? 'dialog' : 'complementary'}
       aria-modal={drawer ? true : undefined}
       aria-label="Hardware info"
@@ -421,7 +420,6 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
             {drawer && (
               <button
                 type="button"
-                ref={closeRef}
                 data-testid="hardware-sidebar-close"
                 aria-label="Close hardware info"
                 onClick={onClose}

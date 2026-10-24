@@ -4,7 +4,9 @@
 
 Windows-only real-time system monitor (Rust/Tauri v2 backend, React/TypeScript frontend) in `sys-monitor-tauri/`, maintained through the spec-driven `openspec/` flow.
 
-**Current phase: `2026-10-24-dashboard-readability` is archived. No active OpenSpec change remains.**
+**Current phase: `finalize-dashboard-interactions` is active on `agent/session-finalization`, reviewing the two earlier session commits (`9a611b2`, `17433c8`) before finalizing and pushing main.**
+
+The review reproduced a red canonical dead-code gate, reverse-Tab escape from the metrics panel, modal focus escape to its scrim, long-content clipping, and fabricated zero readings. Fixes and red-capable regressions are implemented. Compatible Vite/Vitest and undici patches remediate current application-scope advisories; Node 24.15 is the declared minimum for this Node 24 project (jsdom's floor). Remote main's additive UX instructions (`b5ab823`) were merged without rewriting session history. Full local verification and an initial fresh packaged check passed; final-candidate checks and evidence reconciliation are in progress. The earlier archived gate snapshots below do not establish overall completeness; both evidence files carry review corrections.
 
 **`2026-10-24-dashboard-readability`** (archived). Reorder handles are visible at rest, the hardware toggle shows the word Hardware at a 32px target, default/tile cards show window min/max, and the network card shows peak down/up because its chart has no Y-axis. The all-hidden state is a card with a Choose metrics action; the metrics dialog traps Tab and has a visible heading. A profile disk model renders as a subtitle under the stable `Disk <key>` title. Gates: Playwright 40/40, targeted unit tests 40/40, `tsc --noEmit` clean. Packaged/real lane not run, not claimed.
 

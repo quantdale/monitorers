@@ -170,12 +170,49 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     }
     expect(persistedViewMode, 'settings write landed in the per-run isolated store').toBe('tile');
 
-    // ── 5. Clean exit; no orphaned processes; real store untouched ──
+    // ── 5. Qualify the responsive drawer with real hardware and drag sensors ──
+    await page.setViewportSize({ width: 400, height: 700 });
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    const drawer = page.getByRole('dialog', { name: 'Hardware info' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.locator('[data-sb-id]').first()).toBeVisible({ timeout: 30_000 });
+    const close = drawer.getByRole('button', { name: 'Close hardware info' });
+    await expect(close).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect.poll(() => drawer.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Tab');
+    await expect(close).toBeFocused();
+
+    const renderedIds = () => drawer.locator('[data-sb-id]').evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-sb-id')),
+    );
+    const beforeDrag = await renderedIds();
+    expect(beforeDrag.length).toBeGreaterThanOrEqual(2);
+    const handle = drawer.locator('button[title="Drag to reorder"]').first();
+    await handle.focus();
+    await page.keyboard.press('Space');
+    await expect(handle).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Escape');
+    // dnd-kit removes aria-pressed when inactive; it does not serialize false.
+    await expect(handle).not.toHaveAttribute('aria-pressed', 'true');
+    await expect(drawer).toBeVisible();
+    expect(await renderedIds()).toEqual(beforeDrag);
+    await page.screenshot({ path: testInfo.outputPath('hardware-drawer-real.png') });
+
+    // Escape after cancellation dismisses; it must not be swallowed forever.
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Show hardware info' })).toBeFocused();
+    await page.setViewportSize({ width: 900, height: 1100 });
+    await page.screenshot({ path: testInfo.outputPath('dashboard-real.png') });
+
+    // ── 6. Clean exit; no orphaned processes; real store untouched ──
     await driver.close();
     await assertNoOrphanAppProcesses();
     await driver.selfTest();
 
-    console.log('[qualify] PASS: real IPC, live data, isolated settings, clean exit');
+    console.log('[qualify] PASS: real IPC, live data, isolated settings, modal focus, drag cancellation, clean exit');
   } finally {
     // Idempotent even after an explicit close above, and crucially runs on
     // launch failure too: kills the spawned app, removes the elevated-host

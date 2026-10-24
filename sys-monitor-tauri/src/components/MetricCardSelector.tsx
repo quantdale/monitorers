@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, type RefObject } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type RefObject } from 'react';
+import { useFocusBoundary } from '../hooks/useFocusBoundary';
 import {
   accent,
   controlShell,
@@ -29,11 +30,53 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef(false);
 
-  function setTrigger(node: HTMLButtonElement | null) {
+  const setTrigger = useCallback((node: HTMLButtonElement | null) => {
     triggerRef.current = node;
     if (externalTriggerRef) externalTriggerRef.current = node;
-  }
+  }, [externalTriggerRef]);
+  const [position, setPosition] = useState({ top: 8, left: 8, width: 240, maxHeight: 0 });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function reposition() {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.min(280, window.innerWidth - 16);
+      const below = Math.max(0, window.innerHeight - rect.bottom - 14);
+      const above = Math.max(0, rect.top - 14);
+      const useBelow = below >= Math.min(240, above);
+      const maxHeight = Math.min(320, window.innerHeight - 16, useBelow ? below : above);
+      setPosition({
+        width,
+        maxHeight,
+        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+        top: Math.max(8, Math.min(
+          useBelow ? rect.bottom + 6 : rect.top - maxHeight - 6,
+          window.innerHeight - maxHeight - 8,
+        )),
+      });
+    }
+    reposition();
+    window.addEventListener('resize', reposition);
+    // The toolbar lives in the dashboard's own scroller, not the document.
+    document.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      document.removeEventListener('scroll', reposition, true);
+    };
+  }, [open]);
+
+  useFocusBoundary(open, panelRef);
+
+  useEffect(() => {
+    if (!open && returnFocus.current) {
+      returnFocus.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -43,30 +86,12 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
     }
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        returnFocus.current = true;
         setOpen(false);
-        triggerRef.current?.focus();
-        return;
-      }
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const items = Array.from(
-        panelRef.current.querySelectorAll<HTMLElement>('input, button, [href], [tabindex]:not([tabindex="-1"])'),
-      ).filter((el) => !el.hasAttribute('disabled'));
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey && active === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
       }
     }
     if (open) {
-      // Move focus into the panel so a keyboard user is inside the dialog they
-      // just opened instead of still on the trigger behind it.
-      panelRef.current?.focus();
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
       return () => {
@@ -113,12 +138,8 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
           aria-label="Metric card visibility"
           tabIndex={-1}
           style={{
-            position: 'absolute',
-            top: '100%',
-            right: 0,
-            marginTop: 6,
-            minWidth: 220,
-            maxHeight: 320,
+            position: 'fixed',
+            ...position,
             overflowY: 'auto',
             background: surface,
             border: '1px solid rgba(255, 255, 255, 0.12)',
@@ -156,7 +177,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
                   onChange={(e) => onToggle(item.id, e.target.checked)}
                   style={{ cursor: 'pointer', accentColor: accent }}
                 />
-                <span style={{ flex: 1 }}>{item.label}</span>
+                <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{item.label}</span>
               </label>
             );
           })}

@@ -1,7 +1,6 @@
-import React from 'react';
+import React, { act } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react-dom/test-utils';
 import { DndContext } from '@dnd-kit/core';
 import { renderCardContent } from './renderCardContent';
 import type { SlicedHistory } from '../hooks/useMetrics';
@@ -165,6 +164,27 @@ describe('renderCardContent', () => {
     );
     expect(c.textContent).toContain('Min: 10.0%  Max: 20.0%');
   });
+
+  for (const viewMode of ['default', 'list'] as const) {
+    it(`keeps missing network rates and peaks unavailable in ${viewMode}`, async () => {
+      const c = await mount(renderCardContent({
+        id: 'network', metrics: sliced({ net_recv: [], net_sent: [] }),
+        viewMode, hasNvidiaData: false,
+      }));
+      expect(c.textContent).not.toContain('0 KB/s');
+      expect(c.textContent).toContain('↓ —');
+      expect(c.textContent).toContain('↑ —');
+    });
+
+    it(`keeps an empty utilization range unavailable in ${viewMode}`, async () => {
+      const c = await mount(renderCardContent({
+        id: 'cpu', metrics: sliced({ cpu: [], latestCpu: Number.NaN }),
+        viewMode, hasNvidiaData: false,
+      }));
+      expect(c.textContent).toContain('Min: —%');
+      expect(c.textContent).not.toContain('Min: 0.0%');
+    });
+  }
 
   it('unknown id → null', () => {
     expect(renderCardContent({ id: 'bogus', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })).toBeNull();

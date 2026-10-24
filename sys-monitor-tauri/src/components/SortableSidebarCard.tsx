@@ -1,6 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
+import { textFaint } from '../design/tokens';
 
 interface Props {
   id: string;
@@ -33,7 +34,7 @@ export function SortableSidebarCard({ id, children }: Props) {
       style={{
         padding: '0 2px',
         cursor: 'grab',
-        color: '#7A7A7A',
+        color: textFaint,
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import React, { Profiler, useState } from 'react';
+import React, { act, Profiler, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react-dom/test-utils';
 import { MetricCard } from './MetricCard';
 import type { MetricValue } from '../types/metrics';
 
@@ -108,6 +107,31 @@ describe('MetricCard chart label', () => {
     });
 
     expect(readLabel()).toBe('Network, now down 500 KB/s and up 250 KB/s over the selected window');
+  });
+
+  it('keeps throughput units when the upload channel has no samples', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => {
+      root = createRoot(container!);
+      root.render(<MetricCard id="network" title="Network" value="500 KB/s" history={[100, 500]}
+        secondaryHistory={[]} secondaryColor="#F59E0B" timestamps={[1000, 2000]}
+        color="#38BDF8" viewMode="default" />);
+    });
+    expect(readLabel()).toBe('Network, now down 500 KB/s and up — over the selected window');
+  });
+
+  it('does not fabricate a zero range for a null-only device window', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => {
+      root = createRoot(container!);
+      root.render(<MetricCard id="gpu_missing" title="GPU" value="—%" history={[null, null]}
+        timestamps={[1000, 2000]} color="#60A5FA" viewMode="default" />);
+    });
+    expect(container.textContent).toContain('Min: —%');
+    expect(container.textContent).not.toContain('Min: 0.0%');
+    expect(readLabel()).toContain('Min: —%');
   });
 
   it('keeps the label stable while the live scalar ticks, and moves it only when the window does', async () => {

@@ -149,7 +149,9 @@ export function MetricCard({
   const { data, metadata: chartMetadata } = chart;
 
   // List-view min/max scans the whole window per render; same identity-based skip.
-  const listMinMax = useMemo(() => historyMinMax(history ?? []), [history]);
+  const listMinMax = useMemo(() => history?.some(Number.isFinite)
+    ? historyMinMax(history)
+    : { min: Number.NaN, max: Number.NaN }, [history]);
 
   // The chart is a graphic, not a control: it gets an accessible name that
   // carries what a sighted user reads off the shape (current value plus the
@@ -165,10 +167,10 @@ export function MetricCard({
   // window's committed samples do (~1 Hz).
   const resolvedChartLabel = useMemo(() => {
     const latest = data[data.length - 1];
-    return hasSecondary
+    return secondaryColor != null
       ? buildDualSeriesChartLabel(title, latest?.v ?? null, latest?.v2 ?? null)
       : buildSingleSeriesChartLabel(title, latest?.v ?? null, listMinMax.min, listMinMax.max);
-  }, [data, hasSecondary, title, listMinMax.min, listMinMax.max]);
+  }, [data, secondaryColor, title, listMinMax.min, listMinMax.max]);
 
   const dragHandle = (
     <button
@@ -226,19 +228,19 @@ export function MetricCard({
             // Nothing may paint outside the panel: a value group wider than the
             // panel (disk cards carry "Active Time n%" + "Avg: n ms") used to
             // overflow onto the chart column instead of wrapping.
-            overflow: 'hidden',
+            overflowWrap: 'anywhere',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: type.body, fontFamily: fontMono, color: textPrimary, gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', fontSize: type.body, fontFamily: fontMono, color: textPrimary, gap: '2px 8px' }}>
             <span
               data-testid={`metric-title-${id}`}
               title={subtitle ? `${title} — ${subtitle}` : title}
-              style={{ color: textSecondary, fontWeight: 600, minWidth: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              style={{ color: textSecondary, fontWeight: 600, minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere' }}
             >{title}</span>
             {/* Not a flex row: inline content reflows (wrapping at spaces) when
                 the panel is narrow, so the value shrinks instead of overflowing
                 the panel or pushing the title into an ellipsis. */}
-            <div style={{ minWidth: 0, flexShrink: 1, textAlign: 'right' }}>{displayValue}</div>
+            <div style={{ minWidth: 0, maxWidth: '100%', textAlign: 'right', overflowWrap: 'anywhere' }}>{displayValue}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {typeof displayMinMax === 'string' ? (
@@ -280,7 +282,7 @@ export function MetricCard({
     );
   }
 
-  const scaleCaption = rangeCaption ?? (hasChart ? formatPercentRange(listMinMax.min, listMinMax.max) : '');
+  const scaleCaption = rangeCaption ?? formatPercentRange(listMinMax.min, listMinMax.max);
 
   // Default and tile views share the same markup.
   // Tile width is controlled by the parent CSS grid (2-column), not the card itself.
@@ -306,6 +308,8 @@ export function MetricCard({
             gap: 8,
             marginBottom: hasChart ? 8 : 0,
             flex: 1,
+            minWidth: 0,
+            overflowWrap: 'anywhere',
           }}
         >
           <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -325,7 +329,7 @@ export function MetricCard({
             )}
           </span>
           {value !== '' && (
-            <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+            <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', minWidth: 0, maxWidth: '100%' }}>
               {valueLabel !== undefined && (
                 <span style={{ color: textMuted, fontSize: type.label, fontWeight: 600, whiteSpace: 'nowrap' }}>
                   {valueLabel}{' '}
@@ -339,6 +343,8 @@ export function MetricCard({
                   fontFamily: fontMono,
                   letterSpacing: '-0.02em',
                   lineHeight: 1.1,
+                  minWidth: 0,
+                  overflowWrap: 'anywhere',
                 }}
               >
                 {value}

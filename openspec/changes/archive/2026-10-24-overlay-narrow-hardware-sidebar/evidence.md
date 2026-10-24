@@ -10,10 +10,11 @@ Measured on the Vite mock harness (2026-10-23), before the fix:
 - 700×800 and 900×1100, sidebar open: 0 overflowing cards. The push rail is
   fine at those widths.
 
-Refero (system-monitor and metrics dashboards: Weights & Biases, Stellate,
-Enode) keeps a persistent sidebar on desktop and does not compress the metric
-grid to make room for it on a narrow viewport. This change follows that split
-without copying those products: overlay below 640px, push at and above 640px.
+Refero search results for Weights & Biases, Stellate, and Enode described
+persistent desktop sidebar layouts. No narrow-viewport reference was inspected,
+so those results do not prove their responsive behavior. Overlay below 640px
+was our engineering decision based on this application's measured containment
+failure, not an observed Refero mobile pattern.
 
 After the fix, `e2e/tests/sidebar-overlay.spec.ts` (3/3):
 
@@ -39,4 +40,15 @@ Local gates for this tree: `openspec validate --all --strict` 26 passed;
 `tsc --noEmit` clean; oxlint clean on the touched sources; sidebar layout
 unit tests and HardwareSidebar render tests passed; sidebar-overlay E2E 3/3;
 accessibility E2E including the new empty-state case passed.
-Packaged/real lane not run, not claimed.
+Packaged/real lane not run at this historical commit, not claimed.
+
+## Finalization audit correction
+
+The original session did not run the full canonical gate before committing.
+Review at `17433c8` found its test-only `sidebarPresentsAsOverlay` export fails
+`verify:frontend`'s dead-code check. The modal also allowed Tab onto its scrim;
+keyboard-drag cancellation had been inferred, not driven. These gaps are fixed
+and re-qualified in `finalize-dashboard-interactions`; see that change's exact
+gate and fresh packaged evidence. Earlier narrow fixes did not establish overall
+product completion. Historical point-in-time results above are not final-state
+certification.

@@ -113,7 +113,10 @@ export const badgeStyle: CSSProperties = {
   fontFamily: fontMono,
   color: textSecondary,
   fontWeight: 500,
-  whiteSpace: 'nowrap',
+  display: 'inline-block',
+  maxWidth: '100%',
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
 };
 
 export function gpuVendorBadgeStyle(vendor: string): CSSProperties {

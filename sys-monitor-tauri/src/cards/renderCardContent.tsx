@@ -93,7 +93,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
         key={id}
         id={id}
         title={`Disk ${disk.key}`}
-        subtitle={diskModel}
+        subtitle={diskModel !== disk.key && diskModel !== `Disk ${disk.key}` ? diskModel : undefined}
         valueLabel="Active Time"
         value={formatPercent(disk.values.at(-1))}
         history={disk.values}
@@ -119,14 +119,16 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
   }
 
   if (id === 'network') {
-    const recv = metrics.net_recv.at(-1) ?? 0;
-    const sent = metrics.net_sent.at(-1) ?? 0;
+    const recv = metrics.net_recv.at(-1);
+    const sent = metrics.net_sent.at(-1);
     const { min: rawMinR, max: rawMaxR } = historyMinMax(metrics.net_recv);
-    const minR = Math.max(0, rawMinR);
-    const maxR = Math.max(0, rawMaxR);
+    const hasDown = metrics.net_recv.some(Number.isFinite);
+    const minR = hasDown ? Math.max(0, rawMinR) : Number.NaN;
+    const maxR = hasDown ? Math.max(0, rawMaxR) : Number.NaN;
     const { min: rawMinS, max: rawMaxS } = historyMinMax(metrics.net_sent);
-    const minS = Math.max(0, rawMinS);
-    const maxS = Math.max(0, rawMaxS);
+    const hasUp = metrics.net_sent.some(Number.isFinite);
+    const minS = hasUp ? Math.max(0, rawMinS) : Number.NaN;
+    const maxS = hasUp ? Math.max(0, rawMaxS) : Number.NaN;
     return (
       <SortableCard
         key={id}

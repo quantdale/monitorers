@@ -126,12 +126,10 @@ const STATUS_LABEL: Record<string, string> = {
 
 function EmptyDashboard({
   title,
-  detail,
   actionLabel,
   onAction,
 }: {
   title: string;
-  detail: string;
   actionLabel: string;
   onAction: () => void;
 }) {
@@ -148,12 +146,11 @@ function EmptyDashboard({
       }}
     >
       <div style={{ color: textPrimary, fontSize: type.body, fontWeight: 650, marginBottom: 6 }}>{title}</div>
-      <div style={{ color: textMuted, fontSize: type.label, lineHeight: 1.45, marginBottom: 14 }}>{detail}</div>
       <button
         type="button"
         data-testid="empty-metrics-action"
         onClick={onAction}
-        style={{ ...controlShell, padding: '8px 14px', minHeight: 32, fontSize: type.label, fontWeight: 600, color: accent }}
+        style={{ ...controlShell, marginTop: 8, padding: '8px 14px', minHeight: 32, fontSize: type.label, fontWeight: 600, color: textPrimary }}
       >
         {actionLabel}
       </button>
@@ -362,7 +359,8 @@ export default function App() {
         <button
           type="button"
           data-testid="hardware-sidebar-scrim"
-          aria-label="Dismiss hardware info"
+          aria-hidden="true"
+          tabIndex={-1}
           onClick={closeSidebar}
           style={{
             position: 'fixed',
@@ -595,7 +593,6 @@ export default function App() {
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
         <EmptyDashboard
           title="All metrics hidden"
-          detail="Choose which cards to show. Nothing is deleted."
           actionLabel="Choose metrics"
           onAction={() => metricsTriggerRef.current?.click()}
         />
@@ -603,7 +600,6 @@ export default function App() {
         <div role="status" aria-live="polite" style={{ color: textMuted, fontSize: type.body }}>
           <div style={{ padding: '8px 0 12px' }}>
             <div style={{ color: textPrimary, fontWeight: 600, marginBottom: 4 }}>Collecting metrics…</div>
-            <div>The first sample usually arrives within a second.</div>
           </div>
           <div aria-hidden="true" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ ...cardShell, height: 96 }} />

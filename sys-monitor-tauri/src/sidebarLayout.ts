@@ -13,7 +13,3 @@ export const SIDEBAR_PUSH_MIN_VIEWPORT_PX = 640;
 
 /** Match media for overlay mode. 639px so 640px still pushes. */
 export const SIDEBAR_OVERLAY_MEDIA = `(max-width: ${SIDEBAR_PUSH_MIN_VIEWPORT_PX - 1}px)`;
-
-export function sidebarPresentsAsOverlay(viewportWidth: number): boolean {
-  return viewportWidth < SIDEBAR_PUSH_MIN_VIEWPORT_PX;
-}
