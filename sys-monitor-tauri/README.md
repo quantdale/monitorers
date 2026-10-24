@@ -105,9 +105,10 @@ The canonical gates are shared by local development and CI:
 npm run verify:fast       # frontend + Rust checks, including audits
 npm run verify:full       # fast checks + E2E + mock simulation + Tauri executable
 npm run verify:version    # package/Cargo/Tauri release-version consistency
-npm run verify:packaged   # build the exe, then drive the real app via CDP:
-                          # real IPC history, live collector data, per-run isolated
-                          # settings store, clean exit, no orphan processes
+npm run verify:tauri      # build a fresh exe (also built by verify:full)
+npm run verify:packaged   # drive that BUILT exe via CDP; does not rebuild it:
+                         # real IPC history, live collector data, per-run isolated
+                         # settings store, clean exit, no orphan processes
 ```
 
 The MSI/NSIS installer build runs automatically for version tags and manual

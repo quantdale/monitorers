@@ -16,5 +16,5 @@
 
 - [x] 3.1 Run active LSP probes with coverage limits reported; pass the canonical frontend/full gate, all three TS projects, unit tests, E2E, mock simulation, build and audits
 - [x] 3.2 Fresh packaged real-app qualification, sidebar identity/persistence check, policy absence, and visual/accessibility review pass
-- [ ] 3.3 Adversarial diff review, truthful evidence/progress, strict OpenSpec validation/archive, clean commits
-- [ ] 3.4 Fast-forward main, normal push, verify remote SHA and required hosted checks; stop owned temporary processes
+- [x] 3.3 Adversarial diff review, truthful evidence/progress, strict OpenSpec validation, clean implementation commit; archive this completed change
+- [x] 3.4 Fast-forward main, normal push, verify remote SHA and required hosted checks; stop owned temporary processes

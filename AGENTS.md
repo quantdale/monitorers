@@ -22,7 +22,8 @@ npm run e2e              # Playwright against the Vite mock harness (auto-starts
 npm run sim              # user-simulation mock lane (journeys × personas, engine + artifacts)
 npm run sim:real         # user-simulation packaged lane — drives the BUILT app via CDP (needs app built)
 npm run sim:typecheck    # typecheck the e2e/sim code (tsc -p e2e/tsconfig.sim.json)
-npm run verify:packaged  # packaged-app qualification: build exe, drive it via CDP (real IPC/settings/data), assert clean teardown
+npm run verify:tauri     # build a fresh production executable before packaged qualification
+npm run verify:packaged  # qualify the BUILT exe via CDP (real IPC/settings/data), assert clean teardown
 npm run assert:webview2-policy-absent  # check no machine-wide HKLM WebView2 debug value leaked
 ```
 

@@ -63,4 +63,19 @@ Packaged exe SHA-256 at qualification: `4d583d62b4c249b85d91cddfc2fc1983c6392193
 
 Physical hotplug, power/lid events, and true identical-dual-Nvidia proof remain hardware-bound and were not fabricated. Installer/signing certification is not part of these frontend corrections. No permissions or IPC/store schemas were broadened.
 
-Local corrections and qualification are complete. Archive and delivery/hosted result references will be finalized after normal main push; no push is claimed yet in this checkpoint.
+## Delivery and hosted evidence
+
+Application correction commit **`c111684fcb59e836bc024bb54c0fa677bc8e9b81`** was fast-forwarded onto local main and normally pushed to origin/main after the enabled pre-push `verify:fast` gate passed. `git ls-remote` and the local tracking ref both confirmed that exact SHA. Hosted checks at that SHA all passed:
+
+- Rust and release **40044985275**: frontend, Rust, Windows production executable success. Executable artifact `sys-monitor-tauri-windows-executable` exists (3,271,155 bytes).
+- E2E harness **40044985397**: success, `playwright-report` artifact exists (270,956 bytes).
+- Simulation **40044985295**: mock lane and shipped-config lint success, `sim-mock-results` artifact exists (152,507,796 bytes).
+- An Ubuntu runner-image migration notice was informational, not a test failure. MSI/NSIS and hosted packaged dispatch lanes were skipped by workflow policy, not claimed.
+
+The final archive/documentation commit only updates specs/progress/evidence and clarifies that `npm run verify:packaged` consumes a built exe (the historical README and AGENTS command comments incorrectly said it builds one). This session used the fresh executable from `verify:full`, not a stale binary. Final documentation-SHA hosted results are checked after its push rather than attributed to the application commit above.
+
+## Cargo audit warning disposition
+
+`cargo audit` exits 0 but is **not warning-free**. The final pre-push database reported three allowed informational warnings: proc-macro-error 1.0.4 unmaintained (RUSTSEC-2024-0370), glib 0.18.5 VariantStrIter unsoundness (RUSTSEC-2024-0429), and tokio 1.53.1 Unix AsyncFd unsoundness (RUSTSEC-2026-0386). `cargo tree -i glib` and `-i proc-macro-error` with target `x86_64-pc-windows-msvc` print no dependencies. The Tokio advisory's affected functions are exclusively `tokio::io::unix::AsyncFd::*`, behind `cfg_net_unix` and not compiled for this Windows-only product. No advisory was suppressed or a gate weakened. Mitigation: the shipped Windows target cannot reach these affected Linux/Unix APIs. Ownership: Tauri/GTK/Tokio upstream updates, re-evaluate with the next native-dependency qualification or any platform expansion. Broadening the native migration during this frontend finalization would add risk without reducing this product's applicable attack surface.
+
+Final local cleanup verified no sys-monitor-tauri process and no listener on port 5180; both agent-browser sessions were closed. No unrelated user changes were removed. No installer/signing, physical-hardware, or complete screen-reader certification is implied by this session's checks.
