@@ -28,6 +28,7 @@ function mockHistoryPayload(): HistoryPayload {
       { name: 'UHD Graphics', values: Array.from({ length: n }, (_, i) => 15 + 25 * Math.sin(t(i) + 0.8)), temp_c: 48 },
       { name: 'RTX 4050', values: Array.from({ length: n }, (_, i) => 20 + 40 * Math.sin(t(i) + 1.2)), temp_c: 55 },
     ],
+    dgpu_temp: 55,
   };
 }
 
@@ -51,6 +52,7 @@ function mockMetricsSnapshot(): MetricsSnapshot {
       { name: 'RTX 4050', util: 20 + 40 * Math.sin(t * 0.3 + 1.2), temp_c: 55 },
     ],
     cpu_temp_c: 52,
+    dgpu_temp: 55,
   };
 }
 
@@ -125,6 +127,7 @@ export interface SlicedHistory {
   net_recv: number[];
   net_sent: number[];
   gpus: GpuHistory[];
+  dgpu_temp: number | null;
 }
 
 export function useMetrics(windowSeconds: number): SlicedHistory | null {
@@ -164,6 +167,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
             net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
             net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
             gpus: mergeGpuHistory(prev.gpus, snap.gpus),
+            dgpu_temp: snap.dgpu_temp ?? prev.dgpu_temp ?? null,
           };
         });
       });
@@ -185,6 +189,7 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
           net_recv: appendToHistory(prev.net_recv, snap.net_recv_kb),
           net_sent: appendToHistory(prev.net_sent, snap.net_sent_kb),
           gpus: mergeGpuHistory(prev.gpus, snap.gpus),
+          dgpu_temp: snap.dgpu_temp ?? prev.dgpu_temp ?? null,
         };
       });
     }, 1000);
@@ -216,5 +221,6 @@ export function useMetrics(windowSeconds: number): SlicedHistory | null {
       values: sliceWindow(g.values, w),
       temp_c: g.temp_c ?? null,
     })),
+    dgpu_temp: history.dgpu_temp ?? null,
   };
 }

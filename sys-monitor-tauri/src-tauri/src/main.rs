@@ -21,6 +21,7 @@ pub struct MetricsSnapshot {
     pub net_recv_kb: f64,
     pub net_sent_kb: f64,
     pub gpus: Vec<GpuSnapshot>,
+    pub dgpu_temp: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -49,6 +50,7 @@ pub struct HistoryPayload {
     pub net_recv: Vec<f64>,
     pub net_sent: Vec<f64>,
     pub gpus: Vec<GpuHistory>,
+    pub dgpu_temp: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -114,6 +116,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
         net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
         gpus,
+        dgpu_temp: s.dgpu_temp.map(f64::from),
     }
 }
 
@@ -157,6 +160,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                 temp_c: None,
             })
             .collect(),
+        dgpu_temp: s.dgpu_temp.map(f64::from),
     }
 }
 

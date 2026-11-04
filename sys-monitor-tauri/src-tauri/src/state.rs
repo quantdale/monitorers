@@ -32,6 +32,10 @@ pub struct AppState {
     /// Current read/write MB/s per disk key (no history).
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
+    /// Nvidia GPU temperature in Celsius — None if NVAPI unavailable or no Nvidia GPU
+    pub dgpu_temp: Option<f32>,
+    /// NVAPI error logged flag — one-shot pattern like gpu_error_logged
+    pub nvapi_error_logged: bool,
 }
 
 pub type SafeAppState = Mutex<AppState>;
@@ -94,6 +98,8 @@ impl AppState {
             pdh_disk_write_counter,
             disk_read_mb_s: HashMap::new(),
             disk_write_mb_s: HashMap::new(),
+            dgpu_temp: None,
+            nvapi_error_logged: false,
         }
     }
 }
