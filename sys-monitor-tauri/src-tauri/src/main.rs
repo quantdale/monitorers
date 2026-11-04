@@ -353,7 +353,7 @@ fn main() {
                         build_snapshot(&s)
                     };
 
-                    app_handle.emit_all("metrics-update", snapshot).ok();
+                    app_handle.emit("metrics-update", snapshot).ok();
                 }
             });
 
