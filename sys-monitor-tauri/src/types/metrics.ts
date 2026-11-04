@@ -23,6 +23,8 @@ export interface MetricsSnapshot {
   net_recv_kb: number;
   net_sent_kb: number;
   gpus: GpuSnapshot[];
+  /** Celsius, null if NVAPI unavailable */
+  dgpu_temp?: number | null;
 }
 
 export interface DiskHistory {
@@ -48,4 +50,5 @@ export interface HistoryPayload {
   net_recv: number[];
   net_sent: number[];
   gpus: GpuHistory[];
+  dgpu_temp?: number | null;
 }

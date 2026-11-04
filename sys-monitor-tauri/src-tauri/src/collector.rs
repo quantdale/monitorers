@@ -725,6 +725,82 @@ pub fn refresh_network(app: &mut crate::state::AppState) {
     push_history(&mut app.net_sent_history, sent_kbs, 3600);
 }
 
+// ── NVIDIA GPU TEMPERATURE (NVAPI) ──────────────────────────────────────────
+
+/// Query Nvidia dGPU temperature in Celsius via NVAPI.
+///
+/// Returns `Option<f32>` — None if NVAPI is unavailable (VM, no Nvidia driver,
+/// Optimus switching, etc.). Graceful degradation: the app continues normally.
+///
+/// Api::initialize() is called each poll rather than once at startup: NVAPI is
+/// not thread-safe in the same way as PDH; reinitializing per poll is the safe
+/// pattern for a single-threaded query.
+///
+/// ThermalTarget::Gpu means the GPU die sensor specifically, not VRAM or board.
+/// We take index 0 (first GPU): on a system with one Nvidia GPU this is correct;
+/// multi-GPU support is a future concern.
+pub fn query_nvidia_temp(error_logged: &mut bool) -> Option<f32> {
+    use nvapi::{PhysicalGpu, ThermalTarget};
+
+    // Initialize NVAPI — must be called before any other NVAPI function.
+    // Returns error if no Nvidia driver is present — handle gracefully.
+    if nvapi::initialize().is_err() {
+        if !*error_logged {
+            eprintln!("[NVAPI] Failed to initialize. Nvidia temp unavailable.");
+            *error_logged = true;
+        }
+        return None;
+    }
+
+    // Enumerate physical GPUs — returns all Nvidia GPUs in the system.
+    let gpus = match PhysicalGpu::enumerate() {
+        Ok(g) => g,
+        Err(e) => {
+            if !*error_logged {
+                eprintln!("[NVAPI] Failed to enumerate GPUs: {:?}", e);
+                *error_logged = true;
+            }
+            let _ = nvapi::unload();
+            return None;
+        }
+    };
+
+    // Take the first GPU (index 0 = primary discrete GPU).
+    let gpu = match gpus.into_iter().next() {
+        Some(g) => g,
+        None => {
+            if !*error_logged {
+                eprintln!("[NVAPI] No physical Nvidia GPUs found.");
+                *error_logged = true;
+            }
+            let _ = nvapi::unload();
+            return None;
+        }
+    };
+
+    // Query thermal sensors. None = all sensors; we filter for GPU die.
+    let temp = match gpu.thermal_settings(None) {
+        Ok(sensors) => sensors
+            .into_iter()
+            .find(|s| s.target == ThermalTarget::Gpu)
+            .map(|s| s.current_temperature.0 as f32),
+        Err(e) => {
+            if !*error_logged {
+                eprintln!("[NVAPI] Failed to read thermal sensors: {:?}", e);
+                *error_logged = true;
+            }
+            let _ = nvapi::unload();
+            return None;
+        }
+    };
+
+    // Unload NVAPI after each query — reinitializing each poll is acceptable.
+    // NVAPI init/unload is lightweight (microseconds).
+    let _ = nvapi::unload();
+
+    temp
+}
+
 // ── CPU TEMPERATURE (WMI ROOT\WMI) ───────────────────────────────────────────
 
 /// Tenths of Kelvin to Celsius. Returns None if outside -50..=150 °C.
@@ -783,6 +859,7 @@ pub fn refresh_all(
         refresh_disk(app);
     }
 
+    app.dgpu_temp = query_nvidia_temp(&mut app.nvapi_error_logged);
     let gpu_list = query_gpu_utilization_pdh(app, wmi_con);
     let mut existing: HashMap<String, VecDeque<f64>> = app
         .gpu_histories

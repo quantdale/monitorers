@@ -21,6 +21,7 @@ pub struct MetricsSnapshot {
     pub net_recv_kb: f64,
     pub net_sent_kb: f64,
     pub gpus: Vec<GpuSnapshot>,
+    pub dgpu_temp: Option<f32>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -49,6 +50,7 @@ pub struct HistoryPayload {
     pub net_recv: Vec<f64>,
     pub net_sent: Vec<f64>,
     pub gpus: Vec<GpuHistory>,
+    pub dgpu_temp: Option<f32>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -93,7 +95,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         })
         .collect();
 
-    let gpus = s
+    let mut gpus: Vec<GpuSnapshot> = s
         .gpu_histories
         .iter()
         .map(|(_, name, hist)| GpuSnapshot {
@@ -102,6 +104,11 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
             temp_c: None,
         })
         .collect();
+
+    // Set dGPU temp on the last GPU (iGPU first, dGPU last in sort order).
+    if let (Some(last), Some(temp)) = (gpus.last_mut(), s.dgpu_temp) {
+        last.temp_c = Some(temp as f64);
+    }
 
     MetricsSnapshot {
         cpu,
@@ -114,6 +121,7 @@ fn build_snapshot(s: &state::AppState) -> MetricsSnapshot {
         net_recv_kb: s.net_recv_history.back().copied().unwrap_or(0.0),
         net_sent_kb: s.net_sent_history.back().copied().unwrap_or(0.0),
         gpus,
+        dgpu_temp: s.dgpu_temp,
     }
 }
 
@@ -157,6 +165,7 @@ fn get_history(state: tauri::State<SafeAppState>) -> HistoryPayload {
                 temp_c: None,
             })
             .collect(),
+        dgpu_temp: s.dgpu_temp,
     }
 }
 

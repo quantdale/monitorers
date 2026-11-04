@@ -157,16 +157,26 @@ export default function App() {
             }
           />
 
-          {metrics.gpus.map((gpu, idx) => (
-            <MetricCard
-              key={gpu.name}
-              title={gpu.name}
-              value={formatPercent(gpu.values.at(-1))}
-              history={gpu.values}
-              color={GPU_COLORS[idx % GPU_COLORS.length]}
-              badge={<span style={badgeStyle}>{formatTempC(gpu.temp_c)}</span>}
-            />
-          ))}
+          {metrics.gpus.map((gpu, idx) => {
+            // dGPU is the last GPU (iGPU first, dGPU last). Show temp alongside util.
+            // Null shown as absent rather than "N/A" — cleaner UX, consistent with Task Manager.
+            const isDgpu = idx === metrics.gpus.length - 1;
+            const tempStr =
+              isDgpu && metrics.dgpu_temp != null
+                ? ` · ${metrics.dgpu_temp.toFixed(0)}°C`
+                : '';
+            const valueStr = `${formatPercent(gpu.values.at(-1))}${tempStr}`;
+            return (
+              <MetricCard
+                key={gpu.name}
+                title={gpu.name}
+                value={valueStr}
+                history={gpu.values}
+                color={GPU_COLORS[idx % GPU_COLORS.length]}
+                badge={<span style={badgeStyle}>{formatTempC(gpu.temp_c)}</span>}
+              />
+            );
+          })}
         </>
       )}
     </div>

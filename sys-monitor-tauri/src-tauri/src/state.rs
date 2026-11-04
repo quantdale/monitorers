@@ -18,6 +18,10 @@ pub struct AppState {
     pub gpu_histories: Vec<(String, String, VecDeque<f64>)>,
     pub gpu_error_logged: bool,
     pub gpu_debug: bool,
+    /// Nvidia GPU temperature in Celsius — None if NVAPI unavailable or no Nvidia GPU.
+    pub dgpu_temp: Option<f32>,
+    /// NVAPI error logged flag — same one-shot pattern as gpu_error_logged.
+    pub nvapi_error_logged: bool,
     // wmi_con is intentionally NOT stored here.
     // WMIConnection has STA COM thread affinity when created on the main thread.
     // The background poll thread creates its own MTA WMIConnection and passes
@@ -86,6 +90,8 @@ impl AppState {
             gpu_histories: Vec::new(),
             gpu_debug: false,
             gpu_error_logged: false,
+            dgpu_temp: None,
+            nvapi_error_logged: false,
             pdh_query,
             pdh_gpu_3d_counter,
             pdh_gpu_video_counter,

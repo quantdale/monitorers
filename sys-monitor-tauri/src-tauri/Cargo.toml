@@ -18,6 +18,7 @@ windows = { version = "0.52", features = [
     "Win32_System_Performance",
     "Win32_Foundation",
 ] }
+nvapi = "0.1.4"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
