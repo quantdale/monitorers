@@ -49,6 +49,51 @@ pub fn query_cpu_temp_c(wmi_con: Option<&wmi::WMIConnection>) -> Option<f64> {
     max_c
 }
 
+// ── CPU SENSOR PROVIDER ────────────────────────────────────────────────────────
+
+/// Sensor provider that wraps CPU polling (usage + temperature).
+pub struct CpuSensorProvider;
+
+impl CpuSensorProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl crate::sensor::SensorProvider for CpuSensorProvider {
+    fn id(&self) -> &'static str {
+        "cpu"
+    }
+
+    fn poll(
+        &mut self,
+        state: &mut crate::state::CollectorState,
+        wmi_con: Option<&wmi::WMIConnection>,
+    ) -> crate::state::RawPoll {
+        state.system.refresh_cpu_usage();
+        let cpu_usage = state
+            .system
+            .global_cpu_usage()
+            .clamp(0.0, 100.0_f32) as f64;
+        let cpu_temp_c = query_cpu_temp_c(wmi_con);
+        if cpu_temp_c.is_none() {
+            state.cpu_temp_error_lock.get_or_init(|| {
+                eprintln!("[Thermal] CPU temperature unavailable (Win32_PerfFormattedData_Counters_ThermalZoneInformation not present or empty).");
+            });
+        }
+        crate::state::RawPoll {
+            cpu_usage,
+            cpu_temp_c,
+            ..Default::default()
+        }
+    }
+
+    fn commit(&mut self, store: &mut crate::state::HistoryStore, raw: &crate::state::RawPoll) {
+        crate::collector::push_history(&mut store.cpu_history, raw.cpu_usage, crate::collector::MAX_HISTORY);
+        store.cpu_temp_c = raw.cpu_temp_c;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,7 +3,9 @@ mod disk;
 mod gpu;
 mod nvidia;
 
+pub use cpu::CpuSensorProvider;
 pub use gpu::is_nvidia_gpu;
+pub use gpu::GpuSensorProvider;
 
 use std::collections::{HashMap, VecDeque};
 use windows::Win32::System::Performance::{
@@ -12,7 +14,7 @@ use windows::Win32::System::Performance::{
 
 // ── PUSH HISTORY HELPER ──────────────────────────────────────────────────────
 
-const MAX_HISTORY: usize = 3600;
+pub const MAX_HISTORY: usize = 3600;
 
 pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max_len: usize) {
     deque.push_back(value);

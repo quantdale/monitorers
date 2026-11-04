@@ -48,6 +48,27 @@ pub struct RawPoll {
     pub net_sent_kb_s: f64,
 }
 
+impl Default for RawPoll {
+    fn default() -> Self {
+        Self {
+            cpu_usage: 0.0,
+            cpu_temp_c: None,
+            mem_used_gb: 0.0,
+            mem_total_gb: 0.0,
+            mem_pct: 0.0,
+            gpu_updates: Vec::new(),
+            nvidia_temp: None,
+            disk_active: HashMap::new(),
+            disk_read_mb_s: HashMap::new(),
+            disk_write_mb_s: HashMap::new(),
+            disk_avg_response_ms: HashMap::new(),
+            disk_display_order: Vec::new(),
+            net_recv_kb_s: 0.0,
+            net_sent_kb_s: 0.0,
+        }
+    }
+}
+
 // ── CollectorState ───────────────────────────────────────────────────────────
 // Owns all OS handles and sysinfo instances. Lives only on the background
 // thread. Never wrapped in a Mutex.

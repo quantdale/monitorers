@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod collector;
+mod sensor;
 mod state;
 
+use collector::{CpuSensorProvider, GpuSensorProvider};
 use state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use std::collections::VecDeque;
 use tauri::Manager;
@@ -272,6 +274,10 @@ fn main() {
             let history_store = HistoryStore::new(&cpu_name);
             app.manage(SafeHistoryStore::new(history_store));
 
+            let mut registry = sensor::SensorRegistry::new();
+            registry.register(CpuSensorProvider::new());
+            registry.register(GpuSensorProvider::new());
+
             let app_handle = app.handle();
 
             std::thread::spawn(move || {
@@ -343,12 +349,20 @@ fn main() {
 
                     // All slow I/O — no lock held
                     let raw = collector::poll(&mut collector_state, wmi_con.as_ref());
+                    let reg_raw = if registry.has_providers() {
+                        registry.poll_all(&mut collector_state, wmi_con.as_ref())
+                    } else {
+                        vec![]
+                    };
 
                     // Lock held for microseconds only
                     let snapshot = {
                         let store = app_handle.state::<SafeHistoryStore>();
                         let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
                         collector::commit(&mut s, &raw);
+                        if !reg_raw.is_empty() {
+                            registry.commit_all(&mut s, &reg_raw);
+                        }
                         build_snapshot(&s)
                     };
 

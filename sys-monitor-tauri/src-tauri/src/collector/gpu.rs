@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 use windows::Win32::System::Performance::{
     PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
@@ -323,6 +323,64 @@ pub fn query_gpu_utilization_pdh(
     }
 
     result
+}
+
+// ── GPU SENSOR PROVIDER ───────────────────────────────────────────────────────
+
+/// Sensor provider that wraps GPU polling (PDH utilization + NVAPI temperature).
+/// Assumes PdhCollectQueryData has already been called this cycle (e.g. by collector::poll).
+pub struct GpuSensorProvider;
+
+impl GpuSensorProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl crate::sensor::SensorProvider for GpuSensorProvider {
+    fn id(&self) -> &'static str {
+        "gpu"
+    }
+
+    fn poll(
+        &mut self,
+        state: &mut crate::state::CollectorState,
+        wmi_con: Option<&wmi::WMIConnection>,
+    ) -> crate::state::RawPoll {
+        let gpu_updates =
+            query_gpu_utilization_pdh(&state.pdh, wmi_con, &state.gpu_error_lock);
+        let nvidia_temp =
+            crate::collector::nvidia::query_nvidia_gpu_temp(state.nvapi_initialized).map(|t| t as f64);
+        crate::state::RawPoll {
+            gpu_updates,
+            nvidia_temp,
+            ..Default::default()
+        }
+    }
+
+    fn commit(&mut self, store: &mut crate::state::HistoryStore, raw: &crate::state::RawPoll) {
+        let mut existing: HashMap<String, VecDeque<f64>> = store
+            .gpu_entries
+            .drain(..)
+            .map(|(key, _, hist)| (key, hist))
+            .collect();
+        store.gpu_entries = raw
+            .gpu_updates
+            .iter()
+            .map(|(key, display_name, util)| {
+                let mut hist = existing
+                    .remove(key)
+                    .unwrap_or_else(|| VecDeque::with_capacity(crate::collector::MAX_HISTORY));
+                crate::collector::push_history(
+                    &mut hist,
+                    util.clamp(0.0, 100.0),
+                    crate::collector::MAX_HISTORY,
+                );
+                (key.clone(), display_name.clone(), hist)
+            })
+            .collect();
+        store.nvidia_temp = raw.nvidia_temp;
+    }
 }
 
 #[cfg(test)]
