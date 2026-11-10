@@ -143,3 +143,25 @@ Section count 18 (`=== label ===` lines), i.e. all frontend + all Rust steps exe
 ### Residual risk
 
 Only the documented scanner limitation (a JS regex literal containing a comment marker would be misread). It fails loudly, and no first-party source has one — a probe over the whole tree found zero such literals.
+
+## 8. Archive and spec sync
+
+```
+$ npx openspec archive repository-maintenance-cleanup --yes
+Task status: ✓ Complete
+Specs to update:
+  dead-code-detection: update
+Applying changes to openspec/specs/dead-code-detection/spec.md:
+  ~ 2 modified
+Specs updated successfully.
+Change 'repository-maintenance-cleanup' archived as '2026-11-10-repository-maintenance-cleanup'.
+
+$ npx openspec validate --all --strict
+Totals: 25 passed, 0 failed (25 items)
+```
+
+`openspec/changes/` now holds only `archive/` — nothing is in flight. The
+`dead-code-detection` requirement block in `openspec/specs/` carries the new
+rule ("a reference SHALL mean a real reference in code: a comment SHALL NOT
+count") plus the scenario coverage for comments-vs-literals, dead-subtree root
+labelling, and the scanner's own in-lane tests.
