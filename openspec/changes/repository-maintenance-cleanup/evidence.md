@@ -114,3 +114,32 @@ $ FAST_EXIT=0
 ```
 
 Section count 18 (`=== label ===` lines), i.e. all frontend + all Rust steps executed and none short-circuited. Per-matrix Rust totals in that run: `209 passed` ×2 (all-features, default), `190` (no-default), `203` (nvml), `201` (nvapi), plus the 5 example/bin tests each and the 1 expected ignored real-hardware cadence test. The only warnings are the three `cargo audit` informational entries already dispositioned above.
+
+## 7. Delivery (post-integration verification)
+
+**Merged into the authoritative primary branch, then verified remotely.**
+
+| Step | Evidence |
+|---|---|
+| PR | [#57](https://github.com/quantdale/monitorers/pull/57) `maintenance/repo-cleanup` → `main` |
+| Required checks at `02e5aa5` | Frontend — verify **pass** (30 s), Rust — verify **pass** (5 m 59 s), Windows — production executable **pass** (5 m 56 s), E2E — mock-data harness **pass** (2 m 3 s), Simulation — config lint **pass**, Simulation — mock lane **pass** (3 m 46 s), security/snyk **pass**; the two dispatch-only lanes (`Simulation — packaged lane`, `Windows — MSI and NSIS bundle`) reported **skipping**, as policy dictates |
+| Merge | `gh pr merge 57 --merge --match-head-commit 02e5aa5…` → merge commit **`d6b62e0`** |
+| `origin/main` after merge | `d6b62e0965491e3fac0cc0de354fb92c7be6b379` (`git ls-remote --heads origin main`), local `main` fast-forwarded to the same SHA |
+| Post-merge hosted runs at `d6b62e0` | Rust and release **success**, E2E Verification Harness **success**, Simulation **success** |
+| Delivered content verified in the remote tree | `git show origin/main:sys-monitor-tauri/scripts/dead-code-scan.mjs` returns the new scanner; `git cat-file -e origin/main:"deep review resolve.txt"` and `…:src/assets/react.svg` both fail (files absent, as intended) |
+| Commits introduced by the merge | exactly the six campaign commits, no others (`git log --oneline d6b62e0^1..d6b62e0^2`) |
+| Files changed vs. the previous `main` | 24 — the intended set only; no unrelated file, no generated artifact, no secret |
+| Unrelated commits? | `git diff 4781f8a..d6b62e0 --name-only` lists only the campaign's files plus the OpenSpec change record. No feature branch was merged. |
+| Campaign branch cleanup | local `maintenance/repo-cleanup` deleted after `git merge-base --is-ancestor` proved it fully merged; remote branch deleted via `gh api -X DELETE …/git/refs/heads/maintenance%2Frepo-cleanup` and `git ls-remote --heads origin maintenance/repo-cleanup` now returns nothing |
+
+### Preserved (deliberately not touched)
+
+- Six locked Cursor worktrees (`C:/Users/palac/.cursor/worktrees/monitorers/{dqn,eyz,jce,kmo,spm,ulz,wrm)`): protected by a recorded 2026-11-04 audit, hold unique uncommitted work, each snapshotted as an `origin/recovery/*-202603` ref. Left exactly as they were (`git worktree list --porcelain` still reports 7 locked entries including the canonical checkout).
+- Local branches `agent/session-finalization` and `agent/monitorers-dependency-queue-2026-10-09`: both fully contained in `origin/main` (`git branch --merged origin/main`), so they hold no unique work — but they are the owner's historical branches, not campaign-created resources, so removing them is not this campaign's call.
+- `origin/plan/repo-local-addons-2026-08-28`: one unmerged planning commit, no PR, status uncertain → preserved per the preservation rule.
+- The 11 open Dependabot PRs: dependency adoption is a separate campaign with its own qualification requirements; none was merged into this maintenance work.
+- `.gitignore`'s trailing `# Repository maintenance: comment-only change.` line: authored upstream in `4781f8a`; removing another author's committed content adds no maintenance value.
+
+### Residual risk
+
+Only the documented scanner limitation (a JS regex literal containing a comment marker would be misread). It fails loudly, and no first-party source has one — a probe over the whole tree found zero such literals.
