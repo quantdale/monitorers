@@ -7,7 +7,9 @@ use sys_monitor_tauri::collector::{
     disk_display_name, physical_disk_list, query_disk_models_wmi, run_collector_loop, LoopOutcome,
     MetricsSnapshot, WmiBootstrap,
 };
-use sys_monitor_tauri::hardware::{classify_gpu, DiskInfo, DiskKind, GpuInfo, HardwareProfile};
+use sys_monitor_tauri::hardware::{
+    classify_gpu, disk_kind_of, DiskInfo, DiskKind, GpuInfo, HardwareProfile,
+};
 use sys_monitor_tauri::sensor::{CpuSensorProvider, GpuSensorProvider, SensorRegistry};
 use sys_monitor_tauri::state::{CollectorState, HistoryStore, SafeAppState, SafeHistoryStore};
 use sys_monitor_tauri::{
@@ -261,7 +263,6 @@ fn run_session_body(
     // Build a useful degraded profile before WMI is available. Core
     // PDH/sysinfo collection must not wait behind WMI startup or retry sleeps.
     let physical = physical_disk_list(&collector_state.sysinfo_disks, &collector_state.pdh);
-    use sysinfo::DiskKind as SysDiskKind;
     // Presentation helper shared with the WMI-enrichment path below. The
     // pre-WMI call passes an EMPTY model map, so the resulting names are
     // exactly the sysinfo names the startup path produced before this change —
@@ -275,17 +276,13 @@ fn run_session_body(
         Some(
             physical
                 .iter()
-                .map(|(disk_key, kind, sysinfo_name, drive_index)| {
-                    let k = match kind {
-                        SysDiskKind::SSD => DiskKind::Ssd,
-                        SysDiskKind::HDD => DiskKind::Hdd,
-                        _ => DiskKind::Unknown,
-                    };
-                    DiskInfo {
-                        key: disk_key.clone(),
-                        name: disk_display_name(*drive_index, &no_models, sysinfo_name),
-                        kind: k,
-                    }
+                .map(|(disk_key, kind, sysinfo_name, drive_index)| DiskInfo {
+                    key: disk_key.clone(),
+                    name: disk_display_name(*drive_index, &no_models, sysinfo_name),
+                    // One shared mapping (`disk_kind_of`) rather than a second
+                    // copy of it here: the sidebar and the dashboard must not
+                    // be able to disagree about a disk's kind.
+                    kind: disk_kind_of(kind),
                 })
                 .collect(),
         )
