@@ -49,12 +49,15 @@ describe('MockBackend default parity', () => {
     vi.advanceTimersByTime(4 * 250); // 4 simulation seconds
     expect(onTicks).toHaveLength(4);
     expect(onTicks).toEqual([false, false, false, true]);
-    expect([...new Set(versions)]).toEqual([6]);
+    // Pinned to the shared expectation rather than a copied literal: the value
+    // is duplicated inside mockBackend.ts (an import cycle forbids importing
+    // it there), and a copy here would silently pass after a version bump.
+    expect([...new Set(versions)]).toEqual([EXPECTED_SCHEMA_VERSION]);
   });
 
   it('default scenario carries the pre-bridge disk/GPU set', () => {
     const scenario = defaultScenario();
-    expect(scenario.schema_version).toBe(6);
+    expect(scenario.schema_version).toBe(EXPECTED_SCHEMA_VERSION);
     expect(scenario.speed).toBe(1);
     expect(scenario.disks?.map((d) => d.key)).toEqual(['C:', 'D:']);
     expect(scenario.gpus?.map((g) => [g.name, g.vendor])).toEqual([
@@ -70,7 +73,7 @@ describe('MockBackend default parity', () => {
     // span it (300 points x HISTORICAL_DENSITY 1000 ms = 300 s).
     const backend = makeBackend();
     const payload = await backend.getHistory(3600);
-    expect(payload.schema_version).toBe(6);
+    expect(payload.schema_version).toBe(EXPECTED_SCHEMA_VERSION);
     expect(payload.timestamps).toHaveLength(300);
     expect(payload.cpu).toHaveLength(300);
     expect(payload.disks.map((d) => d.key)).toEqual(['C:', 'D:']);

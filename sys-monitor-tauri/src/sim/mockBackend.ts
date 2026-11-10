@@ -261,10 +261,13 @@ export function detectSimRunId(): string | null {
 }
 
 /**
- * Reads the handoff scenario for `runId` from localStorage. The entry is kept
- * (not removed) so an app-restart step that reloads the page resumes the same
- * run with the same scripted state; journeys clear it via `clearSimScenario()`
- * when they finish.
+ * Reads the handoff scenario for `runId` from localStorage.
+ *
+ * The entry is deliberately KEPT (never removed on load) so an app-restart
+ * step that reloads the page resumes the same run with the same scripted
+ * state. Nothing needs to clear it afterwards: every run is launched with a
+ * unique run id into a fresh browser context, so entries cannot accumulate
+ * across runs and cannot leak into a later one.
  */
 export function readSimScenario(runId: string): SimScenario | null {
   try {
@@ -275,15 +278,6 @@ export function readSimScenario(runId: string): SimScenario | null {
     return null;
   } catch {
     return null;
-  }
-}
-
-/** Removes a run's handoff scenario (run cleanup). */
-export function clearSimScenario(runId: string): void {
-  try {
-    localStorage.removeItem(simSessionKey(runId));
-  } catch {
-    // best-effort cleanup
   }
 }
 
