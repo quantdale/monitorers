@@ -102,3 +102,15 @@ Baseline → final: frontend **312 → 335** tests (+23: 10 windowing, 17 scanne
 ## Not claimed
 
 The packaged/real-candidate lanes (`verify:tauri`, `verify:packaged`, `sim:real`) were **not** run for this change and are not claimed: nothing in it touches the collector, IPC contract, schema versions, persisted settings, or the packaged app's runtime behaviour, and both of those lanes are dispatch-only/expensive by repository policy. Hosted CI results are not claimed either — see the delivery section of the campaign report for what was pushed and what the remote shows.
+
+## 6b. Canonical fast lane, exit code captured directly
+
+`node scripts/verify.mjs fast` was run twice after all changes, with the exit code read from the process rather than inferred from output:
+
+```
+$ node scripts/verify.mjs fast; echo "FAST_EXIT=$?"
+...
+$ FAST_EXIT=0
+```
+
+Section count 18 (`=== label ===` lines), i.e. all frontend + all Rust steps executed and none short-circuited. Per-matrix Rust totals in that run: `209 passed` ×2 (all-features, default), `190` (no-default), `203` (nvml), `201` (nvapi), plus the 5 example/bin tests each and the 1 expected ignored real-hardware cadence test. The only warnings are the three `cargo audit` informational entries already dispositioned above.
