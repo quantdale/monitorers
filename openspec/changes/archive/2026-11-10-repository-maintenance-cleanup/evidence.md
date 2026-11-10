@@ -165,3 +165,17 @@ Totals: 25 passed, 0 failed (25 items)
 rule ("a reference SHALL mean a real reference in code: a comment SHALL NOT
 count") plus the scenario coverage for comments-vs-literals, dead-subtree root
 labelling, and the scanner's own in-lane tests.
+
+### 8a. Archive/spec-sync delivery (second push, same remote)
+
+The archive and spec sync landed after the PR merge, so they were delivered to `main` directly — the repository has **no branch protection and no rulesets** (`gh api repos/quantdale/monitorers/branches/main/protection` → 404 "Branch not protected"; `gh api repos/quantdale/monitorers/rulesets` → `[]`), and `.husky/pre-push` enforces the canonical fast lane locally.
+
+```
+$ git push origin main
+=== pre-push: canonical fast verification passed ===
+   d6b62e0..7f1cc21  main -> main
+```
+
+`git ls-remote --heads origin main` → **`7f1cc21d5f1a131b7156f93df91abb774533f174`**, identical to local `main`. Hosted runs at that SHA: Simulation **success**, E2E Verification Harness **success**, Rust and release **success** (`gh run list --branch main --headSha 7f1cc21`). `git log --branches --not --remotes` is empty, and the working tree is clean.
+
+This second push contains only documentation and spec files — no code, no configuration, no dependency — which is why the pre-push fast lane (which still ran in full) is proportionate validation for it.
