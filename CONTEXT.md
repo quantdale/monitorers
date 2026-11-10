@@ -12,10 +12,12 @@ clamped, and a bounded extrema-preserving sampler is used over the rendering
 budget.
 
 ## Rendering budget
-`MAX_CHART_POINTS` (300) — the most data points a chart renders. History
-past the budget is downsampled with first/latest boundary preservation and
-bucket extrema, so a short spike remains visible while output stays at or
-below the budget.
+`MAX_CHART_POINTS` (300, `src/components/MetricCard.tsx`) — the most data
+points a chart renders; `computeChartPoints` receives it as `maxPoints` rather
+than owning the constant, so the budget is a caller decision. History past the
+budget is downsampled with first/latest boundary preservation and bucket
+extrema, so a short spike remains visible while output stays at or below the
+budget.
 
 ## Extrema-preserving sampling
 The downsampling strategy in `computeChartPoints`: divide source indices into

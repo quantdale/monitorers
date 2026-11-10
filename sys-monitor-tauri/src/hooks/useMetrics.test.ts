@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   appendToHistory,
   appendLiveEvent,
-  sliceWindow,
+  sliceByRange,
+  timestampWindowRange,
   mergeDiskHistory,
   mergeGpuHistory,
   mergeLatestGpu,
@@ -62,8 +63,6 @@ describe('appendToHistory', () => {
   });
 });
 
-// --- sliceWindow ---
-
 // --- appendLiveEvent (bounded live-event retention) ---
 
 function fakeEvent(sequence: number): Parameters<typeof appendLiveEvent>[1] {
@@ -108,29 +107,62 @@ describe('appendLiveEvent', () => {
   });
 });
 
-// --- sliceWindow ---
+// --- timestampWindowRange + sliceByRange (the ONE windowing implementation) ---
 
-describe('sliceWindow', () => {
-  const timestamps = [0, 1_000, 2_000, 3_000, 5_000];
-
-  it('selects points by elapsed timestamp span, not sample count', () => {
-    expect(sliceWindow([1, 2, 3, 4, 5], timestamps, 3)).toEqual([3, 4, 5]);
+describe('timestampWindowRange', () => {
+  it('selects the index range covering the requested elapsed-time window', () => {
+    expect(timestampWindowRange([0, 1_000, 2_000, 3_000, 5_000], 3)).toEqual([2, 5]);
   });
 
-  it('returns entire array when shorter than window', () => {
-    expect(sliceWindow([1, 2], [0, 1_000], 10)).toEqual([1, 2]);
+  it('covers everything when the recorded span is shorter than the window', () => {
+    expect(timestampWindowRange([0, 1_000], 10)).toEqual([0, 2]);
   });
 
-  it('returns entire array when equal to window', () => {
-    expect(sliceWindow([1, 2, 3], [0, 1_000, 2_000], 3)).toEqual([1, 2, 3]);
+  it('returns an empty-recorded range for an empty ring', () => {
+    expect(timestampWindowRange([], 60)).toEqual([0, 0]);
   });
 
-  it('returns last 1 element for window = 1', () => {
-    expect(sliceWindow([7, 8, 9], [0, 1_000, 2_000], 1)).toEqual([8, 9]);
+  it('rejects a non-positive or non-finite window by returning the recorded range', () => {
+    expect(timestampWindowRange([0, 1_000, 2_000], 0)).toEqual([0, 3]);
+    expect(timestampWindowRange([0, 1_000, 2_000], Number.POSITIVE_INFINITY)).toEqual([0, 3]);
+    expect(timestampWindowRange([0, 1_000, 2_000], Number.NaN)).toEqual([0, 3]);
+  });
+
+  it('walks forward to the first sample at or after the cutoff', () => {
+    // newest 5_000, window 2s -> cutoff 3_000; the first sample >= 3_000 is index 3.
+    expect(timestampWindowRange([0, 1_000, 2_000, 3_000, 5_000], 2)).toEqual([3, 5]);
+    // A cutoff landing BETWEEN samples starts at the next real sample rather
+    // than inventing a boundary point that was never recorded: cutoff 2_500.
+    expect(timestampWindowRange([0, 1_000, 2_000, 3_000, 5_000], 2.5)).toEqual([3, 5]);
   });
 });
 
-// --- mergeDiskHistory ---
+describe('sliceByRange', () => {
+  const range: [number, number] = [2, 5];
+
+  it('slices a full-length channel by the pre-derived range', () => {
+    expect(sliceByRange([1, 2, 3, 4, 5], 5, range)).toEqual([3, 4, 5]);
+  });
+
+  it('tail-aligns a shorter channel against the global ring', () => {
+    // 2 values against 5 timestamps: they belong to the newest two slots.
+    expect(sliceByRange([4, 5], 5, range)).toEqual([4, 5]);
+  });
+
+  it('returns the channel untouched when no range was derived', () => {
+    expect(sliceByRange([1, 2], 2, null)).toEqual([1, 2]);
+  });
+
+  it('keeps an empty channel empty', () => {
+    expect(sliceByRange([], 5, range)).toEqual([]);
+  });
+
+  it('returns nothing when the range and the channel do not overlap', () => {
+    expect(sliceByRange([1], 9, [0, 3])).toEqual([]);
+  });
+});
+
+// --- appendLiveEvent (bounded live-event retention) ---
 
 describe('mergeDiskHistory', () => {
   const now = Date.now();

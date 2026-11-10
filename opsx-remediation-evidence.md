@@ -1,5 +1,12 @@
 # OpenCode Loop Goal Report
 
+> **Historical record — 2026-08-03.** The test counts and command output below
+> are the values that run reported on that date; they are NOT current gate
+> state. Read `progress.md` for the current snapshot and run the canonical
+> commands (`npm run verify:frontend`, `npm run verify:rust`) for today's
+> numbers. This document is kept for the record of what that campaign
+> implemented and how it was verified.
+
 Status: completed
 Goal: Find every active OpenSpec change in this repository (check openspec/changes/ or run `openspec list` if available). For each active change: 1. Read its tasks.md and proposal.md fully before touching anything. 2. Identify which tasks are unchecked ([ ]) and work through them in order. 3. Before marking anything complete, determine the correct verification command(s) for THIS project — check for Cargo.toml (cargo test/cargo build), package.json (npm test/npm run build/tsc --noEmit), .csproj (dotnet test), platformio.ini (pio test), or whatever build/test tooling actually exists here. Do not assume a stack. 4. Run the real verification command and paste the actual output as evidence. No task gets marked [x] without pasted command output showing it passing. 5. If verification fails, fix the root cause before moving to the next task. Do not skip a failing check to make progress elsewhere. 6. State CONFIRMED (verified in code/output) vs HYPOTHESIS before any claim. 7. Update tasks.md, marking completed items [x] as you go. 8. Once all tasks in a change are done and its verification is green, run `openspec validate <change-id> --strict` if the CLI is available, or otherwise re-run the full project test/build suite as a final check before considering that change complete. 9. Do not run `openspec archive` — leave archiving for manual review. 10. Move to the next active change and repeat. Stop only when every active change has all tasks checked off and its verification is green, or when something is genuinely blocked — in that case, write the blocker to opsx-remediation-evidence.md with specifics (file:line, error output) rather than guessing past it. Do not stop just because one change looks done if other active changes remain.
 Created: 2026-08-03T10:11:37.252Z

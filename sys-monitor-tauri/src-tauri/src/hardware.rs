@@ -233,17 +233,27 @@ fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -
 
 /// Project an ALREADY-ENUMERATED sysinfo Disks list into profile DiskInfos.
 /// Lets callers that already hold a `Disks` (the collector state always does)
+/// Project a sysinfo `DiskKind` onto the profile's serialized `DiskKind`.
+///
+/// The ONE mapping between the two enums: sysinfo reports SSD/HDD/Unknown, the
+/// IPC contract carries `Ssd`/`Hdd`/`Nvme`/`Unknown`. Callers that already hold
+/// a `sysinfo::Disks` list (the collector state always does) must go through
+/// this rather than re-deriving the match, so the sidebar cannot disagree with
+/// the dashboard about what kind of disk is installed.
+pub fn disk_kind_of(kind: &sysinfo::DiskKind) -> DiskKind {
+    match kind {
+        sysinfo::DiskKind::SSD => DiskKind::Ssd,
+        sysinfo::DiskKind::HDD => DiskKind::Hdd,
+        _ => DiskKind::Unknown,
+    }
+}
+
 /// build a profile without a second OS enumeration.
 pub fn disk_infos_from(disks: &sysinfo::Disks) -> Vec<DiskInfo> {
-    use sysinfo::DiskKind as SysDiskKind;
     disks
         .iter()
         .map(|d| {
-            let kind = match d.kind() {
-                SysDiskKind::SSD => DiskKind::Ssd,
-                SysDiskKind::HDD => DiskKind::Hdd,
-                _ => DiskKind::Unknown,
-            };
+            let kind = disk_kind_of(&d.kind());
             DiskInfo {
                 key: d.name().to_string_lossy().to_string(),
                 name: d.name().to_string_lossy().to_string(),
@@ -333,7 +343,27 @@ mod tests {
         for (info, disk) in infos.iter().zip(disks.iter()) {
             assert_eq!(info.key, disk.name().to_string_lossy());
             assert_eq!(info.name, disk.name().to_string_lossy());
+            assert_eq!(info.kind, disk_kind_of(&disk.kind()));
         }
+    }
+
+    #[test]
+    fn test_disk_kind_of_is_the_single_sysinfo_mapping() {
+        // The startup profile builder in main.rs and this module must agree
+        // byte-for-byte: they share this one function rather than each
+        // re-deriving the match. Unknown variants (including sysinfo's
+        // `Unknown(isize)`) map to the profile's own Unknown, never to a
+        // guessed SSD/HDD.
+        assert_eq!(disk_kind_of(&sysinfo::DiskKind::SSD), DiskKind::Ssd);
+        assert_eq!(disk_kind_of(&sysinfo::DiskKind::HDD), DiskKind::Hdd);
+        assert_eq!(
+            disk_kind_of(&sysinfo::DiskKind::Unknown(0)),
+            DiskKind::Unknown
+        );
+        assert_eq!(
+            disk_kind_of(&sysinfo::DiskKind::Unknown(-1)),
+            DiskKind::Unknown
+        );
     }
 
     // --- classify_gpu (name-based vendor + kind classification) ---

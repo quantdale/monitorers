@@ -244,18 +244,23 @@ export function timestampWindowRange(timestamps: number[], windowSeconds: number
 }
 
 /**
- * Slice a channel using the timestamps shared by the whole history payload.
- * The optional tail alignment handles a channel whose backend history is
- * shorter than the global ring without turning a 60-second request into 60
- * arbitrary samples.
+ * Slice a channel against a range that `timestampWindowRange` derived ONCE for
+ * the whole payload (see the windowed-channels memo below). The tail alignment
+ * handles a channel whose history is shorter than the global ring without
+ * turning a 60-second request into 60 arbitrary samples; an empty channel stays
+ * empty, and a payload with no recorded timestamps (`range === null`) returns
+ * the channel untouched.
  */
-export function sliceWindow<T>(arr: T[], timestamps: number[], windowSeconds: number): T[] {
+export function sliceByRange<T>(
+  arr: T[],
+  timestampCount: number,
+  range: [number, number] | null
+): T[] {
   if (arr.length === 0) return [];
-  const [globalStart, globalEnd] = timestampWindowRange(timestamps, windowSeconds);
-  if (timestamps.length === 0) return arr;
-  const offset = timestamps.length - arr.length;
-  const localStart = Math.max(0, globalStart - offset);
-  const localEnd = Math.min(arr.length, globalEnd - offset);
+  if (range === null) return arr;
+  const offset = timestampCount - arr.length;
+  const localStart = Math.max(0, range[0] - offset);
+  const localEnd = Math.min(arr.length, range[1] - offset);
   return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
 }
 
@@ -280,22 +285,6 @@ export interface SlicedHistory {
   collectorError: string | null;
   /** Supervised-collector lifecycle state (null until first status arrives). */
   collectorState: CollectorLifecycleState | null;
-}
-
-/**
- * Slice one channel using a timestamp range that was derived ONCE for the
- * whole payload (see the windowed-channels memo in useMetrics). Semantics are
- * identical to `sliceWindow`: a shorter channel is tail-aligned against the
- * global ring; an empty channel stays empty; a payload without recorded
- * timestamps returns the channel untouched.
- */
-function sliceWithRange<T>(arr: T[], timestampCount: number, range: [number, number] | null): T[] {
-  if (arr.length === 0) return [];
-  if (range === null) return arr;
-  const offset = timestampCount - arr.length;
-  const localStart = Math.max(0, range[0] - offset);
-  const localEnd = Math.min(arr.length, range[1] - offset);
-  return localStart < localEnd ? arr.slice(localStart, localEnd) : [];
 }
 
 /**
@@ -697,7 +686,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   // selected window changes (1 Hz at most), never on the ~250ms scalar-only
   // live events. Derives the elapsed-time window range once instead of
   // re-scanning the timestamp ring per channel (the previous per-event path
-  // ran sliceWindow nine+ times, each with its own linear cutoff scan), and
+  // re-derived the range nine+ times, each with its own linear cutoff scan), and
   // precomputes each GPU's newest recorded sample so the scalar merge below
   // never repeats an O(ring) reverse scan per live tick.
   const windowed = useMemo(() => {
@@ -708,7 +697,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       tsLen > 0 && Number.isFinite(window) && window > 0
         ? timestampWindowRange(history.timestamps, window)
         : null;
-    const slice = <T>(arr: T[]): T[] => sliceWithRange(arr, tsLen, range);
+    const slice = <T>(arr: T[]): T[] => sliceByRange(arr, tsLen, range);
     return {
       timestamps: slice(history.timestamps),
       cpu: slice(history.cpu),

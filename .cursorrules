@@ -106,6 +106,7 @@ monitorers/
 └── sys-monitor-tauri/
     ├── package.json                ← npm scripts (incl. verify:* canonical gates), React/Vite/dnd-kit deps
     ├── scripts/verify.mjs          ← canonical verification lanes called by CI and husky pre-push
+    ├── scripts/dead-code-scan.mjs  ← dead-export scanner (unit-tested); check-dead-code.mjs is its CLI
     ├── vite.config.ts              ← strict port 5180, ignores src-tauri
     ├── tsconfig.json               ← strict mode, ES2022, noUnusedLocals/Params
     ├── index.html                  ← Vite HTML entry
@@ -145,7 +146,7 @@ monitorers/
             ├── lib.rs               ← library facade shared by app binary and the probe examples
             ├── state.rs            ← PdhHandles, CollectorState, RawPoll, HistoryStore, SafeHistoryStore
             ├── cadence.rs           ← tick-cadence checks shared by loop and probe
-            ├── hardware.rs          ← detect()/classify_gpu(), degraded-but-useful HardwareProfile
+            ├── hardware.rs          ← detect_with_cpu()/disk_infos_from()/disk_kind_of()/classify_gpu(), degraded-but-useful HardwareProfile
             ├── pdh.rs               ← PDH helper layer
             ├── error_log.rs         ← persistent collector-error sink
             ├── sensor.rs            ← SensorProvider trait + SensorRegistry (250 ms pollers)
@@ -243,7 +244,7 @@ monitorers/
 - `listen("metrics-update")` → incremental appends via `appendToHistory` / `mergeDiskHistory` / `mergeGpuHistory`
 - On mount/reload it ALSO bootstraps the current managed status via `invoke("get_collector_status")` (after the status listener attaches; an applied-status sequence fence discards fetch responses older than an already-observed event), so an already-failed supervisor shows its failed UX + Retry immediately
 - Returns `SlicedHistory` (windowed view) or `null` while loading
-- `sliceWindow()` clips to the active time range before returning
+- `sliceByRange()` clips each channel against the range `timestampWindowRange()` derived once per payload before returning
 
 **Browser dev mode**: `isTauri()` detects `window.__TAURI_INTERNALS__`. When absent, `useMetrics` uses the scriptable mock backend; speed changes timer frequency only and mock schema faults fail closed.
 
@@ -359,7 +360,7 @@ cargo test collector::disk::tests # one module
 
 **Vitest** tests live adjacent to the implementation; counts are intentionally not duplicated in this document because they change with each regression test. When adding tests:
 - Place adjacent to file under test: `useMetrics.test.ts`, `utils.test.ts`
-- Test pure utility functions (`historyMinMax`, `sliceWindow`, `appendToHistory`, `computeChartPoints`, formatters in `src/cards/formatters.ts`)
+- Test pure utility functions (`historyMinMax`, `timestampWindowRange`, `sliceByRange`, `appendToHistory`, `computeChartPoints`, formatters in `src/cards/formatters.ts`)
 - Mock Tauri IPC for hook tests (`vi.mock('@tauri-apps/api/event')`)
 
 ### CI

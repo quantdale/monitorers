@@ -2,7 +2,7 @@
   "name": "monitorers",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "private": true,
   "scripts": {
     "test": "npm --prefix sys-monitor-tauri test",
     "build": "npm --prefix sys-monitor-tauri run build",
