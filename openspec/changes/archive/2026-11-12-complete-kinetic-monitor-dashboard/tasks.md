@@ -15,10 +15,10 @@
 - [x] 3.1 Pass active changed-file LSP diagnostics, all TypeScript projects, hooks lint, unit tests, scoped audits and production build.
 - [x] 3.2 Pass repeated geometry/reorder regressions, full E2E and full mock simulation; visually inspect desktop/narrow/short views and accessibility with browser artifacts.
 - [x] 3.3 Build the final Tauri frontend/executable, pass packaged real-IPC/settings/restart qualification and confirm WebView2 policy cleanup.
-- [ ] 3.4 Review every changed file and immediate contracts, remove instrumentation, validate/sync/archive OpenSpec and record truthful evidence/progress.
-- [ ] 3.5 Resolve the hosted artifact-export failure: preserve complete traces, separate export IO from shutdown deadlines, add red-capable lifecycle tests, and requalify the full matrix locally and hosted.
+- [x] 3.4 Review every changed file and immediate contracts, remove instrumentation, validate/sync/archive OpenSpec and record truthful evidence/progress.
+- [x] 3.5 Resolve the hosted artifact-export failure: preserve complete traces, separate export IO from shutdown deadlines, add red-capable lifecycle tests, and requalify the full matrix locally and hosted.
 
 ## 4. Delivery
 
 - [x] 4.1 Commit verified work and push normally to main as explicitly requested, without bypassing hooks or force pushing.
-- [ ] 4.2 Inspect final-SHA hosted checks and confirm remote/local main match with a clean working tree and no unpushed commits.
+- [x] 4.2 Inspect final implementation-SHA hosted checks and confirm remote/local main match with a clean working tree and no unpushed commits. Verified at `54445b6`; archive/docs delivery is independently rechecked before handoff.

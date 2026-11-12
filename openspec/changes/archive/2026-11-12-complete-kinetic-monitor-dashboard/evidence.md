@@ -65,4 +65,15 @@ After the follow-up: canonical frontend gate **347/347 tests in 27 files**, both
 
 ## Delivery
 
-The source is delivered on main; hosted requalification of the archive-IO follow-up, final spec archive and clean-tree audit are still pending. This section is updated from actual results rather than predicting them.
+Final implementation **`54445b68c763d2fc2d9b841ba4db04bdafc8b129`** is on main, pushed normally with both hooks passing. All hosted workflows succeeded on attempt 1 at that SHA: Rust/release **43250505411**, full E2E **43250505922**, Simulation **43250505321** (16/16 journeys, all trace exports complete, 108–6,551ms). Dispatch-only packaged/installer jobs are skipped by policy and are not claimed as hosted runs; local packaged/real evidence is above. `git fetch`, matching local/remote main, empty status and `git log --branches --not --remotes` were verified before the metadata-only archive follow-up.
+
+Specs were synced intelligently, then `openspec archive complete-kinetic-monitor-dashboard --skip-specs --yes` completed with every task checked. The archive is `2026-11-12-complete-kinetic-monitor-dashboard`; strict post-archive validation passes **26/26**. Source, tests and executable are unchanged by this final metadata-only commit. The archive/docs push and its exact final-SHA hosted/remote/clean-tree audit are recorded outside the commit in the session's `final-delivery.json`, avoiding a self-referential SHA record.
+
+## Requirement-by-requirement audit
+
+- **Reassess the recommendation:** rejected unsupported card-decoration changes; red-capable instrumentation/regressions and repeated tests support the actual sensor/collision and containing-block fixes.
+- **Finish the overhaul and original capabilities:** all views, controls, sidebar modes and loading/empty/recovery/failure surfaces are covered by full E2E, mock matrix, rendered inspection and the real-app qualification; keyboard and pointer ordering remain available.
+- **Accessibility/responsiveness/motion:** short/narrow/wide boxes, native select, accessible state, focus cycling/restoration, contrast endpoints and OS reduced motion are verified; axe/LSP limitations are explicitly disclosed rather than reported as blanket clean.
+- **Preserve contracts:** protected backend/data/settings/history/identity source remains unchanged from `ad3b637`; live IPC, isolated settings, actual restart persistence and host cleanup pass.
+- **Verification:** all three TS projects, lint, 347 unit tests, full E2E, full mock matrix, Rust matrices/fmt/Clippy/audits, fresh release, packaged and selected real journeys pass. Large-trace cleanup has a tested separate budget; failures are not filtered or quarantined.
+- **Finalize and deliver:** specs synced, change archived, progress/instructions updated, normal main pushes through hooks; final remote and hosted evidence is captured by the external final-delivery audit.
