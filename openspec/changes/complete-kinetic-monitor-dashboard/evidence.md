@@ -47,12 +47,22 @@ Windows, **Node 24.15.0**, npm 11.4.2. Counts below are this run's evidence, not
 
 The final component-module rename is behavior-neutral: production `dist/index.html` remains byte-identical with SHA-256 `66568e0c2ff3f7e41b3c49e3f438c9c9881bb564f4c02bb66d4cb7ff723d7e6d`; its content-hashed script references are unchanged. The qualified release executable SHA-256 is `2ac279da58484a361fc0947ff580d039435c588b535dcb6d0344b8c5e4a676af`.
 
-One intermediate full-matrix run failed trace cleanup (`tracing.stop` exceeded 15s) while the release build was running. That failure is retained (`mock-sim-final.log`); a standalone full rerun passed all journeys (`mock-sim-solo.log`), followed by the green final-candidate full run above. No cleanup assertion or timeout was weakened.
+One intermediate full-matrix run failed trace cleanup (`tracing.stop` exceeded 15s) while the release build was running. That failure is retained (`mock-sim-final.log`); a standalone full rerun passed all journeys (`mock-sim-solo.log`), followed by the green final-candidate full run above. The initial candidate retained that deadline. Subsequent hosted evidence below demonstrated that archive IO needed a separate budget.
 
 ## Visual and accessibility evidence
 
 Inspected screenshots at 900x1100, 400x300 and 320x568: `dashboard-default.png`, `tile-final.png`, `mobile-list-final.png`, `metrics-minimum.png`, `empty-final.png`. Browser axe scans reported **0 violations**, with incomplete automated gradient/overlap contrast checks (not a blanket accessibility certification). Unit tests explicitly prove contrast at the brightest channel-wash endpoint and on the active lime control. The popup relationship was manually verified: one matching panel ID, body-rooted portal, and the trigger's controls attribute matching it while open. Browser regressions prove focus containment, Escape restoration, reduced motion, and viewport geometry.
 
+## Hosted qualification follow-up: archive IO
+
+Implementation `f3381ad10dede1de334c8df0c7be3ef69273c474` was pushed normally after both hooks passed. Hosted Rust/release **43244833205** and full E2E **43244832921** succeeded. Simulation **43244833073** failed on archive export, not a journey assertion: attempt 1's free-roam customizer passed 38/38 assertions; attempt 2's customization customizer passed 9/9. Both exceeded `tracing.stop`'s 15s limit. Config lint passed. Both failure logs remain in session artifacts; a green rerun is not being substituted for a fix.
+
+The actual local free-roam trace contains **2,234 files, 174,603,975 raw bytes, 135,254,708 compressed bytes**. The failed hosted matrix artifact is **633,308,922 bytes**. Playwright source inspection confirms stop waits for queued filesystem writes and ZIP compression after recording stops. This is archive IO, not context/process shutdown or an application responsiveness threshold.
+
+`MockHarnessDriver` now gives complete archive export a separate **60s** bound and logs its duration; context/browser close remain **15s**. This explicitly increases the artifact-IO allowance; it does not remove screenshots/snapshots, ignore missing/export-error diagnostics, retry journeys, or extend product assertion/shutdown budgets. Five lifecycle tests run through the real driver's public `stopTrace`/`close` methods with virtual time: 16s successful archive, hung archive deadline, immediate disk failure, unchanged 15s close deadline, and prelaunch no-op. Before the fix **2 failed / 3 passed** (`trace-budget-red.log`); after it **5/5 passed** (`trace-budget-green.log`).
+
+After the follow-up: canonical frontend gate **347/347 tests in 27 files**, both audit scopes zero, lint/types/build pass (`frontend-trace-fix.log`); simulation TS project passes; full local mock matrix **16/16 journeys**, 4/4 tests, no quarantine, seed 42 (`mock-trace-fix.log`). Full trace exports took **161–6,377ms** on this host. The product bundle and qualified executable are unchanged. Main accessibility spec was intelligently merged (one amended requirement + one scenario) and the three-requirement kinetic spec added; no existing requirement was removed.
+
 ## Delivery
 
-Implementation is locally qualified. Normal main push, hosted checks, spec sync/archive and final clean-tree audit are the remaining delivery steps; this section is updated from actual results rather than predicting them.
+The source is delivered on main; hosted requalification of the archive-IO follow-up, final spec archive and clean-tree audit are still pending. This section is updated from actual results rather than predicting them.

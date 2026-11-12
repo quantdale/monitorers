@@ -103,12 +103,16 @@ export class MockHarnessDriver implements SimDriver {
   }
 
   /**
-   * Stops context tracing and saves the trace to `tracePath`. Note: stopTrace
-   * must be called before `close()` (which flushes video and shuts the browser).
+   * Stops context tracing and saves the complete trace before close().
+   * Export compresses/copies 100+ MiB on longer animated journeys: it is
+   * artifact IO, not the 15s context/process shutdown operation. Keep it
+   * separately bounded and observable; failed/missing exports still fail runs.
    */
   async stopTrace(tracePath: string): Promise<void> {
     if (!this.context) return;
-    await this.bounded(this.context.tracing.stop({ path: tracePath }), 15_000, 'tracing.stop');
+    const started = performance.now();
+    await this.bounded(this.context.tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
+    console.info(`[MockHarnessDriver] complete trace exported in ${Math.round(performance.now() - started)}ms`);
   }
 
   async injectFault(fault: SimFault): Promise<boolean> {

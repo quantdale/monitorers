@@ -24,6 +24,7 @@ The current dirty tree contains an unfinished UI overhaul on main@ad3b637. Basel
 - Live metrics can wrap unpredictable text → keep long-name/high-rate fixtures and responsive checks at 400x300 through desktop.
 - Reduced motion can be missed by JS animations → OS preference controls the root motion policy and CSS animations, with browser checks.
 - New dependency/bundle cost → retain only necessary motion code; audit lockfile and build output; do not add extra libraries for decoration.
+- Complete animated-journey traces exceed 100 MiB; Windows CI reproduced two export-only failures after every journey assertion passed. Keep full screenshots/snapshots and the missing/export-error gates, but separate bounded archive IO (60s) from context/process shutdown (unchanged 15s). Log real export duration and regression-test slow success, export failure, a wedged exporter, and the independent shutdown deadline.
 
 ## Migration Plan
 
