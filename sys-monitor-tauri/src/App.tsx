@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   DndContext,
   closestCenter,
-  useSensor,
-  useSensors,
-  PointerSensor,
-  KeyboardSensor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
   verticalListSortingStrategy,
   rectSortingStrategy,
-  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import { useMetrics } from './hooks/useMetrics';
 import { useSettings, WINDOW_SECS_OPTIONS } from './hooks/useSettings';
@@ -33,14 +29,14 @@ import {
   shouldShowLoadingState,
 } from './cardIdentity';
 import { useCardOrderInitialization } from './hooks/useCardOrderInitialization';
+import { useCardSensors } from './hooks/useCardSensors';
+import { cardDropTarget } from './cardDropTarget';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { SIDEBAR_OVERLAY_MEDIA } from './sidebarLayout';
-import { PanelLeft } from 'lucide-react';
+import { PanelLeft, Activity, EyeOff, RotateCcw } from 'lucide-react';
 import {
   accent,
   border,
-  cardShell,
-  controlShell,
   danger,
   dangerBorder,
   dangerText,
@@ -52,6 +48,7 @@ import {
   okTint,
   pageBg,
   radius,
+  surface,
   surfaceSunken,
   textMuted,
   textPrimary,
@@ -62,6 +59,15 @@ import {
   warnText,
   warnTint,
 } from './design/tokens';
+import { Button } from './components/Controls';
+import {
+  staggerDelay,
+  fadeSwap,
+  riseItem,
+  springPop,
+  staggerParent,
+  tapScale,
+} from './design/motion';
 
 // Labels for the legal history-window sizes (values come from WINDOW_SECS_OPTIONS
 // in useSettings.ts, the single source of truth for what windowSecs is valid).
@@ -124,6 +130,17 @@ const STATUS_LABEL: Record<string, string> = {
   stopping: 'Stopping',
 };
 
+/** States where a heartbeat animation is meaningful ("still alive"). */
+function isLive(state: string | null): boolean {
+  return state === 'healthy' || state === 'starting';
+}
+
+/**
+ * The "all metrics hidden" empty state. Deliberately not a bare sentence: the
+ * dimmed ghost cards behind it show what is missing, and the primary action is
+ * the only lime surface on the screen — which is exactly what we want the eye
+ * to land on.
+ */
 function EmptyDashboard({
   title,
   actionLabel,
@@ -134,27 +151,121 @@ function EmptyDashboard({
   onAction: () => void;
 }) {
   return (
-    <div
+    <motion.div
+      variants={fadeSwap}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
       role="status"
       aria-live="polite"
       style={{
-        ...cardShell,
-        padding: '28px 20px',
+        position: 'relative',
+        padding: '48px 24px 40px',
         textAlign: 'center',
-        maxWidth: 420,
-        margin: '24px auto',
+        maxWidth: 460,
+        margin: '32px auto',
+        overflow: 'hidden',
       }}
     >
-      <div style={{ color: textPrimary, fontSize: type.body, fontWeight: 650, marginBottom: 6 }}>{title}</div>
-      <button
-        type="button"
-        data-testid="empty-metrics-action"
-        onClick={onAction}
-        style={{ ...controlShell, marginTop: 8, padding: '8px 14px', minHeight: 32, fontSize: type.label, fontWeight: 600, color: textPrimary }}
+      {/* Ghost cards: three dimmed outlines suggesting the dashboard that is
+          waiting to come back. Purely decorative. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          justifyContent: 'center',
+          opacity: 0.28,
+          pointerEvents: 'none',
+        }}
       >
-        {actionLabel}
-      </button>
-    </div>
+        {[0, 1, 2].map((i) => (
+          <motion.div
+            key={i}
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
+            transition={{ delay: staggerDelay(i, 0.06) }}
+            style={{
+              height: 46,
+              margin: '0 auto',
+              width: `${88 - i * 14}%`,
+              border: '1px dashed rgba(255, 255, 255, 0.14)',
+              borderRadius: radius.card,
+            }}
+          />
+        ))}
+      </div>
+
+      <motion.div
+        variants={riseItem}
+        initial="hidden"
+        animate="visible"
+        transition={{ delay: 0.1 }}
+        style={{ position: 'relative' }}
+      >
+        <motion.div
+          whileHover={{ y: -2 }}
+          transition={springPop}
+          style={{
+            width: 52,
+            height: 52,
+            margin: '0 auto 14px',
+            borderRadius: radius.card,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(200, 247, 81, 0.12)',
+            border: `1px solid ${accent}`,
+          }}
+        >
+          <EyeOff size={24} aria-hidden="true" color={accent} />
+        </motion.div>
+        <div
+          style={{
+            color: textPrimary,
+            fontSize: 17,
+            fontWeight: 700,
+            marginBottom: 16,
+            letterSpacing: '-0.01em',
+          }}
+        >
+          {title}
+        </div>
+        <Button variant="primary" data-testid="empty-metrics-action" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/** Skeleton card shown while the first real sample lands. */
+function SkeletonCard({ delay, height }: { delay: number; height: number }) {
+  return (
+    <motion.div
+      variants={riseItem}
+      initial="hidden"
+      animate="visible"
+      transition={{ delay }}
+      style={{
+        background: surface,
+        border: '1px solid rgba(255, 255, 255, 0.07)',
+        borderRadius: radius.card,
+        height,
+        padding: '16px 18px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      <div className="skeleton" style={{ height: 11, width: '38%', borderRadius: radius.pill }} />
+      <div className="skeleton" style={{ height: 28, width: '58%', borderRadius: radius.pill }} />
+      <div className="skeleton" style={{ flex: 1, borderRadius: radius.control }} />
+    </motion.div>
   );
 }
 
@@ -226,10 +337,7 @@ export default function App() {
     void retryMetrics().finally(() => setRetryPending(false));
   }
   useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useCardSensors();
 
   const hasNvidiaData = computeHasNvidiaData(metrics);
   const diskNames = useMemo(() => {
@@ -249,9 +357,11 @@ export default function App() {
   );
   const cards = useMemo(
     () =>
-      visibleCardOrder.map((id) => (
+      visibleCardOrder.map((id, index) => (
         <ErrorBoundary key={id + '_boundary'}>
-          {metrics ? renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames }) : null}
+          {metrics
+            ? renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames, index })
+            : null}
         </ErrorBoundary>
       )),
     [visibleCardOrder, metrics, viewMode, hasNvidiaData, diskNames],
@@ -269,7 +379,10 @@ export default function App() {
           fontFamily: fontSans,
         }}
       >
-        <div
+        <motion.div
+          variants={riseItem}
+          initial="hidden"
+          animate="visible"
           role="alert"
           aria-live="assertive"
           style={{
@@ -277,27 +390,52 @@ export default function App() {
             border: dangerBorder,
             borderRadius: radius.card,
             color: dangerText,
-            padding: '14px 18px',
+            padding: '18px 22px',
             fontSize: type.body,
             maxWidth: 480,
             textAlign: 'center',
+            lineHeight: 1.5,
           }}
         >
           Couldn't load settings — {settingsError}. Try restarting the app.
-        </div>
+        </motion.div>
       </div>
     );
   }
 
   if (!loaded) {
     return (
-      <div
+      <motion.div
+        variants={fadeSwap}
+        initial="hidden"
+        animate="visible"
         role="status"
         aria-live="polite"
         style={{ background: pageBg, color: textMuted, minHeight: '100vh', padding: 24, fontFamily: fontSans }}
       >
-        Loading settings…
-      </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            marginBottom: 20,
+          }}
+        >
+          <motion.span
+            className="playful-spin"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              border: `2px solid ${accent}`,
+              borderTopColor: 'transparent',
+              display: 'inline-block',
+            }}
+            aria-hidden="true"
+          />
+          <span style={{ fontSize: type.body }}>Loading settings…</span>
+        </div>
+      </motion.div>
     );
   }
 
@@ -324,13 +462,14 @@ export default function App() {
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    const { active } = event;
+    const target = cardDropTarget(event);
+    if (target == null || active.id === target || !visibleCardOrder.includes(String(target))) return;
     // moveCardId returns null when either id is missing from cardOrder (e.g.
     // the drop target's hardware vanished mid-drag): skip the write instead
     // of letting arrayMove's negative-index wrap-around silently corrupt the
     // persisted order.
-    const next = moveCardId(cardOrder, active.id as string, over.id as string);
+    const next = moveCardId(cardOrder, String(active.id), String(target));
     if (next) save({ cardOrder: next });
   }
 
@@ -341,13 +480,13 @@ export default function App() {
         // its own track (measured 406px/180px inside a 358px container at the
         // product's 400px minimum window). Below the track minimum the grid
         // collapses to a single column instead of overflowing.
-        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 } as React.CSSProperties
-      : { display: 'flex', flexDirection: 'column' as const, gap: 12 };
+        { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 14 } as React.CSSProperties
+      : { display: 'flex', flexDirection: 'column' as const, gap: 14 };
 
   const strategy = viewMode === 'tile' ? rectSortingStrategy : verticalListSortingStrategy;
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: pageBg, fontFamily: fontSans }}>
+    <div style={{ display: 'flex', height: '100vh', fontFamily: fontSans, position: 'relative', zIndex: 1 }}>
       <HardwareSidebar
         open={sidebarOpen}
         overlay={sidebarOverlay}
@@ -356,19 +495,25 @@ export default function App() {
         memTotalGb={metrics?.mem_total_gb ?? null}
       />
       {sidebarOverlay && sidebarOpen && (
-        <button
+        <motion.button
           type="button"
           data-testid="hardware-sidebar-scrim"
           aria-hidden="true"
           tabIndex={-1}
           onClick={closeSidebar}
+          variants={fadeSwap}
+          initial="hidden"
+          animate="visible"
+          exit="exit"
           style={{
             position: 'fixed',
             inset: 0,
             zIndex: 30,
             border: 0,
             padding: 0,
-            background: 'rgba(10, 12, 16, 0.55)',
+            background: 'rgba(6, 8, 11, 0.62)',
+            backdropFilter: 'blur(3px)',
+            WebkitBackdropFilter: 'blur(3px)',
           }}
         />
       )}
@@ -377,6 +522,7 @@ export default function App() {
           the two must be siblings here. Inert while the narrow-window drawer is
           open so keyboard focus stays in the dialog instead of the covered page. */}
       <div
+        data-testid="dashboard-scroll-area"
         inert={sidebarOverlay && sidebarOpen ? true : undefined}
         style={{
           flex: 1,
@@ -386,172 +532,264 @@ export default function App() {
       >
         <div
           style={{
-            background: pageBg,
             minHeight: '100vh',
-            padding: '16px 20px',
-            overflowY: 'auto',
+            padding: '0 20px 24px',
             color: textPrimary,
           }}
         >
-      {collectorState === 'recovering' && (
-        <div
-          data-testid="collector-recovering-banner"
-          role="status"
-          aria-live="polite"
-          style={{
-            background: warnTint,
-            border: warnBorder,
-            borderRadius: radius.control,
-            color: warnText,
-            padding: '8px 12px',
-            marginBottom: 12,
-            fontSize: type.body,
-          }}
-        >
-          Metrics collection interrupted. Recovering…
-        </div>
-      )}
-      {(collectorState === 'failed' || metrics?.collectorError) && collectorState !== 'recovering' && (
-        <div
-          data-testid="collector-error-banner"
-          role="alert"
-          aria-live="assertive"
-          style={{
-            background: dangerTint,
-            border: dangerBorder,
-            borderRadius: radius.control,
-            color: dangerText,
-            padding: '8px 12px',
-            marginBottom: 12,
-            fontSize: type.body,
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          <span>
-            {metrics?.collectorError ??
-              lifecycle?.reason ??
-              'Metrics collection failed.'}
-          </span>
-          {collectorState === 'failed' && (
-            <button
-              type="button"
-              data-testid="retry-metrics-button"
-              onClick={handleRetryMetrics}
-              disabled={retryPending}
-              aria-label={retryPending ? 'Retrying metrics collection' : 'Retry metrics collection'}
-              style={{
-                padding: '5px 12px',
-                borderRadius: radius.control,
-                border: dangerBorder,
-                background: dangerTint,
-                color: dangerText,
-                cursor: retryPending ? 'wait' : 'pointer',
-                fontWeight: 600,
-                fontSize: type.label,
-              }}
-            >
-              Retry metrics
-            </button>
-          )}
-        </div>
-      )}
-      {saveError && (
-        <div
-          data-testid="save-error-banner"
-          role="alert"
-          aria-live="polite"
-          style={{
-            background: warnTint,
-            border: warnBorder,
-            borderRadius: radius.control,
-            color: warnText,
-            padding: '8px 12px',
-            marginBottom: 12,
-            fontSize: type.body,
-          }}
-        >
-          Settings couldn't be saved — {saveError}. Changes are kept in memory for this session.
-        </div>
-      )}
-      <header>
+      <header
+        style={{
+          // Sticky toolbar in frosted glass: the controls stay reachable no
+          // matter how far the dashboard is scrolled.
+          position: 'sticky',
+          top: 0,
+          zIndex: 20,
+          margin: '0 -20px 16px',
+          padding: '14px 20px',
+          background: 'rgba(8, 9, 12, 0.82)',
+          backdropFilter: 'blur(16px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(16px) saturate(150%)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.07)',
+        }}
+      >
+      {/* ── Row 1: identity + live status ─────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: type.pageTitle, fontWeight: 650, color: textPrimary, margin: 0, letterSpacing: '-0.01em' }}>
+        <Activity size={19} aria-hidden="true" color={accent} style={{ flexShrink: 0 }} />
+        <h1 style={{ fontSize: type.pageTitle, fontWeight: 700, color: textPrimary, margin: 0, letterSpacing: '-0.025em' }}>
           System Monitor
         </h1>
         {collectorState && (
-          <span
+          <motion.span
             data-testid="collector-status-pill"
             title={`Metrics collection is ${STATUS_LABEL[collectorState] ?? collectorState}`}
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
-              padding: '3px 10px',
+              gap: 7,
+              padding: '3px 11px',
               borderRadius: radius.pill,
               border: STATUS_BORDER[collectorState] ?? border,
               background: STATUS_TINT[collectorState] ?? surfaceSunken,
               fontSize: type.micro,
-              fontWeight: 600,
+              fontWeight: 700,
               color: STATUS_TEXT[collectorState] ?? textMuted,
             }}
           >
-            <span
-              aria-hidden="true"
-              style={{ width: 6, height: 6, borderRadius: 3, background: STATUS_DOT[collectorState] ?? textMuted }}
-            />
+            {/* Heartbeat only while the collector is actually streaming — a
+                pulsing dot on a failed collector would lie. */}
+            <span style={{ position: 'relative', display: 'inline-flex', width: 7, height: 7, flexShrink: 0 }}>
+              {isLive(collectorState) && (
+                <span
+                  aria-hidden="true"
+                  className="live-halo"
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    borderRadius: '50%',
+                    background: STATUS_DOT[collectorState] ?? textMuted,
+                  }}
+                />
+              )}
+              <span
+                aria-hidden="true"
+                className={isLive(collectorState) ? 'live-pulse' : undefined}
+                style={{
+                  position: 'relative',
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  background: STATUS_DOT[collectorState] ?? textMuted,
+                }}
+              />
+            </span>
             {STATUS_LABEL[collectorState] ?? collectorState}
-          </span>
+          </motion.span>
         )}
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            ref={sidebarToggleRef}
-            onClick={() => setSidebarOpen((prev) => !prev)}
-            title={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
-            aria-label={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
-            aria-expanded={sidebarOpen}
-            aria-controls="hardware-sidebar"
-            style={{
-              ...controlShell,
-              padding: '6px 10px',
-              minHeight: 32,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              color: sidebarOpen ? accent : textSecondary,
-              fontSize: type.label,
-              fontWeight: 600,
-            }}
-          >
-            <PanelLeft size={16} aria-hidden="true" />
-            <span>Hardware</span>
-          </button>
-          <TimeRangeSelector
-            options={TIME_OPTIONS}
-            value={windowSecs}
-            onChange={(value) => save({ windowSecs: value })}
-          />
-          {metrics && cardOrder.length > 0 && (
-            <MetricCardSelector
-              triggerRef={metricsTriggerRef}
-              items={cardOrder.filter(id => isCardPresent(id, metrics)).map(id => ({ id, label: getCardLabel(id) }))}
-              hiddenIds={hiddenCardIds}
-              onToggle={handleMetricToggle}
+      {/* ── Row 2: the toolbar ────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <motion.div
+          variants={staggerParent(0.04)}
+          initial="hidden"
+          animate="visible"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+        >
+          <motion.div variants={riseItem}>
+            <Button
+              ref={sidebarToggleRef}
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              title={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
+              aria-label={sidebarOpen ? 'Hide hardware info' : 'Show hardware info'}
+              aria-expanded={sidebarOpen}
+              aria-controls="hardware-sidebar"
+              variant={sidebarOpen ? 'primary' : 'default'}
+            >
+              <PanelLeft size={15} aria-hidden="true" />
+              <span>Hardware</span>
+            </Button>
+          </motion.div>
+          <motion.div variants={riseItem}>
+            <TimeRangeSelector
+              options={TIME_OPTIONS}
+              value={windowSecs}
+              onChange={(value) => save({ windowSecs: value })}
             />
+          </motion.div>
+          {metrics && cardOrder.length > 0 && (
+            <motion.div variants={riseItem}>
+              <MetricCardSelector
+                triggerRef={metricsTriggerRef}
+                items={cardOrder.filter(id => isCardPresent(id, metrics)).map(id => ({ id, label: getCardLabel(id) }))}
+                hiddenIds={hiddenCardIds}
+                onToggle={handleMetricToggle}
+              />
+            </motion.div>
           )}
-        </div>
-        <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
+        </motion.div>
+        <motion.div variants={riseItem} initial="hidden" animate="visible">
+          <ViewModeSelector value={viewMode} onChange={(mode) => save({ viewMode: mode })} />
+        </motion.div>
       </div>
       </header>
+
+      {/* ── Banners ───────────────────────────────────────────────────────── */}
+      <AnimatePresence initial={false}>
+        {collectorState === 'recovering' && (
+          <motion.div
+            key="recovering"
+            data-testid="collector-recovering-banner"
+            role="status"
+            aria-live="polite"
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            style={{
+              background: warnTint,
+              border: warnBorder,
+              borderRadius: radius.control,
+              color: warnText,
+              padding: '9px 13px',
+              marginBottom: 12,
+              fontSize: type.body,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+            }}
+          >
+            <motion.span
+              className="playful-spin"
+              aria-hidden="true"
+              style={{
+                width: 13,
+                height: 13,
+                borderRadius: '50%',
+                border: `2px solid ${warnText}`,
+                borderTopColor: 'transparent',
+                flexShrink: 0,
+                display: 'inline-block',
+              }}
+            />
+            Metrics collection interrupted. Recovering…
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence initial={false}>
+        {(collectorState === 'failed' || metrics?.collectorError) && collectorState !== 'recovering' && (
+          <motion.div
+            key="failed"
+            data-testid="collector-error-banner"
+            role="alert"
+            aria-live="assertive"
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            style={{
+              background: dangerTint,
+              border: dangerBorder,
+              borderRadius: radius.control,
+              color: dangerText,
+              padding: '9px 13px',
+              marginBottom: 12,
+              fontSize: type.body,
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span>
+              {metrics?.collectorError ??
+                lifecycle?.reason ??
+                'Metrics collection failed.'}
+            </span>
+            {collectorState === 'failed' && (
+              <motion.button
+                type="button"
+                data-testid="retry-metrics-button"
+                onClick={handleRetryMetrics}
+                disabled={retryPending}
+                aria-label={retryPending ? 'Retrying metrics collection' : 'Retry metrics collection'}
+                whileTap={retryPending ? undefined : tapScale}
+                transition={springPop}
+                style={{
+                  padding: '5px 13px',
+                  borderRadius: radius.pill,
+                  border: dangerBorder,
+                  background: dangerTint,
+                  color: dangerText,
+                  cursor: retryPending ? 'wait' : 'pointer',
+                  fontWeight: 700,
+                  fontSize: type.label,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: retryPending ? 0.6 : 1,
+                }}
+              >
+                <RotateCcw
+                  size={13}
+                  aria-hidden="true"
+                  className={retryPending ? 'playful-spin' : undefined}
+                />
+                Retry metrics
+              </motion.button>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence initial={false}>
+        {saveError && (
+          <motion.div
+            key="save-error"
+            data-testid="save-error-banner"
+            role="alert"
+            aria-live="polite"
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            style={{
+              background: warnTint,
+              border: warnBorder,
+              borderRadius: radius.control,
+              color: warnText,
+              padding: '9px 13px',
+              marginBottom: 12,
+              fontSize: type.body,
+            }}
+          >
+            Settings couldn't be saved — {saveError}. Changes are kept in memory for this session.
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main
         style={{
@@ -559,37 +797,48 @@ export default function App() {
           minWidth: 0,
         }}
       >
-      {historyLoadError && metrics && (
-        <div
-          role="alert"
-          aria-live="polite"
-          style={{
-            color: dangerText,
-            padding: '8px 12px',
-            marginBottom: 12,
-            fontSize: type.body,
-            background: dangerTint,
-            border: dangerBorder,
-            borderRadius: radius.control,
-          }}
-        >
-          Couldn't refresh metrics history — {historyLoadError}. Showing previous data.
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {historyLoadError && metrics && (
+          <motion.div
+            key="history-error"
+            role="alert"
+            aria-live="polite"
+            variants={riseItem}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            style={{
+              color: dangerText,
+              padding: '9px 13px',
+              marginBottom: 12,
+              fontSize: type.body,
+              background: dangerTint,
+              border: dangerBorder,
+              borderRadius: radius.control,
+            }}
+          >
+            Couldn't refresh metrics history — {historyLoadError}. Showing previous data.
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {historyLoadError && !metrics ? (
-        <div
+        <motion.div
+          variants={riseItem}
+          initial="hidden"
+          animate="visible"
           role="alert"
           aria-live="assertive"
           style={{
             color: dangerText,
-            padding: '32px 0',
+            padding: '40px 0',
             textAlign: 'center',
             fontSize: type.body,
+            lineHeight: 1.6,
           }}
         >
           Couldn't load metrics history — {historyLoadError}. Try restarting the app.
-        </div>
+        </motion.div>
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
         <EmptyDashboard
           title="All metrics hidden"
@@ -598,13 +847,42 @@ export default function App() {
         />
       ) : shouldShowLoadingState(metrics, visibleCardOrder) ? (
         <div role="status" aria-live="polite" style={{ color: textMuted, fontSize: type.body }}>
-          <div style={{ padding: '8px 0 12px' }}>
-            <div style={{ color: textPrimary, fontWeight: 600, marginBottom: 4 }}>Collecting metrics…</div>
-          </div>
-          <div aria-hidden="true" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ ...cardShell, height: 96 }} />
-            <div style={{ ...cardShell, height: 96, opacity: 0.7 }} />
-          </div>
+          <motion.div
+            variants={staggerParent(0.06)}
+            initial="hidden"
+            animate="visible"
+            style={{ padding: '4px 0 12px' }}
+          >
+            <motion.div
+              variants={riseItem}
+              style={{
+                color: textPrimary,
+                fontWeight: 650,
+                marginBottom: 10,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <motion.span
+                className="playful-spin"
+                aria-hidden="true"
+                style={{
+                  width: 13,
+                  height: 13,
+                  borderRadius: '50%',
+                  border: `2px solid ${accent}`,
+                  borderTopColor: 'transparent',
+                  display: 'inline-block',
+                }}
+              />
+              Collecting metrics…
+            </motion.div>
+            <div aria-hidden="true" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <SkeletonCard delay={0.1} height={150} />
+              <SkeletonCard delay={0.18} height={110} />
+            </div>
+          </motion.div>
         </div>
       ) : (
         <DndContext

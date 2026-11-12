@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildNetworkScaleCaption, formatAxisTick } from './chartLabels';
 import {
+  accent,
+  accentInk,
+  cpuSeries,
+  diskSeries,
+  gpuSeries,
+  memorySeries,
+  netDownSeries,
   chartAxisStroke,
   chartTickFill,
   dangerText,
@@ -114,6 +121,22 @@ function blendOver(rgba: string, baseHex: string): string {
 }
 
 describe('design-token contrast floors', () => {
+  it('active control ink clears AA on the lime selection surface', () => {
+    expect(contrastRatio(accentInk, accent)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('readable text clears AA on the brightest point of every channel wash', () => {
+    // Automated axe contrast cannot resolve a background gradient. Prove the
+    // conservative brightest endpoint (7% series hue over the card surface).
+    for (const hue of [cpuSeries, memorySeries, netDownSeries, ...diskSeries, ...gpuSeries]) {
+      const channels = [1, 3, 5].map((offset) => Number.parseInt(hue.slice(offset, offset + 2), 16));
+      const background = blendOver(`rgba(${channels.join(',')}, 0.07)`, surface);
+      for (const ink of [textPrimary, textSecondary, textMuted]) {
+        expect(contrastRatio(ink, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it('chart tick text clears the 4.5:1 text floor on the card surface', () => {
     expect(contrastRatio(chartTickFill, surface)).toBeGreaterThanOrEqual(4.5);
   });

@@ -1,19 +1,15 @@
 import { memo, useEffect, useRef } from 'react';
+import { motion } from 'motion/react';
 import { useFocusBoundary } from '../hooks/useFocusBoundary';
 import {
   DndContext,
   closestCenter,
-  useSensor,
-  useSensors,
-  PointerSensor,
-  KeyboardSensor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
   arrayMove,
   verticalListSortingStrategy,
-  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
 import {
   Cpu,
@@ -24,33 +20,44 @@ import {
 } from 'lucide-react';
 import type { HardwareProfile, HardwareProfileState } from '../hooks/useHardwareProfile';
 import { useSettings } from '../hooks/useSettings';
+import { useCardSensors } from '../hooks/useCardSensors';
+import { cardDropTarget } from '../cardDropTarget';
 import { SortableSidebarCard } from './SortableSidebarCard';
 import { formatGigabytes } from '../cards/formatters';
 import {
   cardShell,
   controlShell,
+  cpuSeries,
+  memorySeries,
+  netDownSeries,
+  diskSeries,
+  gpuSeries,
   dangerText,
   divider,
   fontSans,
+  radius,
   surfaceSunken,
   textMuted,
   textPrimary,
-  textSecondary,
   type,
 } from '../design/tokens';
 import { SIDEBAR_WIDTH_PX } from '../sidebarLayout';
+import { fadeSwap, springPop, staggerParent } from '../design/motion';
+import { Button } from './Controls';
 
 const SIDEBAR_WIDTH = SIDEBAR_WIDTH_PX;
 const cardStyle: React.CSSProperties = {
   ...cardShell,
-  padding: 12,
+  padding: 14,
+  borderRadius: radius.card,
+  backgroundImage: 'linear-gradient(145deg, rgba(255,255,255,0.025), transparent)',
 };
 const titleStyle: React.CSSProperties = {
   fontSize: type.micro,
-  fontWeight: 600,
+  fontWeight: 700,
   color: textMuted,
   textTransform: 'uppercase' as const,
-  letterSpacing: '0.06em',
+  letterSpacing: '0.07em',
   marginBottom: 8,
   display: 'flex',
   alignItems: 'center',
@@ -61,7 +68,7 @@ const rowStyle: React.CSSProperties = {
   justifyContent: 'space-between',
   alignItems: 'center',
   fontSize: type.label,
-  marginTop: 4,
+  marginTop: 5,
 };
 const labelStyle: React.CSSProperties = { color: textMuted };
 const valueStyle: React.CSSProperties = { color: textPrimary, fontWeight: 500 };
@@ -228,16 +235,14 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
     }
   }, [profile, settings.sidebarCardOrder, save]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useCardSensors();
 
   function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = cardOrder.indexOf(active.id as string);
-      const newIndex = cardOrder.indexOf(over.id as string);
+    const { active } = event;
+    const target = cardDropTarget(event);
+    if (target != null && active.id !== target) {
+      const oldIndex = cardOrder.indexOf(String(active.id));
+      const newIndex = cardOrder.indexOf(String(target));
       if (oldIndex >= 0 && newIndex >= 0) {
         const moved = arrayMove(cardOrder, oldIndex, newIndex);
         save({
@@ -254,7 +259,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Cpu size={14} color={textSecondary} />
+            <Cpu size={16} color={cpuSeries} aria-hidden="true" />
             Processor
           </div>
           <div style={{ borderTop: divider, paddingTop: 8 }}>
@@ -281,7 +286,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Monitor size={14} color={textSecondary} />
+            <Monitor size={16} color={gpuSeries[idx % gpuSeries.length]} aria-hidden="true" />
             {profile.gpus.length > 1 ? `Graphics (${idx + 1} of ${profile.gpus.length})` : 'Graphics'}
           </div>
           <div style={{ borderTop: divider, paddingTop: 8 }}>
@@ -306,7 +311,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <MemoryStick size={14} color={textSecondary} />
+            <MemoryStick size={16} color={memorySeries} aria-hidden="true" />
             Memory
           </div>
           <div style={{ borderTop: divider, paddingTop: 8 }}>
@@ -330,11 +335,11 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <HardDrive size={14} color={textSecondary} />
+            <HardDrive size={16} color={diskSeries[0]} aria-hidden="true" />
             Storage
           </div>
           <div style={{ borderTop: divider, paddingTop: 8 }}>
-            <div style={rowStyle}>
+            <div style={{ ...rowStyle, marginTop: 0 }}>
               <span style={labelStyle}>Name</span>
               <span style={wrappedValueStyle}>{disk.name}</span>
             </div>
@@ -351,11 +356,11 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             {dragHandle}
-            <Network size={14} color={textSecondary} />
+            <Network size={16} color={netDownSeries} aria-hidden="true" />
             Network
           </div>
           <div style={{ borderTop: divider, paddingTop: 8 }}>
-            <div style={rowStyle}>
+            <div style={{ ...rowStyle, marginTop: 0 }}>
               <span style={labelStyle}>Interface</span>
               <span style={wrappedValueStyle}>Not reported by this host</span>
             </div>
@@ -392,7 +397,7 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         // Push mode keeps the width/visibility transition so a collapsing rail
         // stays out of the tab order only once the animation ends. Overlay snaps:
         // a width animation from 0 clips the Close control and focus() misses it.
-        transition: overlay ? 'none' : 'width 250ms ease, visibility 250ms ease',
+        transition: overlay ? 'none' : 'width 260ms cubic-bezier(0.22, 1, 0.36, 1), visibility 260ms ease',
         background: surfaceSunken,
         borderRight: open ? divider : 'none',
         display: 'flex',
@@ -416,29 +421,36 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
       >
         {open && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <span style={{ ...titleStyle, marginBottom: 0 }}>Hardware</span>
+            <span style={{ fontSize: 17, fontWeight: 700, color: textPrimary, padding: '8px 0', letterSpacing: '-0.02em' }}>Hardware</span>
             {drawer && (
-              <button
+              <motion.button
                 type="button"
                 data-testid="hardware-sidebar-close"
                 aria-label="Close hardware info"
                 onClick={onClose}
-                style={{ ...controlShell, padding: '4px 8px', fontSize: type.micro, fontWeight: 600 }}
+                whileHover={{ y: -1 }}
+                whileTap={{ scale: 0.94 }}
+                transition={springPop}
+                style={{ ...controlShell, padding: '4px 10px', fontSize: type.micro, fontWeight: 700, borderRadius: radius.chip }}
               >
                 Close
-              </button>
+              </motion.button>
             )}
           </div>
         )}
         {profileError && (
           <div role="alert" style={{ color: dangerText, fontSize: type.label, padding: 8 }}>
             <div>Hardware detection failed — {profileError}</div>
-            {profileState && <button type="button" onClick={profileState.retry} style={{ marginTop: 8 }}>Retry</button>}
+            {profileState && <div style={{ marginTop: 10 }}><Button onClick={profileState.retry}>Retry</Button></div>}
           </div>
         )}
         {profile === null && loading ? (
           <div role="status" aria-live="polite" style={{ color: textMuted, fontSize: type.label, padding: 8 }}>
             Detecting hardware…
+            <div aria-hidden="true" style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="skeleton" style={{ height: 64, borderRadius: radius.control }} />
+              <div className="skeleton" style={{ height: 64, borderRadius: radius.control }} />
+            </div>
           </div>
         ) : profile === null ? (
           <div role="status" style={{ color: textMuted, fontSize: type.label, padding: 8 }}>
@@ -447,11 +459,17 @@ export const HardwareSidebar = memo(function HardwareSidebar({ open, overlay = f
         ) : profile !== null ? (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={cardOrder} strategy={verticalListSortingStrategy}>
-              {cardOrder.map((id) => (
-                <SortableSidebarCard key={id} id={id}>
-                  {(dragHandle) => renderCardContent(id, dragHandle)}
-                </SortableSidebarCard>
-              ))}
+              {/* Staggered entrance: the rail assembles itself rather than
+                  appearing all at once. */}
+              <motion.div variants={staggerParent(0.04)} initial="hidden" animate="visible" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {cardOrder.map((id) => (
+                  <motion.div key={id} variants={fadeSwap}>
+                    <SortableSidebarCard id={id}>
+                      {(dragHandle) => renderCardContent(id, dragHandle)}
+                    </SortableSidebarCard>
+                  </motion.div>
+                ))}
+              </motion.div>
             </SortableContext>
           </DndContext>
         ) : null}

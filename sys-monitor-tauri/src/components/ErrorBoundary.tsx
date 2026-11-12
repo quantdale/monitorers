@@ -1,13 +1,14 @@
 import { Component, ReactNode } from 'react';
+import { motion } from 'motion/react';
 import {
   accent,
-  border,
   cardShell,
   fontSans,
   radius,
   textMuted,
   type,
 } from '../design/tokens';
+import { riseItem, springPop, tapScale } from '../design/motion';
 
 interface Props {
   children: ReactNode;
@@ -65,34 +66,47 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
       return (
-        <div style={{
-          ...cardShell,
-          padding: '12px 16px',
-          color: textMuted,
-          fontSize: type.body,
-          fontFamily: fontSans,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}>
+        <motion.div
+          variants={riseItem}
+          initial="hidden"
+          animate="visible"
+          style={{
+            ...cardShell,
+            padding: '14px 18px',
+            color: textMuted,
+            fontSize: type.body,
+            fontFamily: fontSans,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            // A failed card should look different from a healthy one without
+            // screaming: a lime-tinted rim marks it as actionable.
+            borderColor: 'rgba(200, 247, 81, 0.28)',
+          }}
+        >
           <span>Chart error — bad data point</span>
-          <button
+          <motion.button
             type="button"
             onClick={this.handleRetry}
+            whileHover={{ y: -1 }}
+            whileTap={tapScale}
+            transition={springPop}
             style={{
-              padding: '3px 10px',
-              borderRadius: radius.control,
-              border,
-              background: 'transparent',
+              padding: '4px 12px',
+              borderRadius: radius.pill,
+              border: `1px solid ${accent}`,
+              background: 'rgba(200, 247, 81, 0.14)',
               color: accent,
               cursor: 'pointer',
               fontSize: type.label,
+              fontWeight: 700,
+              flexShrink: 0,
             }}
           >
             Retry
-          </button>
-        </div>
+          </motion.button>
+        </motion.div>
       );
     }
     return this.props.children;

@@ -1,6 +1,5 @@
 import type { CSSProperties } from 'react';
 import {
-  border,
   fontMono,
   radius,
   textPrimary,
@@ -103,12 +102,13 @@ export function gpuVendorLabel(vendor: string): string {
 }
 
 /** Quiet metadata chip: telemetry readings sit on the card as small mono
- *  pills, never as bordered form fields (the old chip look). */
+ *  pills, never as bordered form fields. Rounded to a full pill so a row of
+ *  them reads as one instrument strip rather than a stack of boxes. */
 export const badgeStyle: CSSProperties = {
   background: 'rgba(255, 255, 255, 0.05)',
-  border,
-  padding: '3px 8px',
-  borderRadius: radius.chip,
+  border: '1px solid rgba(255, 255, 255, 0.09)',
+  padding: '3px 9px',
+  borderRadius: radius.pill,
   fontSize: type.micro,
   fontFamily: fontMono,
   color: textSecondary,
@@ -117,11 +117,13 @@ export const badgeStyle: CSSProperties = {
   maxWidth: '100%',
   whiteSpace: 'normal',
   overflowWrap: 'anywhere',
+  // Readings are live numbers; tabular figures stop them twitching.
+  fontVariantNumeric: 'tabular-nums',
 };
 
 export function gpuVendorBadgeStyle(vendor: string): CSSProperties {
   let border = '1px solid rgba(255, 255, 255, 0.12)';
-  let background = 'rgba(255, 255, 255, 0.05)';
+  let background = 'rgba(255, 255, 255, 0.06)';
   let color = textPrimary;
   if (vendor === 'nvidia') {
     border = '1px solid rgba(46, 204, 113, 0.45)';

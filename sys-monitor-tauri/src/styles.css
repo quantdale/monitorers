@@ -1,26 +1,34 @@
-/* Global base layer for the design system (src/design/tokens.ts owns the
- * palette). A plain global stylesheet is CSP-safe ('self'); everything
- * component-specific stays inline styles per repo convention. */
-
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html, body, #root {
-  height: 100%;
-  background: #0A0C10;
-}
-
+/* Base/interaction layer. Component styles stay inline; palette and motion
+ * recipes live in src/design/. Ambient light is static so the monitor stays
+ * quiet and inexpensive during long sessions. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; background: #08090C; }
 body {
   font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  color: #F2F4F8;
+  color: #F4F7FB;
+  overscroll-behavior: none;
 }
-
-/* Remove default button styles so the token control chrome fully controls them */
+#root::before, #root::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+#root::before {
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(200, 247, 81, 0.07), transparent 48%),
+    radial-gradient(ellipse at 100% 25%, rgba(76, 215, 255, 0.05), transparent 50%);
+}
+#root::after {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(black, transparent 70%);
+}
 button {
   font-family: inherit;
   cursor: pointer;
@@ -28,67 +36,65 @@ button {
   border: none;
   background: none;
   color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
-button:focus-visible {
-  outline: 2px solid #4D8DFF;
-  outline-offset: 2px;
-  border-radius: 4px;
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid #C8F751;
+  outline-offset: 3px;
 }
+button:focus-visible { border-radius: 6px; }
+select { outline: none; }
+input[type='checkbox'] { accent-color: #C8F751; cursor: pointer; }
+.drag-handle, .sidebar-drag-handle { opacity: 1; cursor: grab; touch-action: none; }
+.drag-handle:active, .sidebar-drag-handle:active { cursor: grabbing; }
 
-/* Same focus treatment for the window-time selector — the inline styles on
- * the <select> must not set outline: none, or this rule can't take over */
-select {
-  outline: none;
-}
-select:focus-visible {
-  outline: 2px solid #4D8DFF;
-  outline-offset: 2px;
-}
-
-/* Drag handle — resting visibility so pointer users can discover reorder.
-   Focus-visible still supplies the ring (global button rule). */
-.drag-handle {
-  opacity: 1;
-  cursor: grab;
-}
-.drag-handle:active {
-  cursor: grabbing;
-}
-.sidebar-drag-handle:focus-visible {
-  outline: 2px solid #4D8DFF;
-  outline-offset: 2px;
-}
-
-/* Cards lift gently on hover — the one motion cue in the shell */
+/* Hover elevation never changes the geometry dnd-kit measures. */
 .metric-card {
-  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+  position: relative;
+  transition: box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .metric-card:hover {
-  border-color: rgba(255, 255, 255, 0.14);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 14px 36px -12px rgba(0, 0, 0, 0.8), 0 2px 8px rgba(0, 0, 0, 0.4);
 }
+.metric-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 8px auto;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.32), transparent);
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.metric-card:hover::before { opacity: 1; }
+
+@keyframes card-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes skeleton-sweep { from { background-position: -180% 0; } to { background-position: 180% 0; } }
+.skeleton {
+  background: linear-gradient(100deg, rgba(255,255,255,0.035) 30%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.035) 70%);
+  background-size: 220% 100%;
+  animation: skeleton-sweep 1.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+.live-pulse { animation: live-pulse 2.4s ease-in-out infinite; }
+@keyframes live-halo { 0% { opacity: 0.4; transform: scale(1); } 70%,100% { opacity: 0; transform: scale(2.4); } }
+.live-halo { animation: live-halo 2.4s ease-in-out infinite; }
+@keyframes playful-spin { to { transform: rotate(360deg); } }
+.playful-spin { animation: playful-spin 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
+    transition: none !important;
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
   }
 }
-
-/* Scrollbar styling for the dark canvas */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  background: rgba(255,255,255,0.14);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.24); }

@@ -86,6 +86,12 @@ cargo run --example startup_probe                 # session-bootstrap timing pro
 - `types/metrics.ts` **manually mirrors** the Rust serde structs — no codegen; keep in sync by hand.
 - Vite dev port **5180** is strict (`vite.config.ts` + `tauri.conf.json`); window 900×1100 (min 400×300); bundle id `com.quantdale.systemmonitor`; no env vars — all config is compile-time.
 
+### Presentation interaction invariants
+
+- Both sortable surfaces use `useCardSensors` and `cardDropTarget`: keep synchronous keyboard input, dnd-kit's sibling-aware coordinates, instant scroll and current keyboard collision targets. The library's passive-effect `over` state can lag an immediate Enter; fixed-frame delays do not solve it. Pointer semantics are unchanged.
+- Metric visibility dialogs portal to `document.body`, outside transformed/backdrop toolbar containing blocks, with focus trapping and portal-aware outside dismissal. `main.tsx` provides `MotionConfig reducedMotion="user"`; shared variants and CSS respect the OS preference. Never animate incoming chart data.
+- `src/design/` owns tokens/motion; `components/Controls.tsx` owns shared Button/GlassPanel presentation. Component layouts remain inline; the global stylesheet owns shared base and interaction affordances.
+
 ## OpenSpec workflow — how changes land in this repo
 
 This repo is spec-driven. Changes go through `openspec/changes/`; specs live in `openspec/specs/`; archived changes in `openspec/changes/archive/`. Use the bundled skills/commands (`.opencode/skills/openspec-*`, `/opsx-*` commands in `.opencode/commands/`):

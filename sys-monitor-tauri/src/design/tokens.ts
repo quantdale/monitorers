@@ -1,44 +1,63 @@
 /**
  * The dashboard's design system: one module owns palette, typography,
- * spacing, radii, borders and elevation so the look cannot drift between
- * components (the previous styling was 20+ ad-hoc hex literals) and the
- * verification reads the same values it proves (contrast tests import these
- * tokens).
+ * spacing, radii, borders, elevation and MOTION so the look cannot drift
+ * between components and the verification reads the same values it proves
+ * (contrast tests import these tokens).
  *
- * Direction (Refero reference lock, 2026-10-17): Polar's dark-minimal admin
- * language — deep charcoal canvas, hairline-bordered elevated cards, huge
- * tight metric numerals over small muted labels — with steel.dev's
- * label-over-value metric rows and chargetrip's per-card accent series on
- * faint dotted gridlines. Fonts are system stacks only (CSP blocks external
- * fonts); all surfaces are inline styles + global styles.css (CSP
- * `style-src 'unsafe-inline'`).
+ * Reference lock (2026-11-12): "machine-room exuberance" —
+ *   - ClickHouse (olive-black canvas + one fluorescent accent doing all the
+ *     work: every CTA, active segment and focus ring is the same lime;
+ *     nothing else competes for "interactive").
+ *   - LaunchDarkly (near-black stages + acid multi-hue series: the metric
+ *     palette is the only chroma, and each card owns a hue).
+ *   - Playdate / Tapbots (chunky tactility: big rounded controls, spring
+ *     motion, oversized numerals, objects that want to be touched).
+ *   - Chargetrip (per-card accent series over faint dotted gridlines — carried
+ *     over from the previous lock because it is the correct way to read one
+ *     live series against another).
+ *
+ * Fonts are system stacks only (CSP blocks external fonts); all surfaces are
+ * inline styles + global `styles.css` (CSP `style-src 'unsafe-inline'`).
+ *
+ * CONTRACT: the exported names below are part of the visual contract that
+ * `src/cards/chartLabels.test.ts` proves. `textPrimary`/`textSecondary`/
+ * `textMuted` must each clear 4.5:1 on `surface`; `chartTickFill` 4.5:1 and
+ * `chartAxisStroke` 3:1 on `surface`; the status text tokens must clear 4.5:1
+ * on their tints alpha-blended over `surface`. Do not darken them casually.
  */
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
 /** Page canvas — the deepest layer. */
-export const pageBg = '#0A0C10';
+export const pageBg = '#08090C';
 /** Card / panel surface, one step up from the canvas. */
-export const surface = '#15181E';
-/** Inset wells: chart plots, list-row chart panes, popovers. */
-export const surfaceSunken = '#101319';
-/** Hover/active lift for interactive rows. */
-export const surfaceHover = '#1B202A';
+export const surface = '#121419';
+/** Elevated card hover state. */
+export const surfaceHover = '#181C23';
+/** Inset wells: chart plots, list-row chart panes, popovers, rails. */
+export const surfaceSunken = '#0D0F14';
+/** Glass panel used by popovers and the floating toolbar. */
+export const surfaceGlass = 'rgba(18, 20, 25, 0.97)';
 
 // ── Text tiers (all ≥ 4.5:1 on `surface`, proven in chartLabels.test.ts) ─────
 
-export const textPrimary = '#F2F4F8';
-export const textSecondary = '#AAB2BE';
+export const textPrimary = '#F4F7FB';
+export const textSecondary = '#B4BCCB';
 /** Muted labels and metadata — still AA on card surfaces. */
-export const textMuted = '#99A1AE';
+export const textMuted = '#98A1B2';
 /** Decorative only (drag glyphs, icons): ≥ 3:1 on `surface`, never body text. */
-export const textFaint = '#7A7A7A';
+export const textFaint = '#6E7787';
 
 // ── Accent & status ──────────────────────────────────────────────────────────
 
-/** The single interactive accent: buttons, active segments, focus rings. */
-export const accent = '#4D8DFF';
-export const accentTint = 'rgba(77, 141, 255, 0.16)';
+/**
+ * The single interactive accent (ClickHouse's highlighter). Buttons, active
+ * segments and focus rings. Metric series and health states keep their own hues.
+ */
+export const accent = '#C8F751';
+export const accentTint = 'rgba(200, 247, 81, 0.14)';
+/** Ink that reads on top of the accent itself. */
+export const accentInk = '#0B0D07';
 
 export const ok = '#3ECF8E';
 export const okTint = 'rgba(62, 207, 142, 0.12)';
@@ -71,7 +90,7 @@ export const chartTickFill = '#9CA3AF';
 /** Axis stroke: ≥ 3:1 on `surface`. */
 export const chartAxisStroke = '#6B7280';
 /** Faint dotted gridlines — decorative, below any contrast floor. */
-export const chartGrid = 'rgba(255, 255, 255, 0.05)';
+export const chartGrid = 'rgba(255, 255, 255, 0.06)';
 
 // ── Typography ───────────────────────────────────────────────────────────────
 
@@ -86,27 +105,31 @@ export const type = {
   /** Rows and body copy. */
   body: 13,
   /** The glance-layer live value (Default/Tile cards). */
-  metric: 30,
+  metric: 34,
   /** Page title. */
-  pageTitle: 20,
+  pageTitle: 22,
   /** Captions, badges, axis text. */
   micro: 11,
 } as const;
 
 // ── Shape, borders, elevation ────────────────────────────────────────────────
 
-export const radius = { card: 12, control: 8, chip: 6, pill: 999 } as const;
+export const radius = { card: 16, control: 10, chip: 8, pill: 999 } as const;
 
-export const border = '1px solid rgba(255, 255, 255, 0.08)';
-export const divider = '1px solid rgba(255, 255, 255, 0.06)';
+export const border = '1px solid rgba(255, 255, 255, 0.09)';
+export const divider = '1px solid rgba(255, 255, 255, 0.07)';
+/** The card rim at rest — a touch brighter than the fill edge. */
+export const borderBright = '1px solid rgba(255, 255, 255, 0.16)';
 
-export const shadowCard = '0 1px 2px rgba(0, 0, 0, 0.25)';
-export const shadowPopover = '0 12px 32px rgba(0, 0, 0, 0.55)';
+export const shadowCard = '0 1px 2px rgba(0, 0, 0, 0.4)';
+export const shadowPopover = '0 24px 64px -12px rgba(0, 0, 0, 0.8)';
 
 /** Standard card shell — every card/panel starts here. */
 export const cardShell = {
-  background: surface,
-  border,
+  backgroundColor: surface,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'rgba(255, 255, 255, 0.09)',
   borderRadius: radius.card,
   boxShadow: shadowCard,
 } as const;
@@ -118,3 +141,24 @@ export const controlShell = {
   borderRadius: radius.control,
   color: textPrimary,
 } as const;
+
+// ── Motion ───────────────────────────────────────────────────────────────────
+//
+// One motion language for the whole app. `springPop` is the default for
+// anything the user touches (it overshoots — that is the playfulness);
+// `springGlide` for entrances. Viewport-bounded panels use non-overshooting easing.
+
+export const springPop = { type: 'spring', stiffness: 520, damping: 26, mass: 0.9 } as const;
+export const springGlide = { type: 'spring', stiffness: 260, damping: 28, mass: 1 } as const;
+export const easeOutExpo = [0.22, 1, 0.36, 1] as const;
+
+/** Stagger step for card/row entrances. */
+export const STAGGER_STEP = 0.035;
+/** Cap so a 9-card dashboard still finishes entering promptly. */
+export const MAX_STAGGER_INDEX = 8;
+
+/** True when the OS asks for reduced motion — motion is never mandatory. */
+export function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}

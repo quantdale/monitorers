@@ -12,6 +12,7 @@ Real-time Windows desktop system monitor built with Tauri v2. A single Rust back
 | Charts | Recharts 3 (`AreaChart` + `Area`) | `"recharts": "^3.10.1"` |
 | Drag-and-drop | @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities | `"@dnd-kit/core": "^6.3.1"`, `"@dnd-kit/sortable": "^10.0.0"` |
 | Icons | lucide-react | `"lucide-react": "^1.48.0"` |
+| Motion | Motion (`motion/react`), OS reduced-motion policy | `"motion": "^12.43.0"` |
 | Serialization | serde + serde_json | `"1"` |
 
 Every range in this table is transcribed from the committed manifests — `sys-monitor-tauri/src-tauri/Cargo.toml` for the backend and `sys-monitor-tauri/package.json` for the frontend. `scripts/check-version.mjs` fails the frontend gate if this table and those manifests ever disagree.
@@ -112,11 +113,14 @@ monitorers/
     ├── index.html                  ← Vite HTML entry
     ├── e2e/                        ← Playwright mock-harness specs + user-simulation platform (e2e/sim/)
     ├── src/                        ← FRONTEND (React + TypeScript)
-    │   ├── main.tsx                ← ReactDOM.createRoot, StrictMode, single SettingsProvider mount
+    │   ├── main.tsx                ← ReactDOM.createRoot, StrictMode, MotionConfig, single SettingsProvider
     │   ├── App.tsx                 ← card layout, dnd-kit drag-to-reorder, viewMode, hiddenCardIds
     │   ├── styles.css              ← global reset, dark theme, scrollbar, focus/drag affordances
     │   ├── utils.ts                ← ViewMode type, historyMinMax()
     │   ├── chartPoints.ts          ← computeChartPoints: null gaps, clamping, extrema-preserving sampling
+    │   ├── cardDropTarget.ts       ← fresh keyboard collision target; pointer over semantics unchanged
+    │   ├── design/                ← semantic tokens and reduced-motion-aware presentation variants
+    │   ├── hooks/useCardSensors.ts ← synchronous keyboard input, sibling-aware geometry, instant scroll
     │   ├── types/metrics.ts        ← TS interfaces mirroring Rust serde structs
     │   ├── cards/                  ← renderCardContent + formatters (pure presentation layer)
     │   ├── hooks/useMetrics.ts     ← Tauri IPC + state (single source of truth)
@@ -128,6 +132,7 @@ monitorers/
     │       ├── MetricCard.tsx       ← main card (default/tile/list views, Recharts AreaChart)
     │       ├── SortableCard.tsx     ← dnd-kit useSortable wrapper around MetricCard
     │       ├── HardwareSidebar.tsx, SortableSidebarCard.tsx
+    │       ├── Controls.tsx        ← shared tactile Button and portal-safe GlassPanel
     │       ├── ErrorBoundary.tsx
     │       ├── TimeRangeSelector.tsx
     │       ├── ViewModeSelector.tsx
@@ -250,6 +255,8 @@ monitorers/
 
 **No server-state caching library** (no React Query / SWR) — data is push-based via Tauri events.
 
+**Interaction geometry:** both card lists use `useCardSensors` with dnd-kit's sibling-aware coordinate getter. Keyboard listeners/movement are synchronous; `cardDropTarget` reads current keyboard collisions, not the library's passive-effect `over` state. Pointer semantics are unchanged. Do not replace this with a smooth-scroll or fixed-frame delay. Metric visibility panels portal to `document.body` outside transformed/backdrop toolbar containing blocks. Motion honors OS reduced-motion preferences; live chart samples never animate.
+
 ---
 
 ## 4. Coding Standards & Conventions
@@ -276,8 +283,8 @@ monitorers/
 | Exports | **Named exports only** — no `export default` from component/hook files |
 | Exception | `App.tsx` uses `export default function App()` (Vite convention) |
 | Styling | **Inline React styles** — no CSS modules, no Tailwind, no styled-components |
-| CSS files | `styles.css` for global resets/scrollbar only |
-| Color palette | `src/design/tokens.ts` owns the current palette: `#0A0C10` canvas, `#15181E` cards, `#4D8DFF` interactive accent, `#3ECF8E` memory series |
+| CSS files | `styles.css` for base, shared focus/drag/hover affordances, animation keyframes and reduced-motion policy |
+| Color palette | `src/design/tokens.ts` owns the current palette: `#08090C` canvas, `#121419` cards, `#C8F751` interactive accent, `#3ECF8E` memory series |
 | Charts | `<Area isAnimationActive={false}>` always — live data at 1-second updates cannot animate |
 | Components | `PascalCase` filenames and export names (e.g. `MetricCard.tsx` → `export function MetricCard`) |
 | Hooks | `camelCase` with `use` prefix (e.g. `useMetrics.ts` → `export function useMetrics`) |
@@ -306,7 +313,7 @@ monitorers/
 - **Never** recreate `PdhHandles` after init — rate counters lose their baseline
 - **Never** move `WMIConnection` off its creation thread (COM thread affinity)
 - **Never** push directly to a history `VecDeque` — always use `push_history()`
-- **Never** add CSS class-based styling to components — use inline `style` props
+- **Never** move component styling into CSS modules or a styling framework — use inline `style` props; shared base/interaction affordances live in `styles.css`
 - **Never** use `export default` in component files (exception: `App.tsx`)
 - **Never** enable Recharts animation on live-updating charts
 - **Never** add `Deserialize` derive to IPC payload structs (they only go backend → frontend)

@@ -1,16 +1,22 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type RefObject } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { createPortal } from 'react-dom';
 import { useFocusBoundary } from '../hooks/useFocusBoundary';
 import {
   accent,
+  accentInk,
+  accentTint,
   controlShell,
   fontSans,
   radius,
-  shadowPopover,
-  surface,
   surfaceHover,
+  textMuted,
   textPrimary,
+  textSecondary,
   type,
 } from '../design/tokens';
+import { GlassPanel } from './Controls';
+import { springPop, staggerParent, slideInItem } from '../design/motion';
 
 interface Item {
   id: string;
@@ -80,7 +86,8 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (ref.current && !ref.current.contains(e.target as Node) &&
+          !panelRef.current?.contains(e.target as Node)) {
         setOpen(false);
       }
     }
@@ -108,81 +115,141 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button
+      <motion.button
         type="button"
         ref={setTrigger}
         onClick={() => setOpen(!open)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls="metric-card-selector-panel"
+        aria-controls={open ? 'metric-card-selector-panel' : undefined}
+        whileHover={{ y: -1 }}
+        whileTap={{ scale: 0.965 }}
+        transition={springPop}
         style={{
-          ...controlShell,
           padding: '6px 12px',
-          minHeight: 32,
+          minHeight: 36,
           fontSize: type.label,
           fontWeight: 600,
           fontFamily: fontSans,
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 6,
+          gap: 7,
+          cursor: 'pointer',
+          borderRadius: radius.control,
+          background: open ? accentTint : controlShell.background,
+          border: open ? `1px solid ${accent}` : controlShell.border,
+          color: textPrimary,
         }}
       >
-        Metrics ({visibleCount}/{items.length}) ▾
-      </button>
-
-      {open && (
-        <div
-          id="metric-card-selector-panel"
-          ref={panelRef}
-          role="dialog"
-          aria-label="Metric card visibility"
-          tabIndex={-1}
+        {/* Live count pip: how many cards are currently on the dashboard. */}
+        <span
+          aria-hidden="true"
           style={{
-            position: 'fixed',
-            ...position,
-            overflowY: 'auto',
-            background: surface,
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            borderRadius: radius.card,
-            padding: 6,
-            zIndex: 100,
-            boxShadow: shadowPopover,
+            minWidth: 20,
+            padding: '1px 5px',
+            borderRadius: radius.chip,
+            background: accent,
+            color: accentInk,
+            fontSize: 10,
+            fontWeight: 700,
+            fontFamily: fontSans,
+            fontVariantNumeric: 'tabular-nums',
           }}
         >
-          <div style={{ padding: '6px 8px 4px', fontSize: type.label, fontWeight: 600, color: textPrimary }}>
-            Show or hide cards
-          </div>
-          {items.map((item) => {
-            const isVisible = !hiddenIds.has(item.id);
-            return (
-              <label
-                key={item.id}
+          {visibleCount}
+        </span>
+        Metrics ({visibleCount}/{items.length})
+        <motion.span
+          aria-hidden="true"
+          animate={{ rotate: open ? 180 : 0 }}
+          transition={springPop}
+          style={{ color: open ? accent : textMuted, fontSize: 10 }}
+        >
+          ▾
+        </motion.span>
+      </motion.button>
+
+      {/* Glass/backdrop and animated ancestors establish fixed containing
+          blocks. A viewport-positioned panel must live outside that subtree. */}
+      {createPortal(<AnimatePresence>
+        {open && (
+          <GlassPanel
+            id="metric-card-selector-panel"
+            role="dialog"
+            aria-label="Metric card visibility"
+            tabIndex={-1}
+            panelRef={panelRef}
+            style={{
+              position: 'fixed',
+              ...position,
+              overflowY: 'auto',
+              padding: 6,
+              zIndex: 100,
+            }}
+          >
+            <motion.div
+              variants={staggerParent(0.03, 0.02)}
+              initial="hidden"
+              animate="visible"
+            >
+              <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '7px 8px',
-                  cursor: 'pointer',
-                  borderRadius: radius.control,
-                  fontSize: type.body,
-                  fontFamily: fontSans,
+                  padding: '6px 8px 6px',
+                  fontSize: type.label,
+                  fontWeight: 700,
                   color: textPrimary,
+                  fontFamily: fontSans,
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = surfaceHover; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
-                <input
-                  type="checkbox"
-                  checked={isVisible}
-                  onChange={(e) => onToggle(item.id, e.target.checked)}
-                  style={{ cursor: 'pointer', accentColor: accent }}
-                />
-                <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{item.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
+                Show or hide cards
+              </div>
+              {items.map((item) => {
+                const isVisible = !hiddenIds.has(item.id);
+                return (
+                  <motion.label
+                    key={item.id}
+                    variants={slideInItem}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                      borderRadius: radius.chip,
+                      fontSize: type.body,
+                      fontFamily: fontSans,
+                      color: isVisible ? textPrimary : textSecondary,
+                    }}
+                    whileHover={{ backgroundColor: surfaceHover }}
+                    transition={{ duration: 0.12 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isVisible}
+                      onChange={(e) => onToggle(item.id, e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: accent, width: 15, height: 15, flexShrink: 0 }}
+                    />
+                    {/* The channel pip: a card keeps its series identity in the
+                        list so you can tell what you are turning off. */}
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        background: isVisible ? accent : 'rgba(255,255,255,0.18)',
+                        transition: 'background-color 180ms cubic-bezier(0.22, 1, 0.36, 1)',
+                      }}
+                    />
+                    <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{item.label}</span>
+                  </motion.label>
+                );
+              })}
+            </motion.div>
+          </GlassPanel>
+        )}
+      </AnimatePresence>, document.body)}
     </div>
   );
 }

@@ -23,8 +23,8 @@ const TICK_FILL_RGB = 'rgb(156, 163, 175)';
 /** The spec's sub-pixel rounding allowance on any chart-box edge. */
 const BOX_TOLERANCE_PX = 1;
 
-/** The Default/Tile card surface (tokens `surface`, #15181E) as the browser resolves it. */
-const CARD_SURFACE_RGB = 'rgb(21, 24, 30)';
+/** The Default/Tile card surface (tokens `surface`, #121419) as the browser resolves it. */
+const CARD_SURFACE_RGB = 'rgb(18, 20, 25)';
 
 /** Token `chartAxisStroke` (#6B7280) — the axis stroke — as the browser resolves it. */
 const AXIS_STROKE_RGB = 'rgb(107, 114, 128)';

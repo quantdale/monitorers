@@ -41,15 +41,19 @@ export interface RenderCardContentParams {
   hasNvidiaData: boolean;
   /** Profile display names keyed by stable disk key. Presentation only. */
   diskNames?: ReadonlyMap<string, string>;
+  /** Position in the visible dashboard, forwarded so the card can stagger its
+   *  entrance. Optional: standalone/embedded renders pass no index. */
+  index?: number;
 }
 
 // Maps a card ID back to the correct SortableCard with its props.
-export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames }: RenderCardContentParams): ReactNode | null {
+export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNames, index }: RenderCardContentParams): ReactNode | null {
   if (id === 'cpu') {
     return (
       <SortableCard
         key={id}
         id={id}
+        index={index}
         title={metrics.cpu_name || 'CPU'}
         value={formatPercent(metrics.latestCpu)}
         history={metrics.cpu}
@@ -66,6 +70,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
       <SortableCard
         key={id}
         id={id}
+        index={index}
         title="Memory"
         value={formatPercent(metrics.mem.at(-1))}
         history={metrics.mem}
@@ -92,6 +97,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
       <SortableCard
         key={id}
         id={id}
+        index={index}
         title={`Disk ${disk.key}`}
         subtitle={diskModel !== disk.key && diskModel !== `Disk ${disk.key}` ? diskModel : undefined}
         valueLabel="Active Time"
@@ -133,6 +139,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
       <SortableCard
         key={id}
         id={id}
+        index={index}
         title="Network"
         // Download is the chart's primary series. An empty value left this
         // card as the only one without a glance numeral — the rates lived
@@ -195,6 +202,7 @@ export function renderCardContent({ id, metrics, viewMode, hasNvidiaData, diskNa
       <SortableCard
         key={id}
         id={id}
+        index={index}
         title={gpuTitle}
         value={formatPercent(gpu.latest)}
         history={gpu.values}

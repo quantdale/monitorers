@@ -74,6 +74,8 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - **`hooks/useSettings.ts`** — persists `cardOrder`, `hiddenCardIds`, `sidebarCardOrder`, `viewMode`, `windowSecs`, and the versioned settings schema to `settings.json` via `@tauri-apps/plugin-store`. In browser simulation runs it uses the per-run bridge/localStorage shim; ordinary browser development keeps settings in memory.
 - **`hooks/useHardwareProfile.ts`** — fetches `get_hardware_profile` and refreshes on the `hardware-profile-ready` event.
 - **`App.tsx`** — card layout, dnd-kit drag-to-reorder, view modes, hidden cards, hardware sidebar. Uses `export default` (the one allowed default export).
+- **`hooks/useCardSensors.ts` / `cardDropTarget.ts`** — shared keyboard policy for both sortable surfaces: synchronous listener registration/movement, dnd-kit's sibling-aware coordinates, instant scrolling and current collision targets rather than passive-effect `over` state. Pointer drops retain their original semantics; do not substitute a timing delay.
+- **`design/` / `components/Controls.tsx`** — semantic visual tokens, reduced-motion-aware variants, shared tactile controls. `main.tsx` supplies the OS motion policy. Visibility dialogs portal to the body so glass/transform toolbar ancestors cannot invalidate their viewport positioning.
 - **`types/metrics.ts`** — TS interfaces that **manually mirror** the Rust serde structs. No codegen — keep them in sync by hand.
 
 ### IPC contract (Tauri v2) — easy to get wrong

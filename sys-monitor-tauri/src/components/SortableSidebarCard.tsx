@@ -40,6 +40,8 @@ export function SortableSidebarCard({ id, children }: Props) {
         flexShrink: 0,
         background: 'transparent',
         border: 0,
+        borderRadius: 6,
+        transition: 'color 160ms ease',
       }}
       title="Drag to reorder"
     >

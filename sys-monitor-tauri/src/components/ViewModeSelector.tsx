@@ -1,66 +1,61 @@
+import { motion, useReducedMotion } from 'motion/react';
+import { LayoutDashboard, LayoutGrid, List } from 'lucide-react';
 import type { ViewMode } from '../utils';
-import {
-  accentTint,
-  controlShell,
-  fontSans,
-  radius,
-  textMuted,
-  textPrimary,
-  type,
-} from '../design/tokens';
+import { accent, accentInk, controlShell, fontSans, radius, textMuted, type } from '../design/tokens';
+import { springPop } from '../design/motion';
 
 interface Props {
   value: ViewMode;
   onChange: (mode: ViewMode) => void;
 }
 
-const MODES: { key: ViewMode; label: string }[] = [
-  { key: 'default', label: 'Default' },
-  { key: 'tile',    label: 'Tile' },
-  { key: 'list',    label: 'List' },
-];
+const MODES = [
+  { key: 'default', label: 'Default', Icon: LayoutDashboard },
+  { key: 'tile', label: 'Tile', Icon: LayoutGrid },
+  { key: 'list', label: 'List', Icon: List },
+] as const;
 
-/** Segmented control (Polar's time-filter pattern): one quiet shell, the
- *  active mode filled with the accent tint. Keeps the role="group"/aria-pressed
- *  contract the accessibility specs assert. */
 export function ViewModeSelector({ value, onChange }: Props) {
+  const reduced = useReducedMotion();
+  const activeIndex = Math.max(0, MODES.findIndex((mode) => mode.key === value));
   return (
     <div
       role="group"
       aria-label="Dashboard view mode"
-      style={{
-        ...controlShell,
-        display: 'flex',
-        gap: 2,
-        padding: 2,
-      }}
+      style={{ ...controlShell, position: 'relative', display: 'flex', padding: 3, width: 246 }}
     >
-      {MODES.map(({ key, label }) => {
-        const active = key === value;
-        return (
-          <button
-            key={key}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onChange(key)}
-            style={{
-              padding: '6px 12px',
-              minHeight: 32,
-              borderRadius: radius.control - 2,
-              border: 'none',
-              background: active ? accentTint : 'transparent',
-              color: active ? textPrimary : textMuted,
-              cursor: 'pointer',
-              fontSize: type.label,
-              fontFamily: fontSans,
-              fontWeight: active ? 600 : 500,
-              transition: 'background 0.15s ease, color 0.15s ease',
-            }}
-          >
-            {label}
-          </button>
-        );
-      })}
+      <motion.span
+        aria-hidden="true"
+        data-testid="view-mode-thumb"
+        initial={false}
+        animate={{ x: `${activeIndex * 100}%` }}
+        transition={reduced ? { duration: 0 } : springPop}
+        style={{
+          position: 'absolute', top: 3, bottom: 3, left: 3,
+          width: 'calc((100% - 6px) / 3)',
+          borderRadius: radius.chip, background: accent,
+          boxShadow: '0 3px 14px -4px rgba(200, 247, 81, 0.4)',
+          pointerEvents: 'none',
+        }}
+      />
+      {MODES.map(({ key, label, Icon }) => (
+        <button
+          key={key}
+          type="button"
+          aria-pressed={value === key}
+          onClick={() => onChange(key)}
+          style={{
+            position: 'relative', flex: '1 1 0', minWidth: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            padding: '5px 7px', minHeight: 28, borderRadius: radius.chip,
+            background: 'transparent', color: value === key ? accentInk : textMuted,
+            fontSize: type.label, fontFamily: fontSans, fontWeight: 650,
+          }}
+        >
+          <Icon size={13} aria-hidden="true" />
+          {label}
+        </button>
+      ))}
     </div>
   );
 }

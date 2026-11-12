@@ -1,4 +1,5 @@
 import { lazy, Suspense, useMemo } from 'react';
+import { Cpu, GripVertical, HardDrive, MemoryStick, Monitor, Network } from 'lucide-react';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import type { ViewMode } from '../utils';
 import { historyMinMax } from '../utils';
@@ -8,7 +9,6 @@ import { buildDualSeriesChartLabel, buildSingleSeriesChartLabel } from '../cards
 import type { MetricValue } from '../types/metrics';
 import {
   cardShell,
-  divider,
   fontMono,
   radius,
   surfaceSunken,
@@ -78,6 +78,18 @@ interface Props {
   listViewMinMax?: string | React.ReactNode;
   /** Default/tile scale line. Percent cards derive one from the window; network passes a throughput peak. */
   rangeCaption?: string;
+}
+
+/** rgba() string for a series hue at a given alpha — cards tint their own
+ *  chrome (rim, well glow, dot) in the metric's colour so the seven cards read
+ *  as one system with per-channel identity rather than seven grey rectangles. */
+function tint(color: string, alpha: number): string {
+  const hex = color.replace('#', '');
+  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export function MetricCard({
@@ -180,10 +192,10 @@ export function MetricCard({
       {...(dragHandleProps?.attributes ?? {})}
       {...(dragHandleProps?.listeners ?? {})}
       aria-label={`Reorder ${title} card`}
-      style={{ padding: '0 8px', display: 'flex', alignItems: 'center', fontSize: 16, color: textFaint, userSelect: 'none', background: 'transparent', border: 0 }}
+      style={{ padding: 6, minWidth: 28, minHeight: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: textFaint, userSelect: 'none', background: 'transparent', border: 0, borderRadius: radius.chip, touchAction: 'none' }}
       title={`Reorder ${title} card`}
     >
-      <span aria-hidden="true">⠿</span>
+      <GripVertical size={16} aria-hidden="true" />
     </button>
   );
 
@@ -198,6 +210,10 @@ export function MetricCard({
         data-testid={`metric-card-${id}`}
         style={{
           ...cardShell,
+          // Series-hue spine: the row announces which channel it is before you
+          // read the title (the same per-card accent the chart uses).
+          borderWidth: '1px 1px 1px 3px',
+          borderColor: tint(color, 0.4),
           // Grows instead of clipping: a fixed 50px height with overflow:hidden
           // cut the network card's wrapped range pills off entirely (measured
           // scrollHeight 72 > clientHeight 50 at a 390px viewport).
@@ -206,6 +222,7 @@ export function MetricCard({
           flexDirection: 'row',
           alignItems: 'stretch',
           opacity: isDragging ? 0.5 : 1,
+          overflow: 'hidden',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', alignSelf: 'center' }}>
@@ -222,8 +239,8 @@ export function MetricCard({
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'center',
-            padding: '0 10px',
-            gap: 2,
+            padding: '8px 12px',
+            gap: 3,
             minWidth: 0,
             // Nothing may paint outside the panel: a value group wider than the
             // panel (disk cards carry "Active Time n%" + "Avg: n ms") used to
@@ -231,33 +248,32 @@ export function MetricCard({
             overflowWrap: 'anywhere',
           }}
         >
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', fontSize: type.body, fontFamily: fontMono, color: textPrimary, gap: '2px 8px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', fontSize: type.body, color: textPrimary, gap: 3, minWidth: 0 }}>
             <span
               data-testid={`metric-title-${id}`}
               title={subtitle ? `${title} — ${subtitle}` : title}
               style={{ color: textSecondary, fontWeight: 600, minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere' }}
             >{title}</span>
-            {/* Not a flex row: inline content reflows (wrapping at spaces) when
-                the panel is narrow, so the value shrinks instead of overflowing
-                the panel or pushing the title into an ellipsis. */}
-            <div style={{ minWidth: 0, maxWidth: '100%', textAlign: 'right', overflowWrap: 'anywhere' }}>{displayValue}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', fontFamily: fontMono, fontVariantNumeric: 'tabular-nums', fontWeight: 650 }}>{displayValue}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {typeof displayMinMax === 'string' ? (
-              <span style={{ fontSize: type.micro, color: textMuted, fontFamily: fontMono }}>{displayMinMax}</span>
+              <span style={{ fontSize: type.micro, color: textMuted, fontFamily: fontMono, fontVariantNumeric: 'tabular-nums' }}>{displayMinMax}</span>
             ) : (
               displayMinMax
             )}
           </div>
         </div>
 
-        {/* Right panel — chart inset on a sunken well, separated by a hairline */}
+        {/* Right panel — chart inset on a sunken well tinted with the series
+            hue, separated by a hairline. The tint is what makes seven identical
+            shapes instantly distinguishable at a glance. */}
         <div
           style={{
             flex: '1 1 45%',
             minWidth: 120,
-            borderLeft: divider,
-            background: surfaceSunken,
+            borderLeft: '1px solid rgba(255, 255, 255, 0.07)',
+            background: `linear-gradient(180deg, ${tint(color, 0.09)}, rgba(0,0,0,0) 70%), ${surfaceSunken}`,
             borderRadius: `0 ${radius.card}px ${radius.card}px 0`,
             padding: '4px 0',
           }}
@@ -283,6 +299,7 @@ export function MetricCard({
   }
 
   const scaleCaption = rangeCaption ?? formatPercentRange(listMinMax.min, listMinMax.max);
+  const ChannelIcon = id === 'cpu' ? Cpu : id === 'memory' ? MemoryStick : id === 'network' ? Network : id.startsWith('disk_') ? HardDrive : Monitor;
 
   // Default and tile views share the same markup.
   // Tile width is controlled by the parent CSS grid (2-column), not the card itself.
@@ -292,84 +309,51 @@ export function MetricCard({
       data-testid={`metric-card-${id}`}
       style={{
         ...cardShell,
-        padding: '14px 16px 12px',
+        padding: '16px 18px 14px',
+        height: viewMode === 'tile' ? '100%' : undefined,
+        borderColor: tint(color, 0.3),
+        backgroundImage: `radial-gradient(ellipse at top right, ${tint(color, 0.07)}, transparent 65%)`,
         opacity: isDragging ? 0.5 : 1,
         display: 'flex',
         flexDirection: 'column',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        {dragHandle}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: hasChart ? 8 : 0,
-            flex: 1,
-            minWidth: 0,
-            overflowWrap: 'anywhere',
-          }}
-        >
-          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <span
-              data-testid={`metric-title-${id}`}
-              style={{
-                color: textSecondary,
-                fontSize: type.label,
-                fontWeight: 600,
-                letterSpacing: 0.2,
-              }}
-            >
-              {title}
-            </span>
-            {subtitle && (
-              <span style={{ color: textMuted, fontSize: type.micro, lineHeight: 1.3 }}>{subtitle}</span>
-            )}
-          </span>
-          {value !== '' && (
-            <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', minWidth: 0, maxWidth: '100%' }}>
-              {valueLabel !== undefined && (
-                <span style={{ color: textMuted, fontSize: type.label, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                  {valueLabel}{' '}
-                </span>
-              )}
-              <span
-                style={{
-                  color: textPrimary,
-                  fontSize: type.metric,
-                  fontWeight: 600,
-                  fontFamily: fontMono,
-                  letterSpacing: '-0.02em',
-                  lineHeight: 1.1,
-                  minWidth: 0,
-                  overflowWrap: 'anywhere',
-                }}
-              >
-                {value}
-              </span>
-            </span>
-          )}
-          {badge && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                flexWrap: 'wrap',
-                minWidth: 0,
-                marginLeft: 'auto',
-              }}
-            >
-              {badge}
-            </div>
-          )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, minWidth: 0 }}>
+        <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, flexShrink: 0, borderRadius: radius.control, color, background: tint(color, 0.12) }}>
+          <ChannelIcon size={16} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+          <div data-testid={`metric-title-${id}`} style={{ color: textSecondary, fontSize: type.label, fontWeight: 650, lineHeight: 1.4 }}>
+            {title}
+          </div>
+          {subtitle && <div style={{ color: textMuted, fontSize: type.micro, lineHeight: 1.4 }}>{subtitle}</div>}
         </div>
+        {dragHandle}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px 14px', marginBottom: 14, minWidth: 0 }}>
+        {value !== '' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, maxWidth: '100%' }}>
+            {valueLabel !== undefined && <span style={{ color: textMuted, fontSize: type.micro }}>{valueLabel}{' '}</span>}
+            <span style={{ color: textPrimary, fontSize: type.metric, fontWeight: 650, fontFamily: fontMono, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.035em', lineHeight: 1.1, overflowWrap: 'anywhere' }}>
+              {value}
+            </span>
+          </div>
+        )}
+        {badge && <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%', marginLeft: 'auto' }}>{badge}</div>}
       </div>
       {hasChart && (
-        <div data-testid={`metric-chart-${id}`} {...chartMetadata} style={{ width: '100%', height: 140 }}>
-        <Suspense fallback={<ChartLoading height={140} />}>
+        <div
+          data-testid={`metric-chart-${id}`}
+          {...chartMetadata}
+          style={{
+            width: '100%',
+            height: 148,
+            position: 'relative',
+            borderRadius: radius.control,
+            background: `linear-gradient(180deg, ${tint(color, 0.07)}, rgba(0,0,0,0) 65%)`,
+          }}
+        >
+        <Suspense fallback={<ChartLoading height={148} />}>
           <MetricChart
             data={data}
             yDomain={yDomain}
@@ -386,11 +370,13 @@ export function MetricCard({
         <div
           data-testid={`metric-range-${id}`}
           style={{
-            marginTop: 8,
+            marginTop: 10,
             color: textMuted,
             fontSize: type.micro,
             fontFamily: fontMono,
             lineHeight: 1.4,
+            fontVariantNumeric: 'tabular-nums',
+            position: 'relative',
           }}
         >
           {scaleCaption}
