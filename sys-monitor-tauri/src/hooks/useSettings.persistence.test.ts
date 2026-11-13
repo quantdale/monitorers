@@ -1,7 +1,6 @@
-import React from 'react';
+import React, { act } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react-dom/test-utils';
 
 // Fakes @tauri-apps/plugin-store with an in-memory map keyed by store path,
 // shared across Store.load() calls — models real on-disk persistence so a
@@ -41,7 +40,7 @@ interface RenderResult {
   unmount: () => void;
 }
 
-function renderUseSettings(): RenderResult {
+function renderUseSettings(strictMode = false): RenderResult {
   let hookValue: ReturnType<typeof useSettingsState> | undefined;
   const container = document.createElement('div');
   let root: Root;
@@ -53,7 +52,8 @@ function renderUseSettings(): RenderResult {
 
   act(() => {
     root = createRoot(container);
-    root.render(React.createElement(TestComponent));
+    const component = React.createElement(TestComponent);
+    root.render(strictMode ? React.createElement(React.StrictMode, null, component) : component);
   });
 
   return {
@@ -74,6 +74,25 @@ describe('useSettings persistence across restart (4.3)', () => {
 
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  it('ignores an obsolete StrictMode load after the active settings have been edited', async () => {
+    let resolveOld!: (value: string | null) => void;
+    (window as unknown as { __TAURI_INTERNALS__: { invoke: () => Promise<unknown> } }).__TAURI_INTERNALS__ = {
+      invoke: vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+        .mockResolvedValue(null),
+    };
+    const current = renderUseSettings(true);
+    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); });
+    expect(current.result().loaded).toBe(true);
+    await act(async () => { await current.result().save({ windowSecs: 300 }); });
+    await act(async () => {
+      resolveOld('C:/obsolete-sim-store');
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+    expect(current.result().settings.windowSecs).toBe(300);
+    current.unmount();
   });
 
   it('a fresh useSettings load from the same store returns previously saved non-default values', async () => {

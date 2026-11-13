@@ -291,7 +291,7 @@ export interface SlicedHistory {
  * Resolve the timestamp a live snapshot must be appended at.
  *
  * The backend owns exactly ONE clock for the history ring: a wall-clock origin
- * fixed once per collector session, advanced by a monotonic `Instant`
+ * fixed once per history-store lifetime (retained across collector recovery), advanced by a monotonic `Instant`
  * (`monotonic_timestamp_ms` in `collector/run_loop.rs`). The IPC snapshot
  * carries that same value as `timestamp_ms`, so a live sample and the ring it
  * is appended to can never disagree after a mid-session wall-clock adjustment
@@ -328,7 +328,7 @@ export function resolveSnapshotTimestamp(
 export function appendSnapshotToHistory(
   previous: HistoryPayload | null,
   snapshot: MetricsSnapshot,
-  timestamp = Date.now()
+  timestamp = resolveSnapshotTimestamp(snapshot, previous?.timestamps.at(-1) ?? 0)
 ): HistoryPayload | null {
   if (!shouldCommitHistory(snapshot.on_tick)) return previous;
   if (!previous) return seedHistoryFromSnapshot(snapshot, timestamp);
@@ -372,7 +372,7 @@ export function reconcileHistoryWithLiveEvents(
   );
 }
 
-export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = Date.now()): HistoryPayload {
+export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = resolveSnapshotTimestamp(snapshot, 0)): HistoryPayload {
   return {
     schema_version: EXPECTED_SCHEMA_VERSION,
     timestamps: [timestamp],
@@ -465,6 +465,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const historyRequestError = useRef<string | null>(null);
   const liveSchemaError = useRef<string | null>(null);
   const lifecycleSchemaError = useRef<string | null>(null);
+  const subscriptionError = useRef<string | null>(null);
   const requestGeneration = useRef(0);
   const liveSequence = useRef(0);
   /**
@@ -488,7 +489,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   // history request. Each clears only through its own recovery proof.
   const syncLoadError = () =>
     setHistoryLoadError(
-      liveSchemaError.current ?? lifecycleSchemaError.current ?? historyRequestError.current
+      liveSchemaError.current ?? lifecycleSchemaError.current ?? subscriptionError.current ?? historyRequestError.current
     );
 
   /** Manual retry for an exhausted recovery budget (backend coalesces outside failed). */
@@ -519,7 +520,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
           .map(({ snapshot, timestamp }) => ({ snapshot, timestamp }));
         if (replay.length > 0) next = reconcileHistoryWithLiveEvents(next, replay);
         historyRef.current = next;
-        lastBackendTimestamp.current = next.timestamps.at(-1) ?? lastBackendTimestamp.current;
+        lastBackendTimestamp.current = Math.max(next.timestamps.at(-1) ?? 0, lastBackendTimestamp.current ?? 0);
         setHistory(next);
         historyRequestError.current = null;
         liveSchemaError.current = null;
@@ -578,7 +579,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         snap,
         // Fallback: newest timestamp already known to the frontend, so the
         // sample is appended in order rather than dropped.
-        historyRef.current?.timestamps.at(-1) ?? lastBackendTimestamp.current ?? Date.now()
+        Math.max(historyRef.current?.timestamps.at(-1) ?? 0, lastBackendTimestamp.current ?? 0)
       );
       lastBackendTimestamp.current = timestamp;
       // A compatible event proves the live IPC stream recovered from a live
@@ -593,13 +594,15 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       setMemGb({ used: snap.mem_used_gb, total: snap.mem_total_gb });
       setLatestCpu(snap.cpu);
       setLatestGpu((previous) => mergeLatestGpu(previous, snap.gpus));
-      setHistory((previous) => {
-        const base = historyRef.current ?? previous;
-        const next = appendSnapshotToHistory(base, snap, timestamp);
-        if (next === base) return previous;
+      const base = historyRef.current;
+      const next = appendSnapshotToHistory(base, snap, timestamp);
+      if (next !== base) {
+        // Event callbacks own the authoritative history ref. React may replay
+        // state updater functions in StrictMode; mutating this ref inside an
+        // updater would append the same full tick twice during that replay.
         historyRef.current = next;
-        return next;
-      });
+        setHistory(next);
+      }
     };
 
     const handleCollectorStatus = (status: CollectorStatus) => {
@@ -631,14 +634,20 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     if (isTauri()) {
       let bootstrapCancelled = false;
       const unlistenMetricsPromise = listen<MetricsSnapshot>('metrics-update', (event) => {
-        handleSnapshot(event.payload);
+        if (!bootstrapCancelled) handleSnapshot(event.payload);
       });
       const unlistenErrorPromise = listen<string>('collector-error', (event) => {
-        handleCollectorError(event.payload);
+        if (!bootstrapCancelled) handleCollectorError(event.payload);
       });
       const unlistenStatusPromise = listen<CollectorStatus>('collector-status', (event) => {
-        handleCollectorStatus(event.payload);
+        if (!bootstrapCancelled) handleCollectorStatus(event.payload);
       });
+      void Promise.all([unlistenMetricsPromise, unlistenErrorPromise, unlistenStatusPromise])
+        .catch((error) => {
+          if (bootstrapCancelled) return;
+          subscriptionError.current = `Live metrics subscription failed: ${error instanceof Error ? error.message : String(error)}`;
+          syncLoadError();
+        });
 
       // Bootstrap the CURRENT managed status on mount/reload so an already-
       // failed supervisor surfaces its failed UX and Retry action without
@@ -647,9 +656,9 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       // mount can never fall into the gap between fetch and subscribe.
       const fenceAtDispatch = appliedStatusSequence.current;
       void unlistenStatusPromise
-        .then(() => invoke<CollectorStatus>('get_collector_status'))
+        .then(() => bootstrapCancelled ? null : invoke<CollectorStatus>('get_collector_status'))
         .then((bootstrapped) => {
-          if (bootstrapCancelled) return;
+          if (bootstrapCancelled || bootstrapped === null) return;
           // Race fence: a collector-status EVENT applied since dispatch means
           // the managed snapshot this response captured is older than what we
           // already rendered — discard it instead of regressing the UI.

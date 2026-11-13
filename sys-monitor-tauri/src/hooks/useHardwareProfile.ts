@@ -70,16 +70,25 @@ export function useHardwareProfile(): HardwareProfileState {
     }
     let cancelled = false;
     let requestInFlight = false;
+    let refreshPending = false;
+    let subscriptionError: string | null = null;
 
     const load = () => {
-      if (requestInFlight) return;
+      if (cancelled) return;
+      if (requestInFlight) {
+        // Notifications invalidate the in-flight read too: it may already
+        // have captured the old profile. Coalesce a burst into one follow-up.
+        refreshPending = true;
+        return;
+      }
       requestInFlight = true;
+      refreshPending = false;
       setLoading(true);
       fetchProfile()
         .then((next) => {
           if (cancelled) return;
           setProfile(next);
-          setError(null);
+          setError(subscriptionError);
         })
         .catch((reason) => {
           if (cancelled) return;
@@ -90,12 +99,25 @@ export function useHardwareProfile(): HardwareProfileState {
         })
         .finally(() => {
           requestInFlight = false;
-          if (!cancelled) setLoading(false);
+          if (cancelled) return;
+          if (refreshPending) load();
+          else setLoading(false);
         });
     };
 
-    load();
     const unlisten = listen('hardware-profile-ready', load);
+    // Subscribe first: a one-shot enrichment event between bootstrap and
+    // registration would otherwise leave the sidebar stale indefinitely.
+    void unlisten.then(() => {
+      if (!cancelled) load();
+    }).catch((reason) => {
+      if (cancelled) return;
+      subscriptionError = reason instanceof Error ? reason.message : String(reason);
+      setError(subscriptionError);
+      // Still provide useful profile data, but keep the subscription failure
+      // visible so Retry can establish future updates.
+      load();
+    });
     return () => {
       cancelled = true;
       unlisten.then((dispose) => dispose()).catch(() => undefined);

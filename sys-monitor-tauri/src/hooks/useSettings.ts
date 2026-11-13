@@ -163,6 +163,8 @@ export function useSettingsState(): SettingsContextValue {
   const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => {
+    let cancelled = false;
+    const dispose = () => { cancelled = true; };
     if (!isTauri()) {
       if (isSimRunActive()) {
         // Mock-mode persistence journeys run against the bridge's per-run
@@ -173,12 +175,14 @@ export function useSettingsState(): SettingsContextValue {
         const sim = getSimHandle();
         if (sim) {
           void sim.settings.load().then((entries) => {
+            if (cancelled) return;
             setSettings(migratePersistedSettings(entries));
             setLoaded(true);
           }).catch((err) => {
+            if (cancelled) return;
             setError(err instanceof Error ? err.message : String(err));
           });
-          return;
+          return dispose;
         }
       }
       setLoaded(true);
@@ -187,7 +191,9 @@ export function useSettingsState(): SettingsContextValue {
     (async () => {
       try {
         const storePath = await resolveStorePath();
+        if (cancelled) return;
         const s = await Store.load(storePath);
+        if (cancelled) return;
         // Read the schema marker first. Do not set the store reference until
         // migration succeeds, so a future-version file cannot be overwritten
         // by a later save from this process.
@@ -207,13 +213,16 @@ export function useSettingsState(): SettingsContextValue {
           viewMode,
           windowSecs,
         });
+        if (cancelled) return;
         setStore(s);
         setSettings(migrated);
         setLoaded(true);
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
       }
     })();
+    return dispose;
   }, []);
 
   const save = useCallback(async (patch: Partial<Settings>) => {

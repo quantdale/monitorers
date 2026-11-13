@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { act } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react-dom/test-utils';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 // Fakes the Tauri invoke surface (get_hardware_profile) and the
 // "hardware-profile-ready" event listener so the hook's initial fetch,
@@ -91,6 +92,7 @@ async function flush() {
 
 describe('useHardwareProfile (Tauri event wiring)', () => {
   beforeEach(() => {
+    vi.mocked(invoke).mockClear();
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     listeners.clear();
     profileResult = null;
@@ -208,6 +210,111 @@ describe('useHardwareProfile (Tauri event wiring)', () => {
     act(() => emit('hardware-profile-ready', {}));
     await flush();
     expect(result().profile?.cpu_name).toBe('Ryzen 9');
+    expect(result().error).toBeNull();
+    unmount();
+  });
+
+  it('coalesces notifications during a pending fetch into one trailing refresh', async () => {
+    let resolveFirst!: (value: HardwareProfileFixture) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    profileResult = { cpu_vendor: 'amd', cpu_name: 'New profile' };
+    act(() => {
+      emit('hardware-profile-ready', {});
+      emit('hardware-profile-ready', {});
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveFirst(fullProfile()); });
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result().profile?.cpu_name).toBe('New profile');
+    expect(result().loading).toBe(false);
+    unmount();
+  });
+
+  it('reads bootstrap only after asynchronous listener registration', async () => {
+    let attach!: () => void;
+    const dispose = vi.fn();
+    vi.mocked(listen).mockImplementationOnce(() => new Promise((resolve) => {
+      attach = () => resolve(dispose);
+    }));
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    expect(invoke).not.toHaveBeenCalled();
+    profileResult = { cpu_vendor: 'amd', cpu_name: 'Changed before attach' };
+    await act(async () => { attach(); });
+    await flush();
+    expect(result().profile?.cpu_name).toBe('Changed before attach');
+    unmount();
+    await flush();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('ignores old notifications after retry replaces the subscription', async () => {
+    profileResult = fullProfile();
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    const oldListener = listeners.get('hardware-profile-ready')!;
+    act(() => result().retry());
+    await flush();
+    vi.mocked(invoke).mockClear();
+    act(() => oldListener({ payload: {} }));
+    await flush();
+    expect(invoke).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('does not bootstrap when registration resolves after unmount', async () => {
+    let attach!: () => void;
+    const dispose = vi.fn();
+    vi.mocked(listen).mockImplementationOnce(() => new Promise((resolve) => {
+      attach = () => resolve(dispose);
+    }));
+    const { unmount } = renderUseHardwareProfile();
+    unmount();
+    await act(async () => { attach(); });
+    await flush();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('still refreshes after a pending request fails with a notification queued', async () => {
+    let rejectFirst!: (error: Error) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    profileResult = fullProfile();
+    act(() => emit('hardware-profile-ready', {}));
+    await act(async () => { rejectFirst(new Error('old request failed')); });
+    await flush();
+    expect(result().profile?.cpu_name).toBe('Intel Core i7-13700K');
+    expect(result().error).toBeNull();
+    unmount();
+  });
+
+  it('does not run a trailing request after unmount', async () => {
+    let resolveFirst!: (value: HardwareProfileFixture) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    const { unmount } = renderUseHardwareProfile();
+    await flush();
+    act(() => emit('hardware-profile-ready', {}));
+    unmount();
+    await act(async () => { resolveFirst(fullProfile()); });
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces subscription failure while keeping a useful bootstrap profile and retries', async () => {
+    profileResult = fullProfile();
+    vi.mocked(listen).mockRejectedValueOnce(new Error('subscription unavailable'));
+    const { result, unmount } = renderUseHardwareProfile();
+    await flush();
+    expect(result().profile?.cpu_name).toBe('Intel Core i7-13700K');
+    expect(result().loading).toBe(false);
+    expect(result().error).toBe('subscription unavailable');
+    act(() => result().retry());
+    await flush();
     expect(result().error).toBeNull();
     unmount();
   });

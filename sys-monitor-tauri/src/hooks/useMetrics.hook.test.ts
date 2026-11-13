@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { act } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react-dom/test-utils';
+import { listen } from '@tauri-apps/api/event';
 import type { HistoryPayload, MetricsSnapshot } from '../types/metrics';
 
 // Fakes the Tauri event/invoke surface so the hook's real "metrics-update" /
@@ -21,7 +21,9 @@ const historyRequests: Array<{ resolve: (payload: HistoryPayload) => void; rejec
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((eventName: string, cb: (event: { payload: unknown }) => void) => {
     listeners.set(eventName, cb);
-    return Promise.resolve(() => listeners.delete(eventName));
+    return Promise.resolve(() => {
+      if (listeners.get(eventName) === cb) listeners.delete(eventName);
+    });
   }),
 }));
 
@@ -137,7 +139,7 @@ interface RenderResult {
   rerender: (windowSecs: number) => void;
 }
 
-function renderUseMetrics(windowSecs: number): RenderResult {
+function renderUseMetrics(windowSecs: number, strictMode = false): RenderResult {
   let hookValue: ReturnType<typeof useMetrics> | undefined;
   const container = document.createElement('div');
   let root: Root;
@@ -149,7 +151,8 @@ function renderUseMetrics(windowSecs: number): RenderResult {
 
   act(() => {
     root = createRoot(container);
-    root.render(React.createElement(TestComponent, { w: windowSecs }));
+    const component = React.createElement(TestComponent, { w: windowSecs });
+    root.render(strictMode ? React.createElement(React.StrictMode, null, component) : component);
   });
 
   return {
@@ -167,6 +170,7 @@ function renderUseMetrics(windowSecs: number): RenderResult {
 
 /** Resets every harness knob so a test starts from a pristine IPC mock. */
 function freshIpcMock(): void {
+  vi.mocked(listen).mockClear();
   (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   listeners.clear();
   historyInvokeError = null;
@@ -553,6 +557,58 @@ describe('useMetrics lifecycle bootstrap', () => {
       for (let i = 0; i < times; i += 1) await Promise.resolve();
     });
   }
+
+  it('ignores disposed StrictMode listeners while their asynchronous removal is pending', async () => {
+    collectorStatusAnswer = { status: status('healthy') };
+    const { result, lifecycle, unmount } = renderUseMetrics(60, true);
+    await flush();
+    const old = (name: string) => vi.mocked(listen).mock.calls.find(([event]) => event === name)![1];
+    act(() => {
+      emit('metrics-update', { ...baseSnapshot(true), cpu: 42 });
+      emit('collector-status', status('healthy', { generation: 9 }));
+      old('metrics-update')({ event: 'metrics-update', id: 0, payload: { ...baseSnapshot(true), cpu: 99 } });
+      old('collector-status')({ event: 'collector-status', id: 0, payload: status('failed', { generation: 1 }) });
+      old('collector-error')({ event: 'collector-error', id: 0, payload: 'disposed session error' });
+    });
+    expect(result().latestCpu).toBe(42);
+    expect(result().cpu).toEqual([42]);
+    expect(lifecycle()?.generation).toBe(9);
+    expect(result().collectorError).toBeNull();
+    unmount();
+  });
+
+  it('never invents a local timestamp when both initial history and payload time are unavailable', async () => {
+    deferredHistory = true;
+    const { result, unmount } = renderUseMetrics(60);
+    await flush();
+    act(() => emit('metrics-update', { ...baseSnapshot(true), timestamp_ms: undefined }));
+    expect(result().timestamps).toEqual([0]);
+    unmount();
+  });
+
+  it('uses the newest known live time when a missing full-tick timestamp follows a scalar tick', async () => {
+    const { result, unmount } = renderUseMetrics(60);
+    await flush();
+    act(() => {
+      emit('metrics-update', { ...baseSnapshot(true), timestamp_ms: 1_000 });
+      emit('metrics-update', { ...baseSnapshot(false), timestamp_ms: 1_250 });
+      emit('metrics-update', { ...baseSnapshot(true), timestamp_ms: undefined });
+    });
+    expect(result().timestamps).toEqual([1_000, 1_250]);
+    unmount();
+  });
+
+  it('surfaces a failed live subscription even when history and other listeners succeed', async () => {
+    vi.mocked(listen).mockRejectedValueOnce(new Error('metrics subscription unavailable'));
+    collectorStatusAnswer = { status: status('healthy') };
+    const { historyLoadError, result, unmount } = renderUseMetrics(60);
+    await flush();
+    expect(result().cpu).toEqual([]);
+    expect(historyLoadError()).toContain('metrics subscription unavailable');
+    act(() => emit('collector-status', status('healthy', { generation: 2 })));
+    expect(historyLoadError()).toContain('metrics subscription unavailable');
+    unmount();
+  });
 
   it('bootstraps a healthy-before-mount supervisor without any event', async () => {
     collectorStatusAnswer = { status: status('healthy', { generation: 7 }) };
