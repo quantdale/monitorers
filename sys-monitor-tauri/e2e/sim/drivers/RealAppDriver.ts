@@ -35,10 +35,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, type Browser, type Page } from '@playwright/test';
 import type { SimDriver, DriverLaunchResult } from '../types';
 import type { SimFault, SimScenario } from '../../../src/sim/mockBackend';
 import { ClassifiedSimulationError } from '../errors';
+import { queryRegistryValue } from '../../../scripts/registry-value.mjs';
 
 export const APP_IDENTIFIER = 'com.quantdale.systemmonitor';
 
@@ -71,21 +73,7 @@ export const RegHklmPolicyOps: HklmPolicyOps = {
     execFileSync('reg.exe', ['delete', key, '/v', valueName, '/f'], { stdio: 'pipe' });
   },
   read(key, valueName) {
-    try {
-      execFileSync('reg.exe', ['query', key, '/v', valueName], { stdio: 'pipe' });
-      return true;
-    } catch (error) {
-      // `reg query` exits 1 with "The system was unable to find the specified
-      // registry key or value." when the value (or its key) is absent. That is
-      // a DEFINITE "absent", not an error — and treating it as an error would
-      // make the post-removal check fail on a correctly removed value.
-      //
-      // A spawn failure (reg.exe missing/unexecutable) carries no numeric
-      // `status`; that IS an operational error and must propagate.
-      const status = (error as { status?: number | null }).status;
-      if (typeof status === 'number') return false;
-      throw error;
-    }
+    return queryRegistryValue(key, valueName);
   },
 };
 
@@ -158,17 +146,22 @@ async function freePort(): Promise<number> {
 }
 
 /** Polls a CDP endpoint until it responds (app/driver bring-up). */
-async function waitForCdp(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForCdp(url: string, timeoutMs: number, signal: AbortSignal): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
   let lastErr: unknown = null;
-  while (Date.now() < deadline) {
+  while (!signal.aborted && performance.now() < deadline) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (res.ok) return;
     } catch (e) {
       lastErr = e;
     }
-    await new Promise((r) => setTimeout(r, 500));
+    if (signal.aborted) break;
+    try {
+      await delay(Math.min(500, Math.max(0, deadline - performance.now())), undefined, { signal });
+    } catch (error) {
+      if (!signal.aborted) throw error;
+    }
   }
   throw new ClassifiedSimulationError(
     `RealAppDriver: CDP endpoint ${url} did not come up within ${timeoutMs}ms${lastErr ? ` (${String(lastErr)})` : ''}`,
@@ -178,6 +171,9 @@ async function waitForCdp(url: string, timeoutMs: number): Promise<void> {
 }
 
 export async function waitForCdpOrProcess(proc: ChildProcess, url: string, timeoutMs: number): Promise<void> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new ClassifiedSimulationError('CDP timeout must be a positive finite number', 'harness-defect', 'config');
+  }
   let ready = false;
   let settled = false;
   let rejectExit: ((error: Error) => void) | null = null;
@@ -215,14 +211,19 @@ export async function waitForCdpOrProcess(proc: ChildProcess, url: string, timeo
   }
   proc.once('error', onError);
   proc.once('exit', onExit);
+  const probe = new AbortController();
+  // Bound the complete observation, including a fetch that never answers.
+  const deadline = setTimeout(() => probe.abort(), timeoutMs);
   try {
     await Promise.race([
-      waitForCdp(url, timeoutMs).then(() => {
+      waitForCdp(url, timeoutMs, probe.signal).then(() => {
         ready = true;
       }),
       processFailure,
     ]);
   } finally {
+    clearTimeout(deadline);
+    probe.abort();
     settled = true;
     proc.off('error', onError);
     proc.off('exit', onExit);
@@ -509,6 +510,11 @@ export class RealAppDriver implements SimDriver {
     if (process.platform !== 'win32') return false;
     const args = this.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
     if (!args) return false;
+    // Refuse host-owned values before entering the best-effort write path.
+    // A query error is also fatal: absence has not been established.
+    if (!this.hklmArgsValueWritten && this.hklmOps.read(WV2_ARGS_POLICY_KEY, WV2_ARGS_VALUE_NAME)) {
+      throw new Error('RealAppDriver: pre-existing WebView2 wildcard policy must be preserved; use an isolated verification host');
+    }
     try {
       this.hklmOps.write(WV2_ARGS_POLICY_KEY, WV2_ARGS_VALUE_NAME, args);
       this.hklmArgsValueWritten = true;
@@ -518,7 +524,9 @@ export class RealAppDriver implements SimDriver {
       this.registerPolicyRemovalHandlers();
       console.log('[RealAppDriver] HKLM WebView2 args policy applied before spawn');
     } catch (error) {
-      this.hklmArgsValueWritten = false;
+      // A failed rewrite leaves the old value alive. Keep ownership and its
+      // termination handlers so close() can still remove and verify it.
+      if (this.hklmArgsValueWritten) throw error;
       console.warn(
         `[RealAppDriver] HKLM WebView2 args policy not applied (${String(error)}); relying on WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
       );

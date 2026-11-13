@@ -10,7 +10,7 @@ use crate::state::HistoryStore;
 
 /// Bump in lockstep with `EXPECTED_SCHEMA_VERSION` in the frontend
 /// (`src/hooks/useMetrics.ts`) when `MetricsSnapshot`'s shape changes.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Every 4th tick is a full poll (fresh CPU/mem/net/disk/GPU I/O, history committed).
 /// The other 3 ticks are registry-only (CPU + GPU scalar refresh, no history write).
@@ -72,7 +72,7 @@ pub struct GpuSnapshot {
     pub key: String,
     pub name: String,
     pub vendor: String,
-    pub util: f64,
+    pub util: Option<f64>,
     pub temp_c: Option<f64>,
     pub nvidia: Option<NvidiaTelemetrySnapshot>,
 }
@@ -80,10 +80,10 @@ pub struct GpuSnapshot {
 #[derive(serde::Serialize, Clone)]
 pub struct DiskSnapshot {
     pub key: String,
-    pub active: f64,
-    pub read_mb_s: f64,
-    pub write_mb_s: f64,
-    pub avg_response_ms: f64,
+    pub active: Option<f64>,
+    pub read_mb_s: Option<f64>,
+    pub write_mb_s: Option<f64>,
+    pub avg_response_ms: Option<f64>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -118,9 +118,9 @@ pub struct DiskHistory {
     /// Aligned to `HistoryPayload::timestamps`; null means the disk was not
     /// present at that timestamp and must not be rendered as 0% activity.
     pub values: Vec<Option<f64>>,
-    pub read_mb_s: f64,
-    pub write_mb_s: f64,
-    pub avg_response_ms: f64,
+    pub read_mb_s: Option<f64>,
+    pub write_mb_s: Option<f64>,
+    pub avg_response_ms: Option<f64>,
 }
 
 /// Returns the index range whose recorded timestamps fall within the real
@@ -152,8 +152,9 @@ pub fn slice_history(
 ) -> Vec<f64> {
     let (start, end) = timestamp_window_range(timestamps, window_secs);
     let offset = timestamps.len().saturating_sub(deque.len());
-    let local_start = start.saturating_sub(offset);
-    let local_end = end.saturating_sub(offset).min(deque.len());
+    let excess = deque.len().saturating_sub(timestamps.len());
+    let local_start = start.saturating_sub(offset) + excess;
+    let local_end = (end.saturating_sub(offset) + excess).min(deque.len());
     if local_start >= local_end {
         Vec::new()
     } else {
@@ -168,18 +169,20 @@ pub fn slice_history(
 
 /// Returns a timestamp-aligned dynamic-device history. Values before the
 /// device's first recorded sample are `None`, preserving a visible chart gap.
-pub fn slice_aligned_history(
-    deque: &VecDeque<f64>,
+pub fn slice_aligned_history<T: Copy + Into<Option<f64>>>(
+    deque: &VecDeque<T>,
     timestamps: &VecDeque<u64>,
     window_secs: u64,
 ) -> Vec<Option<f64>> {
     let (start, end) = timestamp_window_range(timestamps, window_secs);
     let offset = timestamps.len().saturating_sub(deque.len());
+    let excess = deque.len().saturating_sub(timestamps.len());
     (start..end)
         .map(|global_index| {
             global_index
                 .checked_sub(offset)
-                .and_then(|local_index| deque.get(local_index).copied())
+                .and_then(|local_index| deque.get(local_index + excess).copied())
+                .and_then(Into::into)
         })
         .collect()
 }
@@ -250,11 +253,10 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool, timestamp_ms: u64) -> Met
             active: s
                 .disk_active_histories
                 .get(k)
-                .and_then(|h| h.back().copied())
-                .unwrap_or(0.0),
-            read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-            write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-            avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
+                .and_then(|h| h.back().copied().flatten()),
+            read_mb_s: s.disk_read_mb_s.get(k).copied(),
+            write_mb_s: s.disk_write_mb_s.get(k).copied(),
+            avg_response_ms: s.disk_avg_response_ms.get(k).copied(),
         })
         .collect();
 
@@ -290,11 +292,14 @@ pub fn build_snapshot(s: &HistoryStore, on_tick: bool, timestamp_ms: u64) -> Met
                 key: key.clone(),
                 name: name.clone(),
                 vendor,
-                util: s
-                    .gpu_latest
-                    .get(key)
-                    .copied()
-                    .unwrap_or_else(|| hist.back().copied().unwrap_or(0.0)),
+                util: if on_tick {
+                    hist.back().copied().flatten()
+                } else {
+                    s.gpu_latest
+                        .get(key)
+                        .copied()
+                        .or_else(|| hist.back().copied().flatten())
+                },
                 nvidia,
                 temp_c,
             }
@@ -341,9 +346,9 @@ pub fn build_history_payload(s: &HistoryStore, window_secs: u64) -> HistoryPaylo
                     .get(k)
                     .map(|h| slice_aligned_history(h, &s.timestamps, window_secs))
                     .unwrap_or_else(|| vec![None; sliced_timestamps.len()]),
-                read_mb_s: s.disk_read_mb_s.get(k).copied().unwrap_or(0.0),
-                write_mb_s: s.disk_write_mb_s.get(k).copied().unwrap_or(0.0),
-                avg_response_ms: s.disk_avg_response_ms.get(k).copied().unwrap_or(0.0),
+                read_mb_s: s.disk_read_mb_s.get(k).copied(),
+                write_mb_s: s.disk_write_mb_s.get(k).copied(),
+                avg_response_ms: s.disk_avg_response_ms.get(k).copied(),
             })
             .collect(),
         net_recv: slice_history(&s.net_recv_history, &s.timestamps, window_secs),
@@ -527,12 +532,12 @@ mod tests {
         s.gpu_entries = vec![(
             "gpu0".to_string(),
             "NVIDIA GeForce".to_string(),
-            deque(&[10.0, 20.0]),
+            VecDeque::from([Some(10.0), Some(20.0)]),
         )];
         s.gpu_latest.insert("gpu0".to_string(), 75.0);
-        let snap = build_snapshot(&s, true, 1_700_000_000_002);
+        let snap = build_snapshot(&s, false, 1_700_000_000_002);
         assert_eq!(snap.gpus.len(), 1);
-        assert_eq!(snap.gpus[0].util, 75.0);
+        assert_eq!(snap.gpus[0].util, Some(75.0));
     }
 
     #[test]
@@ -549,10 +554,10 @@ mod tests {
         s.gpu_entries = vec![(
             "gpu0".to_string(),
             "NVIDIA GeForce".to_string(),
-            deque(&[10.0, 25.0]),
+            VecDeque::from([Some(10.0), Some(25.0)]),
         )];
         let snap = build_snapshot(&s, true, 1_700_000_000_002);
-        assert_eq!(snap.gpus[0].util, 25.0);
+        assert_eq!(snap.gpus[0].util, Some(25.0));
     }
 
     // --- build_snapshot timestamp channel ---
@@ -655,14 +660,14 @@ mod tests {
             s.disk_display_order.push(key.to_string());
             let hist = s.disk_active_histories.entry(key.to_string()).or_default();
             for tick in 0..5u64 {
-                hist.push_back(100.0 + tick as f64);
+                hist.push_back(Some(100.0 + tick as f64));
             }
         }
         s.disk_read_mb_s.insert("C:".to_string(), 12.5);
         s.gpu_entries.push((
             "gpu0".to_string(),
             "GeForce RTX 4070".to_string(),
-            VecDeque::from([10.0, 20.0, 30.0, 40.0, 50.0]),
+            VecDeque::from([Some(10.0), Some(20.0), Some(30.0), Some(40.0), Some(50.0)]),
         ));
 
         let payload = build_history_payload(&s, 3);
@@ -680,7 +685,7 @@ mod tests {
             payload.disks[0].values,
             vec![Some(102.0), Some(103.0), Some(104.0)]
         );
-        assert_eq!(payload.disks[0].read_mb_s, 12.5);
+        assert_eq!(payload.disks[0].read_mb_s, Some(12.5));
         assert_eq!(payload.disks[1].key, "D:");
         assert_eq!(payload.gpus.len(), 1);
         assert_eq!(payload.gpus[0].name, "GeForce RTX 4070");
@@ -716,12 +721,12 @@ mod tests {
         s.gpu_entries.push((
             "gpu0".to_string(),
             "GeForce RTX 4070".to_string(),
-            VecDeque::from([33.0]),
+            VecDeque::from([Some(33.0)]),
         ));
         s.gpu_entries.push((
             "gpu1".to_string(),
             "Radeon RX 6700".to_string(),
-            VecDeque::from([44.0]),
+            VecDeque::from([Some(44.0)]),
         ));
 
         let payload = build_history_payload(&s, 10);
@@ -736,7 +741,7 @@ mod tests {
         s.gpu_entries.push((
             "gpu0".to_string(),
             "GeForce RTX 4070".to_string(),
-            VecDeque::from([33.0]),
+            VecDeque::from([Some(33.0)]),
         ));
 
         let payload = build_history_payload(&s, 10);
@@ -790,7 +795,7 @@ mod tests {
         s.gpu_entries.push((
             "gpu0".to_string(),
             "GeForce RTX 4070".to_string(),
-            deque(&[10.0]),
+            VecDeque::from([Some(10.0)]),
         ));
         let snap = build_snapshot(&s, true, 1_700_000_000_002);
         let payload = build_history_payload(&s, 10);
@@ -815,17 +820,17 @@ mod tests {
             vec![None, None],
             "a disk with no history must align to the timestamp slice, not render 0%"
         );
-        assert_eq!(payload.disks[0].read_mb_s, 0.0);
+        assert_eq!(payload.disks[0].read_mb_s, None);
     }
 
     // --- slice functions when a history ring outlives its timestamp ring ---
     // The collector keeps these in lockstep; a commit desync must degrade to a
-    // tail-aligned read (offset saturated at zero), never panic or shift.
+    // tail-aligned read, never panic or shift the older head onto newer times.
 
     #[test]
     fn test_slice_history_longer_than_timestamps_is_tail_aligned() {
         let d = deque(&[1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(slice_history(&d, &ts(&[1_000, 2_000]), 10), vec![1.0, 2.0]);
+        assert_eq!(slice_history(&d, &ts(&[1_000, 2_000]), 10), vec![3.0, 4.0]);
     }
 
     #[test]
@@ -833,7 +838,7 @@ mod tests {
         let d = deque(&[5.0, 6.0, 7.0, 8.0]);
         assert_eq!(
             slice_aligned_history(&d, &ts(&[1_000, 2_000]), 10),
-            vec![Some(5.0), Some(6.0)]
+            vec![Some(7.0), Some(8.0)]
         );
     }
 }

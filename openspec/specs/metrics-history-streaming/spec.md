@@ -9,19 +9,19 @@ Both the Rust `HistoryStore` and the frontend's mirrored history state SHALL app
 
 #### Scenario: One hour window reflects one real hour
 - **WHEN** the app has been running continuously for 3600 seconds
-- **THEN** a "1 hour" time window selection displays exactly 3600 real seconds of history for every channel (CPU, mem, disk, net, GPU) — not ~900 seconds
+- **THEN** a "1 hour" time window selects the recorded samples in that elapsed window for every channel (CPU, mem, disk, net, GPU), bounded by the 3600-point ring rather than treating 3600 ticks as 3600 seconds
 
 #### Scenario: Off-tick events do not grow history
 - **WHEN** a `metrics-update` event is emitted on a non-full tick (`on_tick: false`)
 - **THEN** the frontend does not append to any of `history.cpu`, `history.mem`, `history.disks[].values`, `history.net_recv`, `history.net_sent`, or `history.gpus[].values`
 
-#### Scenario: GPU history freezes on PDH failure instead of committing 0%
+#### Scenario: GPU history preserves gaps on PDH failure
 - **WHEN** a full poll tick runs but `PdhCollectQueryData` fails for the GPU PDH query
-- **THEN** `commit_gpu` does not push 0.0 into `gpu_entries`; instead the GPU history arrays retain their last-known values and `gpu_latest` is frozen at the last successful reading
+- **THEN** `commit_gpu` appends a null slot to every retained GPU history, preserving earlier sample timestamps, while `gpu_latest` retains the last valid reading
 
-#### Scenario: Disk throughput history freezes on PDH failure instead of zeroing
+#### Scenario: Disk history and readouts preserve unavailability on PDH failure
 - **WHEN** a full poll tick runs but `PdhCollectQueryData` fails for disk PDH queries
-- **THEN** `commit_disk_network` does not overwrite `disk_read_mb_s`, `disk_write_mb_s`, and `disk_avg_response_ms` with empty maps; instead disk history arrays retain their last-known values and `disk_latest` is frozen at the last successful reading
+- **THEN** `commit_disk_network` appends a null activity slot for each retained disk, preserves its earlier sample timestamps, suspends disappearance pruning, and marks current throughput/response unavailable
 
 #### Scenario: Newly-appearing cards anchor their first history point to their true appearance timestamp
 - **WHEN** a disk or GPU first appears in `metrics-update` after the session has started (not present in initial `get_history`)
@@ -44,30 +44,30 @@ Both the Rust `HistoryStore` and the frontend's mirrored history state SHALL app
 - **THEN** the appended entry's timestamp is the one carried by that event, and the resulting history ring does not contain values produced by two different clocks
 
 ### Requirement: Live scalar readouts refresh independently of history commits
-CPU and GPU current-value display (the numeric readout shown on their cards) SHALL update on every `metrics-update` event (~250ms cadence), independent of whether that event is a history-committing tick.
+CPU and GPU current-value display (the numeric readout shown on their cards) SHALL update from every valid `metrics-update` reading (~250ms cadence), independent of whether that event is a history-committing tick. Missing GPU utilization SHALL preserve its last valid scalar, or remain unavailable before the first valid reading.
 
 #### Scenario: CPU card updates every 250ms
 - **WHEN** a `metrics-update` event arrives, whether or not `on_tick` is true
 - **THEN** the CPU card's displayed percentage reflects that event's `cpu` value immediately, without waiting for the next history-committing tick
 
 #### Scenario: GPU card updates every 250ms
-- **WHEN** a `metrics-update` event arrives for a GPU present in `snap.gpus`
+- **WHEN** a `metrics-update` event carries valid utilization for a GPU present in `snap.gpus`
 - **THEN** that GPU's card displays the event's `util` value immediately, independent of `on_tick`
 
 #### Scenario: GPU live readout freezes on PDH failure (does not show 0%)
-- **WHEN** a full poll tick's PDH query for the GPU fails and the backend retains the last-known GPU `util`/latest value instead of overwriting it with 0.0
-- **THEN** the next `metrics-update` event carries the last successful `util` for that GPU, so the GPU card's displayed readout retains its last successful value instead of showing 0.0%
+- **WHEN** a full poll tick's PDH query for the GPU fails and the backend commits a missing utilization slot while retaining its last valid scalar
+- **THEN** the full-tick event carries null utilization for history reconstruction, and the GPU card retains its last valid readout instead of showing 0.0%; registry-only events may carry the retained scalar
 
 ### Requirement: Latest scalar values are never stale relative to history
-`HistoryStore.cpu_latest` and `HistoryStore.gpu_latest` SHALL reflect values at least as recent as the newest entry in `cpu_history`/the corresponding `gpu_entries` history at all times, including immediately after a full (history-committing) tick.
+`HistoryStore.cpu_latest` and `HistoryStore.gpu_latest` SHALL reflect valid readings at least as recent as the newest valid entry in `cpu_history`/the corresponding `gpu_entries` history at all times, including immediately after a full (history-committing) tick. Missing history slots SHALL NOT overwrite a valid latest scalar.
 
 #### Scenario: Full tick keeps latest in sync with history
-- **WHEN** a full poll tick runs `commit_cpu`/`commit_gpu`, pushing a new value into `cpu_history`/`gpu_entries`
-- **THEN** `cpu_latest`/`gpu_latest` are updated to that same value in the same commit, so `build_snapshot` never serves an older scalar than what was just committed to history
+- **WHEN** a full poll tick runs `commit_cpu`/`commit_gpu`, pushing a valid new value into `cpu_history`/`gpu_entries`
+- **THEN** `cpu_latest`/`gpu_latest` are updated to that same valid value in the same commit
 
 #### Scenario: On PDH failure, latest retains last-successful value
-- **WHEN** a full poll tick fails PDH for GPU or disk
-- **THEN** `gpu_latest`/`disk_latest` are NOT updated (remain at last successful values) so the invariant "latest is at least as recent as history" holds trivially
+- **WHEN** a full poll tick fails PDH for a GPU
+- **THEN** `gpu_latest` retains its last valid value while the history receives a null slot
 
 ### Requirement: The tick-cadence gate is independently testable and regression-covered
 The decision of whether a given tick is a full (history-committing) poll or a registry-only (scalar-refresh) poll SHALL be implemented as a pure, unit-testable function, separate from the I/O and commit logic it gates.
@@ -100,7 +100,7 @@ The 1 Hz history-commit / 4 Hz liveness cadence SHALL be verifiable by an automa
 
 #### Scenario: Fidelity — history advances at exactly 1 Hz with no drift
 - **WHEN** the checker processes the same probe run
-- **THEN** it confirms history length increases by exactly one per `on_tick:true` record and by zero per `on_tick:false` record, and that the final history length equals the elapsed whole-seconds count within tolerance — establishing that a "1 hour" window would represent 3600 real seconds, not ~900
+- **THEN** it confirms history length increases by exactly one per `on_tick:true` record until capacity and by zero per `on_tick:false` record, that the bounded final length tracks elapsed whole seconds within tolerance, and that committed timestamps continue advancing at capacity
 
 #### Scenario: Checker fails loudly on a cadence regression
 - **WHEN** a future change breaks the 1-full-poll-per-4-ticks gate or re-introduces ungated history growth, and the probe is re-run
@@ -108,7 +108,7 @@ The 1 Hz history-commit / 4 Hz liveness cadence SHALL be verifiable by an automa
 
 #### Scenario: GPU/disk PDH failure does not corrupt cadence checker history counts
 - **WHEN** the checker processes a probe run where PDH fails intermittently for GPU/disk
-- **THEN** history length increases by exactly one per `on_tick:true` record regardless of PDH success/failure (because commits are gated on `on_tick`, not on PDH success)
+- **THEN** every retained channel receives one slot per `on_tick:true` record regardless of PDH success/failure, bounded by capacity, with null slots for failed device readings
 
 ### Requirement: The manual runtime verification has an automated fulfilling procedure
 The previously manual end-to-end verification (`fix-history-emission-rate` task 8.7, absorbed as `add-realistic-usage-test-suite` task 5.5) SHALL have a documented automated procedure — run the probe, run the checker, interpret PASS/FAIL — that an AI agent or a self-hosted Windows CI runner can execute unattended to satisfy the check. The manual stopwatch observation becomes optional corroboration, not the sole means of verification.
@@ -156,3 +156,52 @@ The existing `collector-error` string event SHALL continue to be emitted when co
 #### Scenario: Panic still produces a diagnostic message
 - **WHEN** a collector session ends due to panic
 - **THEN** the legacy string event fires as before while the typed status reports the recovering/failed transition
+
+### Requirement: Failed device reads retain timestamp-aligned gaps
+Every known disk and GPU SHALL receive one nullable history slot per full tick while retained. A failed read or device absence SHALL append null at that tick, preserve all earlier sample timestamps, and keep pruning separate from history alignment. The live full-tick snapshot SHALL carry the same nullable utilization as the committed slot. Valid latest GPU scalars SHALL survive a missing utilization sample.
+
+#### Scenario: PDH fails and resumes
+- **WHEN** a valid sample is followed by failed full ticks and then another valid sample
+- **THEN** history reads and live reconstruction both contain the earlier value, null gaps, and the resumed value at their original timestamps
+
+#### Scenario: Device returns during pruning grace
+- **WHEN** one device disappears briefly while another remains available
+- **THEN** the retained device records null for each absent full tick and resumes without shifting its earlier values
+
+#### Scenario: Capacity rollover includes missing slots
+- **WHEN** a full history ring receives failed and successful device samples
+- **THEN** each device history rolls over with the timestamp ring and remains bounded
+
+### Requirement: Metric projection preserves unavailable readings and both plotted series
+An explicit null temperature SHALL replace the previous reading. Dynamic-device pruning grace SHALL use monotonic elapsed time. Downsampling a dual-series chart SHALL consider extrema in both series while retaining endpoints, common source indices, missing-data gaps and the configured point budget.
+
+#### Scenario: Temperature becomes unavailable
+- **WHEN** a previously available CPU or GPU temperature is explicitly null in a later full-tick snapshot
+- **THEN** the displayed temperature becomes unavailable instead of retaining stale telemetry
+
+#### Scenario: Wall time changes during device absence
+- **WHEN** system wall time moves backward or forward during a device's pruning grace
+- **THEN** the grace still expires after its configured monotonic duration
+
+#### Scenario: Upload spikes between download extrema
+- **WHEN** a network upload spike occurs at an interior sample while download remains flat
+- **THEN** downsampling retains the spike with its matching download value and timestamp when the point budget permits
+
+### Requirement: Formatted-counter availability survives collection success
+A successful counter collection SHALL NOT imply that every formatted counter or instance is available. Failed disk/GPU formatting SHALL record missing utilization samples, preserve the last valid live GPU scalar, and suspend disappearance pruning for the failed domain. An individual invalid instance SHALL remain present with unavailable values. Other available domains SHALL continue updating. Missing disk throughput or response readings SHALL be null on the wire and displayed unavailable.
+
+#### Scenario: GPU formatting fails while disk formatting succeeds
+- **WHEN** collection succeeds but formatting the GPU counter fails
+- **THEN** GPU history receives gaps while valid disk metrics continue updating
+
+#### Scenario: Disk formatting fails repeatedly
+- **WHEN** collection succeeds but the disk inventory counter cannot be formatted for more than the pruning threshold
+- **THEN** known disks remain present with missing utilization samples instead of being removed
+
+#### Scenario: One formatted instance has invalid data
+- **WHEN** one returned device counter carries an invalid status or nonfinite value
+- **THEN** its utilization is unavailable while other valid instances retain their readings
+
+#### Scenario: Optional throughput counter is unavailable
+- **WHEN** a disk activity sample is valid but a throughput or response counter is unavailable
+- **THEN** the missing readout is displayed unavailable instead of numeric zero

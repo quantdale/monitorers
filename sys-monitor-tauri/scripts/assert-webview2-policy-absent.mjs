@@ -12,7 +12,7 @@
  * Usage: npm run assert:webview2-policy-absent
  * Exit 0 = value confirmed absent (or not applicable); exit 1 = still present.
  */
-import { execFileSync } from 'node:child_process';
+import { queryRegistryValue } from './registry-value.mjs';
 
 const KEY = 'HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments';
 const VALUE = '*';
@@ -22,35 +22,16 @@ if (process.platform !== 'win32') {
   process.exit(0);
 }
 
-/**
- * Returns the `reg query` output when the value EXISTS, or null when it is
- * definitively absent. `reg query` exits 1 with "unable to find the specified
- * registry key or value" for a missing value — that is an answer, not a fault.
- * A spawn failure carries no numeric status and IS a fault.
- */
-function queryValue() {
-  try {
-    return execFileSync('reg.exe', ['query', KEY, '/v', VALUE], {
-      stdio: 'pipe',
-      encoding: 'utf8',
-    });
-  } catch (error) {
-    if (typeof error.status === 'number') return null;
-    throw error;
-  }
-}
-
-let present = null;
+let present;
 try {
-  present = queryValue();
+  present = queryRegistryValue(KEY, VALUE);
 } catch (error) {
   console.error(`assert-webview2-policy-absent: could not query the registry: ${String(error)}`);
   process.exit(1);
 }
 
-if (present !== null) {
+if (present) {
   console.error(`LEAKED: ${KEY}\\${VALUE} is STILL PRESENT after the run.`);
-  console.error(present);
   console.error('Remove it with:');
   console.error(`  reg delete "${KEY}" /v ${VALUE} /f`);
   process.exit(1);

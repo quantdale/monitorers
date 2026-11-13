@@ -32,16 +32,16 @@ pub fn append_capped(path: &Path, line: &str, cap_bytes: u64) -> std::io::Result
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let over_cap = path
-        .metadata()
-        .map(|m| m.len() >= cap_bytes)
-        .unwrap_or(false);
-    if over_cap {
-        std::fs::remove_file(path).ok();
-    }
+    let over_cap = match path.metadata() {
+        Ok(metadata) => metadata.len() >= cap_bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
     let mut file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .append(!over_cap)
+        .truncate(over_cap)
         .open(path)?;
     file.write_all(line.as_bytes())
 }

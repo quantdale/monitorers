@@ -76,8 +76,8 @@ export function formatMegahertz(value: number | null | undefined): string {
   return `${value.toFixed(0)} MHz`;
 }
 
-export function formatResponseMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return 'Avg: —';
+export function formatResponseMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return 'Avg: —';
   if (ms < 10) return `Avg: ${ms.toFixed(1)} ms`;
   return `Avg: ${Math.round(ms)} ms`;
 }

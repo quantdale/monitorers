@@ -107,15 +107,13 @@ fn main() {
         collector_state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
             Some(&collector_state.pdh),
             disk_infos.clone(),
-            &collector_state.profile.cpu_identity(),
+            &collector_state.cpu_identity,
         );
 
         let store = SafeHistoryStore::new(HistoryStore::new(&cpu_name));
         let mut registry = SensorRegistry::new();
         registry.register(CpuSensorProvider);
-        if !collector_state.profile.gpus.is_empty() {
-            registry.register(GpuSensorProvider);
-        }
+        registry.register(GpuSensorProvider);
 
         // The observation epoch is the first emitted tick. Startup/profile
         // discovery and a WMI bootstrap attempt are not counted as cadence

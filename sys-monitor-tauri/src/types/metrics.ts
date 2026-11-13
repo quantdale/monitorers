@@ -40,10 +40,10 @@ export interface NvidiaTelemetry {
 
 export interface DiskSnapshot {
   key: string;
-  active: number;
-  read_mb_s: number;
-  write_mb_s: number;
-  avg_response_ms: number;
+  active: MetricValue;
+  read_mb_s: MetricValue;
+  write_mb_s: MetricValue;
+  avg_response_ms: MetricValue;
 }
 
 export interface GpuSnapshot {
@@ -51,7 +51,7 @@ export interface GpuSnapshot {
   key: string;
   name: string;
   vendor: string;   // "nvidia" | "intel" | "amd" | "unknown"
-  util: number;
+  util: MetricValue;
   temp_c?: number | null;
   nvidia?: NvidiaTelemetry | null;
 }
@@ -86,11 +86,11 @@ export interface MetricsSnapshot {
 export interface DiskHistory {
   key: string;
   values: MetricValue[];
-  read_mb_s: number;
-  write_mb_s: number;
-  avg_response_ms: number;
+  read_mb_s: MetricValue;
+  write_mb_s: MetricValue;
+  avg_response_ms: MetricValue;
   /**
-   * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
+   * Frontend-only ghost-pruning bookkeeping: monotonic timestamp (ms) when
    * this disk was last seen in a live snapshot. Not part of the Rust IPC
    * payload (which has no such field); seeded on load and updated by the
    * merge functions. Optional so backend payloads remain valid.
@@ -106,7 +106,7 @@ export interface GpuHistory {
   temp_c?: number | null;
   nvidia?: NvidiaTelemetry | null;
   /**
-   * Frontend-only ghost-pruning bookkeeping: wall-clock timestamp (ms) when
+   * Frontend-only ghost-pruning bookkeeping: monotonic timestamp (ms) when
    * this GPU was last seen in a live snapshot. Not part of the Rust IPC
    * payload (which has no such field); seeded on load and updated by the
    * merge functions. Optional so backend payloads remain valid.

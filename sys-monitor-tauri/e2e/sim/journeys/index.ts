@@ -107,7 +107,7 @@ const customizationRoundtrip: Journey = {
 
     // Real driver: relaunch re-detects hardware progressively — wait until the
     // restored set reaches the expected size before comparing order.
-    const restored = await S.waitForCards(ctx, Math.max(2, afterHide.length - 1));
+    const restored = await S.waitForCards(ctx, afterHide.length, 20_000, afterHide);
     ctx.assert(
       'restored-order',
       JSON.stringify(restored) === JSON.stringify(afterHide),

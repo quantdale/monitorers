@@ -133,94 +133,75 @@ fn instance_to_known_letters(
 
 /// Read \PhysicalDisk(*)\% Idle Time values and invert to active-time %.
 /// active% = 100 - idle%  — same value Task Manager's disk graph displays.
-pub fn query_disk_active_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f64> {
-    let counter = match pdh.disk_active_counter {
-        Some(c) => c,
-        None => return HashMap::new(),
-    };
+pub fn query_disk_active_time(
+    pdh: &crate::state::PdhHandles,
+) -> Option<HashMap<String, Option<f64>>> {
+    let counter = pdh.disk_active_counter?;
 
-    crate::pdh::read_pdh_counter_array(counter)
-        .into_iter()
-        .filter_map(|(name, idle_pct)| {
-            // _Total is the aggregate — skip it, we render per-disk cards.
-            if name == "_Total" {
-                return None;
-            }
-            // Invert idle% → active%. Clamp handles out-of-range values near startup.
-            Some((name, (100.0 - idle_pct).clamp(0.0_f64, 100.0)))
-        })
-        .collect()
+    Some(
+        crate::pdh::read_pdh_counter_array(counter)?
+            .into_iter()
+            .filter_map(|(name, idle_pct)| {
+                // _Total is the aggregate — skip it, we render per-disk cards.
+                if name == "_Total" {
+                    return None;
+                }
+                // Invert idle% → active%. Clamp handles out-of-range values near startup.
+                Some((
+                    name,
+                    idle_pct.map(|value| (100.0 - value).clamp(0.0_f64, 100.0)),
+                ))
+            })
+            .collect(),
+    )
 }
 
 /// Read \PhysicalDisk(*)\Disk Read Bytes/sec and Disk Write Bytes/sec.
-/// Returns (instance_name -> (read_mb_s, write_mb_s)). Skips _Total.
-fn query_disk_read_write(pdh: &crate::state::PdhHandles) -> HashMap<String, (f64, f64)> {
-    let mut result = HashMap::new();
-    let counter_read = match pdh.disk_read_counter {
-        Some(c) => c,
-        None => return result,
-    };
-    let counter_write = match pdh.disk_write_counter {
-        Some(c) => c,
-        None => return result,
-    };
-
+/// Returns independent instance-name maps for read and write MB/s. Skips _Total.
+fn query_disk_read_write(
+    pdh: &crate::state::PdhHandles,
+) -> (HashMap<String, f64>, HashMap<String, f64>) {
     const BYTES_TO_MB: f64 = 1.0 / (1024.0 * 1024.0);
-
-    let read_map = query_pdh_counter_array(counter_read);
-    let write_map = query_pdh_counter_array(counter_write);
-
-    for (name, read_bps) in read_map {
-        if name == "_Total" {
-            continue;
-        }
-        let write_bps = write_map.get(&name).copied().unwrap_or(0.0);
-        result.insert(name, (read_bps * BYTES_TO_MB, write_bps * BYTES_TO_MB));
-    }
-    for (name, write_bps) in write_map {
-        if name == "_Total" {
-            continue;
-        }
-        result
-            .entry(name)
-            .or_insert_with(|| (0.0, write_bps * BYTES_TO_MB));
-    }
-
-    result
+    let read = query_pdh_counter_array(pdh.disk_read_counter)
+        .into_iter()
+        .map(|(key, bytes)| (key, bytes * BYTES_TO_MB))
+        .collect();
+    let write = query_pdh_counter_array(pdh.disk_write_counter)
+        .into_iter()
+        .map(|(key, bytes)| (key, bytes * BYTES_TO_MB))
+        .collect();
+    (read, write)
 }
 
 /// Read \PhysicalDisk(*)\Avg. Disk sec/Transfer.
 /// Returns (instance_name -> seconds). Skips _Total.
 fn query_disk_response_time(pdh: &crate::state::PdhHandles) -> HashMap<String, f64> {
-    let mut result = HashMap::new();
-    let counter = match pdh.disk_response_counter {
-        Some(c) => c,
-        None => return result,
-    };
-    for (name, secs) in query_pdh_counter_array(counter) {
-        if name == "_Total" {
-            continue;
-        }
-        result.insert(name, secs);
-    }
-    result
+    query_pdh_counter_array(pdh.disk_response_counter)
 }
 
 /// Read a PDH counter array into instance_name -> value map.
 fn query_pdh_counter_array(
-    counter: windows::Win32::System::Performance::PDH_HCOUNTER,
+    counter: Option<windows::Win32::System::Performance::PDH_HCOUNTER>,
 ) -> HashMap<String, f64> {
-    crate::pdh::read_pdh_counter_array(counter)
+    counter
+        .and_then(crate::pdh::read_pdh_counter_array)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _)| name != "_Total")
+        .filter_map(|(name, value)| value.filter(|v| *v >= 0.0).map(|v| (name, v)))
+        .collect()
 }
 
-/// Return type for `poll_disk`: active %, read MB/s, write MB/s, response ms, display order.
-pub type PollDiskResult = (
-    HashMap<String, f64>,
-    HashMap<String, f64>,
-    HashMap<String, f64>,
-    HashMap<String, f64>,
-    Vec<String>,
-);
+/// Independently available disk readings and the outcome of the inventory read.
+#[derive(Default)]
+pub struct PollDiskResult {
+    pub active: HashMap<String, Option<f64>>,
+    pub read_mb_s: HashMap<String, f64>,
+    pub write_mb_s: HashMap<String, f64>,
+    pub avg_response_ms: HashMap<String, f64>,
+    pub display_order: Vec<String>,
+    pub read_failed: bool,
+}
 
 /// Parse PDH PhysicalDisk instance name (e.g. "0 C:" or "1 D: E:") to get the physical drive index.
 fn pdh_instance_to_drive_index(instance: &str) -> Option<u32> {
@@ -247,7 +228,7 @@ pub fn physical_disk_list(
     let known = known_drive_letters(disks);
 
     let mut result = Vec::new();
-    for (instance_name, _pct_active) in query_disk_active_time(pdh) {
+    for (instance_name, _pct_active) in query_disk_active_time(pdh).unwrap_or_default() {
         let Some(mapped_letters) = instance_to_known_letters(&instance_name, &known) else {
             continue;
         };
@@ -272,11 +253,11 @@ pub fn physical_disk_list(
 
 /// Read disk metrics from PDH and sysinfo. Returns raw values for commit — no history writes.
 pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> PollDiskResult {
-    disks.refresh(false);
+    disks.refresh(true);
 
     let known = known_drive_letters(disks);
 
-    let read_write = query_disk_read_write(pdh);
+    let (readings, writings) = query_disk_read_write(pdh);
     let response_times = query_disk_response_time(pdh);
 
     let mut disk_active = HashMap::new();
@@ -284,8 +265,14 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
     let mut disk_write_mb_s = HashMap::new();
     let mut disk_avg_response_ms = HashMap::new();
     let mut disk_display_order = Vec::new();
+    let Some(activity) = query_disk_active_time(pdh) else {
+        return PollDiskResult {
+            read_failed: true,
+            ..Default::default()
+        };
+    };
 
-    for (instance_name, pct_active) in query_disk_active_time(pdh) {
+    for (instance_name, pct_active) in activity {
         let Some(mapped_letters) = instance_to_known_letters(&instance_name, &known) else {
             continue;
         };
@@ -294,10 +281,12 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
         if !disk_active.contains_key(&disk_key) {
             disk_display_order.push(disk_key.clone());
         }
-        disk_active.insert(disk_key.clone(), pct_active.clamp(0.0, 100.0));
+        disk_active.insert(disk_key.clone(), pct_active.map(|v| v.clamp(0.0, 100.0)));
 
-        if let Some((read_mb, write_mb)) = read_write.get(&instance_name) {
+        if let Some(read_mb) = readings.get(&instance_name) {
             disk_read_mb_s.insert(disk_key.clone(), *read_mb);
+        }
+        if let Some(write_mb) = writings.get(&instance_name) {
             disk_write_mb_s.insert(disk_key.clone(), *write_mb);
         }
 
@@ -321,13 +310,14 @@ pub fn poll_disk(disks: &mut sysinfo::Disks, pdh: &crate::state::PdhHandles) -> 
     // of HashMap iteration order (which is non-deterministic).
     disk_display_order.sort();
 
-    (
-        disk_active,
-        disk_read_mb_s,
-        disk_write_mb_s,
-        disk_avg_response_ms,
-        disk_display_order,
-    )
+    PollDiskResult {
+        active: disk_active,
+        read_mb_s: disk_read_mb_s,
+        write_mb_s: disk_write_mb_s,
+        avg_response_ms: disk_avg_response_ms,
+        display_order: disk_display_order,
+        read_failed: false,
+    }
 }
 
 #[cfg(test)]

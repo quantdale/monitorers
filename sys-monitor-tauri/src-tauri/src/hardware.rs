@@ -132,6 +132,8 @@ pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
     let vendor = if lower.contains("nvidia")
         || lower.contains("geforce")
         || lower.contains("quadro")
+        || lower.contains("tesla")
+        || lower.contains("nvs")
         || lower.contains("rtx")
         || lower.contains("gtx")
     {
@@ -165,7 +167,22 @@ pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
         {
             GpuKind::Discrete
         }
-        GpuVendor::Intel if lower.contains("arc") => GpuKind::Discrete,
+        GpuVendor::Intel
+            if lower.contains("discrete")
+                || lower.contains("dedicated")
+                || lower.split_whitespace().any(|part| {
+                    let model = part.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+                    model.strip_prefix('a').is_some_and(|digits| {
+                        digits.len() >= 3 && digits.as_bytes()[..3].iter().all(u8::is_ascii_digit)
+                    }) || model.strip_prefix('b').is_some_and(|digits| {
+                        digits.len() >= 3
+                            && matches!(digits.as_bytes()[0], b'5' | b'7')
+                            && digits.as_bytes()[..3].iter().all(u8::is_ascii_digit)
+                    })
+                }) && lower.contains("arc") =>
+        {
+            GpuKind::Discrete
+        }
         GpuVendor::Intel
             if lower.contains("uhd") || lower.contains("iris") || lower.contains("integrated") =>
         {
@@ -210,6 +227,7 @@ fn detect_gpus(pdh: Option<&PdhHandles>) -> Vec<GpuInfo> {
     let entries =
         crate::collector::query_gpu_utilization_pdh(pdh_ref, &lock, &mut adapters, &mut last_build);
     entries
+        .unwrap_or_default()
         .into_iter()
         .map(|(key, display_name, _util)| {
             let (vendor, kind) = classify_gpu(&display_name);
@@ -459,6 +477,18 @@ mod tests {
 
     #[test]
     fn test_classify_gpu_vendor_only_is_conservative() {
+        assert_eq!(
+            classify_gpu("Tesla T4"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("NVS 510"),
+            (GpuVendor::Nvidia, GpuKind::Discrete)
+        );
+        assert_eq!(
+            classify_gpu("Intel(R) Arc(TM) Graphics"),
+            (GpuVendor::Intel, GpuKind::Unknown)
+        );
         assert_eq!(
             classify_gpu("Intel Graphics"),
             (GpuVendor::Intel, GpuKind::Unknown)

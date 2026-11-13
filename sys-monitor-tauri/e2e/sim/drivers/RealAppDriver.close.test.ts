@@ -93,6 +93,48 @@ function tempRoot(): string {
 }
 
 describeOnWindows('RealAppDriver WebView2 policy lifecycle', () => {
+  it('preserves a pre-existing host policy without writing or deleting it', async () => {
+    const log: OpsLog = { writes: [], removes: [], reads: [] };
+    const ops = fakeOps(log);
+    ops.read = () => true;
+    const driver = new RealAppDriver({ hklmOps: ops });
+    (driver as unknown as { env: Record<string, string> }).env = {
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=0',
+    };
+    try {
+      expect(() => (driver as unknown as { applyHklmArgsFallback(): boolean }).applyHklmArgsFallback()).toThrow(/pre-existing/i);
+      expect(log.writes).toHaveLength(0);
+      await driver.close();
+      expect(log.removes).toHaveLength(0);
+    } finally {
+      // Ensure the intentionally failing pre-fix run leaves no fake handler.
+      ops.read = () => false;
+      await driver.close();
+    }
+  });
+
+  it('keeps cleanup ownership if rewriting an owned policy fails', async () => {
+    const log: OpsLog = { writes: [], removes: [], reads: [] };
+    const ops = fakeOps(log);
+    const driver = new RealAppDriver({ hklmOps: ops });
+    const internals = driver as unknown as {
+      env: Record<string, string>;
+      hklmArgsValueWritten: boolean;
+      applyHklmArgsFallback(): boolean;
+    };
+    internals.env = { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=0' };
+    internals.applyHklmArgsFallback();
+    ops.write = () => { throw new Error('rewrite denied'); };
+    try {
+      expect(() => internals.applyHklmArgsFallback()).toThrow(/rewrite denied/);
+      expect(internals.hklmArgsValueWritten).toBe(true);
+    } finally {
+      internals.hklmArgsValueWritten = true;
+      await driver.close();
+    }
+    expect(log.removes).toHaveLength(1);
+  });
+
   it('applies the policy and removes it after a normal close', async () => {
     const log: OpsLog = { writes: [], removes: [], reads: [] };
     const driver = new RealAppDriver({ hklmOps: fakeOps(log) });
@@ -264,7 +306,7 @@ describeOnWindows('RealAppDriver WebView2 policy lifecycle', () => {
     await expect(driver.close()).resolves.toBeUndefined();
     expect(log.removes).toHaveLength(1);
     // Removal is VERIFIED, not assumed: the value was read back at least once.
-    expect(log.reads).toHaveLength(1);
+    expect(log.reads).toHaveLength(2); // pre-write absence and post-removal check
     expect(log.reads[0]).toContain('AdditionalBrowserArguments');
     expect((driver as unknown as { hklmArgsValueWritten: boolean }).hklmArgsValueWritten).toBe(false);
   });
@@ -290,7 +332,7 @@ describeOnWindows('RealAppDriver WebView2 policy lifecycle', () => {
     sigint!.handler();
 
     expect(log.removes).toHaveLength(1);
-    expect(log.reads).toHaveLength(1);
+    expect(log.reads).toHaveLength(2); // pre-write absence and post-removal check
     expect((driver as unknown as { hklmArgsValueWritten: boolean }).hklmArgsValueWritten).toBe(false);
   });
 

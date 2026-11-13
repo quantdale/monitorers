@@ -32,14 +32,7 @@ pub struct NvmlDeviceReading {
 /// consumer, professional, and datacenter lines.
 #[cfg(feature = "nvml")]
 fn is_nvml_nvidia_device(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.contains("geforce")
-        || lower.contains("rtx")
-        || lower.contains("gtx")
-        || lower.contains("nvidia")
-        || lower.contains("quadro")
-        || lower.contains("tesla")
-        || lower.contains("nvs")
+    crate::collector::is_nvidia_gpu(name)
 }
 
 #[cfg(feature = "nvml")]
@@ -113,8 +106,8 @@ fn reading_identity_matches(key: &str, reading: &NvmlDeviceReading) -> bool {
 /// PCI identity. This makes it impossible for GPU A's telemetry to be shown on
 /// GPU B merely because it was enumerated first.
 #[cfg(feature = "nvml")]
-pub fn reconcile_nvml_readings(
-    gpu_updates: &[(String, String, f64)],
+pub fn reconcile_nvml_readings<T>(
+    gpu_updates: &[(String, String, T)],
     readings: &[NvmlDeviceReading],
 ) -> std::collections::HashMap<String, crate::state::NvidiaTelemetry> {
     let nvidia_gpus: Vec<_> = gpu_updates
@@ -129,7 +122,7 @@ pub fn reconcile_nvml_readings(
     // malformed or duplicated NVML identity can never overwrite another card's
     // telemetry.
     for (reading_index, reading) in readings.iter().enumerate() {
-        let candidates: Vec<&(String, String, f64)> = nvidia_gpus
+        let candidates: Vec<&(String, String, T)> = nvidia_gpus
             .iter()
             .copied()
             .filter(|(key, _, _)| reading_identity_matches(key, reading))
@@ -158,7 +151,7 @@ pub fn reconcile_nvml_readings(
                 !matched_readings.contains(index) && normalized_gpu_name(&other.name) == normalized
             })
             .count();
-        let candidates: Vec<&(String, String, f64)> = nvidia_gpus
+        let candidates: Vec<&(String, String, T)> = nvidia_gpus
             .iter()
             .copied()
             .filter(|(key, name, _)| {
@@ -188,8 +181,8 @@ use std::collections::HashMap;
 /// than a guess. Shared by the full-poll path (`collector::poll`) and the GPU
 /// sensor provider so the association policy lives in exactly one place.
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
-pub fn nvapi_telemetry_for(
-    gpu_updates: &[(String, String, f64)],
+pub fn nvapi_telemetry_for<T>(
+    gpu_updates: &[(String, String, T)],
     temp: Option<f32>,
 ) -> Option<HashMap<String, crate::state::NvidiaTelemetry>> {
     let candidates: Vec<_> = gpu_updates

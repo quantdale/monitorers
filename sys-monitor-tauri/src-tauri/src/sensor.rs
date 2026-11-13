@@ -82,6 +82,8 @@ impl SensorProvider for GpuSensorProvider {
             &mut state.gpu_adapters,
             &mut state.gpu_adapters_last_refresh,
         );
+        let gpu_read_failed = gpu_updates.is_none();
+        let gpu_updates = gpu_updates.unwrap_or_default();
 
         #[cfg(feature = "nvml")]
         let nvidia_telemetry = if state.nvidia_enrichment_due() {
@@ -110,6 +112,7 @@ impl SensorProvider for GpuSensorProvider {
 
         RawPoll {
             gpu_updates,
+            gpu_read_failed,
             gpu_inventory_confirmed: state
                 .gpu_adapters
                 .as_ref()

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createRunDirectory,
   evaluateJourneyOutcome,
@@ -19,6 +19,8 @@ import { classifyFailure } from '../../e2e/sim/reporting/reports';
 import { ClassifiedSimulationError } from '../../e2e/sim/errors';
 import type { AssertionRecord, RunOptions, SimDriver } from '../../e2e/sim/types';
 import type { RunSelection } from '../../e2e/sim/engine/runner';
+import { waitForCards } from '../../e2e/sim/engine/steps';
+import type { SimContext } from '../../e2e/sim/types';
 
 const passingAssertion: AssertionRecord = { stepIndex: 1, label: 'visible', result: 'pass' };
 
@@ -56,6 +58,33 @@ function options(outDir: string): RunOptions {
 }
 
 describe('simulation pass contract', () => {
+  it('rejects enough dynamic cards when required core metrics never render', async () => {
+    vi.useFakeTimers();
+    const assert = vi.fn();
+    const ctx = {
+      driver: { page: { evaluate: async () => ['gpu_a', 'gpu_b', 'disk_C:'] } },
+      assert,
+    } as unknown as SimContext;
+    try {
+      const pending = waitForCards(ctx, 3, 200);
+      await vi.advanceTimersByTimeAsync(300);
+      await pending;
+      expect(assert).toHaveBeenCalledWith('cards-settled(>=3)', false, expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts the restored expected set when a core card was deliberately hidden', async () => {
+    const assert = vi.fn();
+    const ctx = {
+      driver: { page: { evaluate: async () => ['memory', 'network', 'disk_C:'] } },
+      assert,
+    } as unknown as SimContext;
+    await waitForCards(ctx, 3, 200, ['memory', 'network', 'disk_C:']);
+    expect(assert).toHaveBeenCalledWith('cards-settled(>=3)', true, expect.any(String));
+  });
+
   it('rejects zero-assertion journeys', () => {
     const outcome = evaluateJourneyOutcome({
       assertions: [],
@@ -115,7 +144,33 @@ describe('simulation pass contract', () => {
 });
 
 describe('simulation run and isolation boundaries', () => {
+  it.each(['rejection', 'timeout'] as const)('releases the screenshot deadline after %s', async (outcome) => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), 'monitorers-screenshot-'));
+    const page = {
+      on: () => undefined,
+      screenshot: outcome === 'rejection'
+        ? async () => { throw new Error('screenshot refused'); }
+        : () => new Promise(() => {}),
+    } as never;
+    const chosen = selection();
+    chosen.driver = { ...chosen.driver, page, launch: async () => ({ page, appStderrPath: null }) };
+    chosen.journey.run = async (ctx) => ctx.assert('original failure', false, 'app failed');
+    try {
+      const pending = runJourney(options(root), chosen);
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result.passed).toBe(false);
+      expect(result.artifacts.screenshot).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the app failure primary while preserving cleanup diagnostics and a screenshot', async () => {
+    vi.useFakeTimers();
     const root = mkdtempSync(join(tmpdir(), 'monitorers-cleanup-'));
     const page = {
       on: () => undefined,
@@ -148,8 +203,10 @@ describe('simulation run and isolation boundaries', () => {
       expect(result.failureMessage).toContain('driver close failed');
       expect(result.artifacts.screenshot).not.toBeNull();
       expect(existsSync(result.artifacts.screenshot!)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
     }
   });
 
@@ -196,6 +253,40 @@ describe('simulation run and isolation boundaries', () => {
     } as never;
     await navigateToAppOrigin(page);
     expect(candidates).toEqual(['http://127.0.0.1:5180/', 'tauri://localhost/']);
+  });
+
+  it('aborts a hanging CDP request when the app process exits', async () => {
+    let aborted = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        aborted = true;
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    }));
+    const proc = Object.assign(new EventEmitter(), { exitCode: null, spawnfile: 'fixture.exe' });
+    try {
+      const pending = waitForCdpOrProcess(proc as never, 'http://127.0.0.1:1/json/version', 10_000);
+      queueMicrotask(() => proc.emit('exit', 17, null));
+      await expect(pending).rejects.toMatchObject({ code: 'cdp' });
+      expect(aborted).toBe(true);
+      expect(proc.listenerCount('exit')).toBe(0);
+      expect(proc.listenerCount('error')).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('bounds a CDP fetch that accepts the connection but never answers', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+    }));
+    const proc = Object.assign(new EventEmitter(), { exitCode: null, spawnfile: 'fixture.exe' });
+    try {
+      await expect(waitForCdpOrProcess(proc as never, 'http://127.0.0.1:1/json/version', 20)).rejects.toMatchObject({ code: 'cdp' });
+      expect(proc.listenerCount('exit')).toBe(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('rejects an app process that exits before CDP is ready', async () => {

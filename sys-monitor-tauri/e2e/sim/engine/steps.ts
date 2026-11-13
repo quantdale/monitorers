@@ -108,23 +108,25 @@ export async function waitForPersistedSettings(
 
 /** Polls until at least `minCount` cards are rendered (real-driver restart
  *  race: hardware cards appear progressively as detection settles). */
-export async function waitForCards(ctx: SimContext, minCount: number, timeoutMs = 20_000): Promise<string[]> {
+export async function waitForCards(
+  ctx: SimContext,
+  minCount: number,
+  timeoutMs = 20_000,
+  required: readonly string[] = ['cpu', 'memory', 'network'],
+): Promise<string[]> {
   const page = ctx.driver.page;
   if (!page) throw new Error('waitForCards: no page');
   const deadline = Date.now() + timeoutMs;
+  const ready = (ids: string[]) => ids.length >= minCount && required.every((id) => ids.includes(id));
   let last: string[] = [];
   while (Date.now() < deadline) {
     last = await readCardIds(ctx);
-    if (last.length >= minCount) {
-      const required = ['cpu', 'memory', 'network'];
-      const hasSubset = required.every((id) => last.includes(id));
-      if (hasSubset) break;
-    }
+    if (ready(last)) break;
     await new Promise((r) => setTimeout(r, 300));
   }
   ctx.assert(
     `cards-settled(>=${minCount})`,
-    last.length >= minCount,
+    ready(last),
     `cards visible: ${last.join(',')}`
   );
   return last;

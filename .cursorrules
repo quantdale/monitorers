@@ -186,7 +186,7 @@ monitorers/
 - Always use .unwrap_or_else(|e| e.into_inner()) on mutex locks (poison-safe)
 - push_history() always used for VecDeque appends — never push directly
 - All #[cfg(feature = "nvapi")] and #[cfg(feature = "nvml")] blocks preserved
-- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 6
+- schema_version must stay in sync: SCHEMA_VERSION (Rust) == EXPECTED_SCHEMA_VERSION (TS) == 7
   The lifecycle contract has its own version: LIFECYCLE_SCHEMA_VERSION (Rust
   collector/supervisor.rs) == EXPECTED_LIFECYCLE_SCHEMA_VERSION (TS) == 1.
 - The history ring and every live sample share ONE clock: the backend's

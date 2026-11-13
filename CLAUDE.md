@@ -8,7 +8,7 @@ Single app, not a monorepo. Repo root is `monitorers/`; **all code lives in `sys
 
 **`.cursorrules` at the repo root is the detailed architectural source of truth** — read it for coding conventions, anti-patterns, and the full invariant list. It has been reconciled against source (schema version, modular backend layout, plugin-store persistence, cargo features all verified); if this file and `.cursorrules` ever disagree again, trust the source and fix both. Key facts both files agree on:
 - The project is **Tauri v2** (`Cargo.toml` `tauri = "2"`, `@tauri-apps/api` v2).
-- Cargo default features are **`["nvapi", "nvml"]`** — both Nvidia paths on by default (NVML primary, NVAPI fallback).
+- Cargo default features are **`["nvapi", "nvml"]`** — both features enabled by default (NVML is used; NVAPI is the compile-time alternative when NVML is disabled).
 - Card order / view mode / window / hidden cards **are persisted** via `@tauri-apps/plugin-store` (`useSettings.ts`) with a versioned migration layer.
 - CI calls the canonical verification scripts (`npm run verify:*`, defined in `scripts/verify.mjs`) plus separate E2E/simulation workflows.
 
@@ -82,7 +82,7 @@ The whole backend is one background thread doing a polling loop. Understanding t
 - Rust command params are `snake_case` (`window_secs`) but JS **must pass camelCase**: `invoke('get_history', { windowSecs })`. A mismatch fails silently — history stays `null` and the UI hangs on "Collecting metrics…".
 - Emit with `app_handle.emit("event", &payload)` — `emit_all` was removed in Tauri v2. Events emitted: `metrics-update` (`MetricsSnapshot`), `hardware-profile-ready` (profile), `collector-error` (legacy `string` message, still fired per panic for diagnostics), and `collector-status` (typed `CollectorStatus` lifecycle contract with its own `LIFECYCLE_SCHEMA_VERSION`, also served by the `get_collector_status` command; `retry_collection` is honored only while `failed`).
 - Detect the runtime with `window.__TAURI_INTERNALS__` (v2), **not** `window.__TAURI__`.
-- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `6`** (bumped from 5 when `MetricsSnapshot` gained `timestamp_ms`). Bump both together when payload shape changes.
+- **`SCHEMA_VERSION` (Rust `collector/snapshot.rs`) must equal `EXPECTED_SCHEMA_VERSION` (TS `useMetrics.ts`) — currently `7`** (nullable disk readouts and GPU utilization preserve unavailable readings). Bump both together when payload shape changes.
 - **The history ring has exactly one clock.** `run_loop`'s `monotonic_timestamp_ms()` fixes a wall-clock origin once per history-store lifetime and advances it with a monotonic `Instant`; the same `u64` goes into the ring (full ticks) and into `MetricsSnapshot.timestamp_ms`. `useMetrics` appends live events at the payload's timestamp and must never call `Date.now()` for that purpose, or a mid-session wall-clock adjustment (NTP step, user change, suspend/resume) would desync live samples from the ring. A payload with no usable timestamp warns once and appends at the newest known timestamp (preserving order) rather than dropping the sample or using the local clock. `on_tick` stays the only history growth gate.
 
 ## Conventions worth internalizing (see `.cursorrules` for the full list)

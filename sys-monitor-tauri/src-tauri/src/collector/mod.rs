@@ -41,7 +41,7 @@ const MAX_HISTORY: usize = crate::state::HISTORY_CAPACITY;
 /// reshuffle card order via the frontend's append-on-reappear merge).
 const PRUNE_MISS_THRESHOLD: u32 = 4;
 
-pub fn push_history(deque: &mut std::collections::VecDeque<f64>, value: f64, max_len: usize) {
+pub fn push_history<T>(deque: &mut std::collections::VecDeque<T>, value: T, max_len: usize) {
     deque.push_back(value);
     if deque.len() > max_len {
         deque.pop_front();
@@ -164,19 +164,31 @@ pub fn normalize_network_rate(bytes: u64, elapsed: std::time::Duration) -> f64 {
     (bytes as f64 / 1024.0 / seconds).max(0.0)
 }
 
-/// Query the CPU temperature, serving from a 5-second cache when possible.
-/// A failed query is not cached, so the next poll retries immediately.
+/// Query the CPU temperature at most once per five seconds, including when
+/// the connected WMI provider has no usable thermal class. Calls before WMI
+/// connects do not populate the cache or delay the first real query.
 pub fn query_cpu_temp_cached(
-    cache: &mut Option<(std::time::Instant, f64)>,
+    cache: &mut Option<(std::time::Instant, Option<f64>)>,
     wmi_con: Option<&wmi::WMIConnection>,
 ) -> Option<f64> {
+    let connection = wmi_con?;
+    cached_cpu_temp(cache, std::time::Instant::now(), || {
+        cpu::query_cpu_temp_c(Some(connection))
+    })
+}
+
+fn cached_cpu_temp(
+    cache: &mut Option<(std::time::Instant, Option<f64>)>,
+    now: std::time::Instant,
+    query: impl FnOnce() -> Option<f64>,
+) -> Option<f64> {
     if let Some((at, v)) = cache {
-        if at.elapsed() < CPU_TEMP_CACHE_TTL {
-            return Some(*v);
+        if now.saturating_duration_since(*at) < CPU_TEMP_CACHE_TTL {
+            return *v;
         }
     }
-    let t = cpu::query_cpu_temp_c(wmi_con);
-    *cache = t.map(|v| (std::time::Instant::now(), v));
+    let t = query();
+    *cache = Some((now, t));
     t
 }
 
@@ -197,7 +209,7 @@ pub fn prime_rate_baselines(collector: &mut crate::state::CollectorState) -> boo
     // committed post-recovery tick formats a genuine ~250ms delta instead of a
     // fabricated 0% (fresh-query artifact) or a downtime-aggregating spike.
     let ok = collect_pdh(collector);
-    collector.sysinfo_networks.refresh(false);
+    collector.sysinfo_networks.refresh(true);
     ok
 }
 
@@ -233,7 +245,10 @@ pub fn poll(
     // Network
     let refresh_started = std::time::Instant::now();
     let refresh_elapsed = refresh_started.saturating_duration_since(collector.network_last_refresh);
-    collector.sysinfo_networks.refresh(false);
+    // Remove absent/disconnected adapters. With `false`, sysinfo retains the
+    // last nonzero received/transmitted delta and we count it on every tick.
+    // New adapters establish equal old/current counters on their first refresh.
+    collector.sysinfo_networks.refresh(true);
     collector.network_last_refresh = std::time::Instant::now();
     let mut total_recv_bytes = 0u64;
     let mut total_sent_bytes = 0u64;
@@ -254,18 +269,14 @@ pub fn poll(
 
     // Single PdhCollectQueryData call covers both GPU and disk counters.
     let pdh_collected_ok = collect_pdh(collector);
-    let (disk_active, disk_read_mb_s, disk_write_mb_s, disk_avg_response_ms, disk_display_order) =
-        if pdh_collected_ok {
-            disk::poll_disk(&mut collector.sysinfo_disks, &collector.pdh)
-        } else {
-            (
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                Vec::new(),
-            )
-        };
+    let disk = if pdh_collected_ok {
+        disk::poll_disk(&mut collector.sysinfo_disks, &collector.pdh)
+    } else {
+        disk::PollDiskResult {
+            read_failed: true,
+            ..Default::default()
+        }
+    };
 
     let gpu_updates = gpu::query_gpu_utilization_pdh(
         &collector.pdh,
@@ -273,6 +284,8 @@ pub fn poll(
         &mut collector.gpu_adapters,
         &mut collector.gpu_adapters_last_refresh,
     );
+    let gpu_read_failed = gpu_updates.is_none();
+    let gpu_updates = gpu_updates.unwrap_or_default();
 
     #[cfg(feature = "nvml")]
     collector.retry_nvml_if_due();
@@ -301,16 +314,18 @@ pub fn poll(
         mem_total_gb,
         mem_pct,
         gpu_updates,
+        gpu_read_failed,
+        disk_read_failed: disk.read_failed,
         gpu_inventory_confirmed: collector
             .gpu_adapters
             .as_ref()
             .is_some_and(GpuAdapterCatalog::is_confirmed),
         nvidia_telemetry,
-        disk_active,
-        disk_read_mb_s,
-        disk_write_mb_s,
-        disk_avg_response_ms,
-        disk_display_order,
+        disk_active: disk.active,
+        disk_read_mb_s: disk.read_mb_s,
+        disk_write_mb_s: disk.write_mb_s,
+        disk_avg_response_ms: disk.avg_response_ms,
+        disk_display_order: disk.display_order,
         pdh_ok: pdh_collected_ok,
         net_recv_kib_s,
         net_sent_kib_s,
@@ -330,12 +345,12 @@ pub fn commit_cpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 /// Also refreshes `gpu_latest` so it's never stale relative to the value just
 /// pushed into `gpu_entries` in the same tick (ARC-007).
 pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
-    // On PDH failure, freeze GPU history and latest at last-known values.
-    // Do not commit stale/zero readings from a failed PdhCollectQueryData.
-    // Nvidia enrichment is held at the same last-known snapshot so an
-    // intermittent PDH failure cannot make one channel appear to jump or
-    // disappear while the card's identity is being reconciled.
-    if !poll.pdh_ok {
+    // Full ticks always advance retained device histories with the timestamp
+    // ring. A failed read is a gap; only live scalars and pruning are frozen.
+    if !poll.pdh_ok || poll.gpu_read_failed {
+        for (_, _, history) in &mut store.gpu_entries {
+            push_history(history, None, MAX_HISTORY);
+        }
         return;
     }
 
@@ -351,30 +366,32 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
         .map(|(k, _, _)| k.clone())
         .collect();
 
-    let mut existing: HashMap<String, (String, VecDeque<f64>)> = store
+    let mut existing: HashMap<String, (String, VecDeque<Option<f64>>)> = store
         .gpu_entries
         .drain(..)
         .map(|(key, name, hist)| (key, (name, hist)))
         .collect();
 
-    let mut next_entries: Vec<(String, String, VecDeque<f64>)> = Vec::new();
+    let mut next_entries = Vec::new();
     let mut next_latest: HashMap<String, f64> = HashMap::new();
 
     // Keys present in this poll: fresh history append, miss counter reset.
     for (key, display_name, util) in &poll.gpu_updates {
-        let util = util.clamp(0.0, 100.0);
+        let util = util.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 100.0));
         let mut hist = existing
             .remove(key)
             .map(|(_, h)| h)
             .unwrap_or_else(|| VecDeque::with_capacity(MAX_HISTORY));
         push_history(&mut hist, util, MAX_HISTORY);
         next_entries.push((key.clone(), display_name.clone(), hist));
-        next_latest.insert(key.clone(), util);
+        if let Some(value) = util.or_else(|| store.gpu_latest.get(key).copied()) {
+            next_latest.insert(key.clone(), value);
+        }
         store.gpu_miss_count.remove(key.as_str());
     }
 
     // Previously-known keys absent from this poll are ghosts. Keep them
-    // through a PRUNE_MISS_THRESHOLD grace window (history frozen, last-known
+    // through a PRUNE_MISS_THRESHOLD grace window (history gaps, last-known
     // util held) so a transient adapter-metadata blip cannot wipe GPU cards;
     // drop them once the threshold is crossed (a caption leaving the vendor
     // catalog for good, e.g. after hot-plug refresh). An empty successful
@@ -382,7 +399,7 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
     // Iterated in `prior_keys` order so the resulting gpus array stays stable.
     if !poll.gpu_updates.is_empty() || poll.gpu_inventory_confirmed {
         for key in prior_keys {
-            let Some((name, hist)) = existing.remove(&key) else {
+            let Some((name, mut hist)) = existing.remove(&key) else {
                 continue; // already moved into next_entries as a fresh key
             };
             let miss = store.gpu_miss_count.entry(key.clone()).or_insert(0);
@@ -390,6 +407,7 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
             if *miss >= PRUNE_MISS_THRESHOLD {
                 store.gpu_miss_count.remove(&key);
             } else {
+                push_history(&mut hist, None, MAX_HISTORY);
                 if let Some(v) = store.gpu_latest.get(&key) {
                     next_latest.insert(key.clone(), *v);
                 }
@@ -398,12 +416,13 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
         }
     } else {
         for key in prior_keys {
-            let Some((name, hist)) = existing.remove(&key) else {
+            let Some((name, mut hist)) = existing.remove(&key) else {
                 continue;
             };
             if let Some(v) = store.gpu_latest.get(&key) {
                 next_latest.insert(key.clone(), *v);
             }
+            push_history(&mut hist, None, MAX_HISTORY);
             next_entries.push((key, name, hist));
         }
     }
@@ -422,7 +441,7 @@ pub fn commit_cpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
 pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::state::RawPoll) {
     // On PDH failure, freeze gpu_latest at last-known values.
     // Do not commit stale/zero readings from a failed PdhCollectQueryData.
-    if !poll.pdh_ok {
+    if !poll.pdh_ok || poll.gpu_read_failed {
         return;
     }
 
@@ -432,7 +451,9 @@ pub fn commit_gpu_scalar(store: &mut crate::state::HistoryStore, poll: &crate::s
     // full polls, even though their history and entry are still live).
     let mut next: HashMap<String, f64> = store.gpu_latest.clone();
     for (key, _, util) in &poll.gpu_updates {
-        next.insert(key.clone(), util.clamp(0.0, 100.0));
+        if let Some(value) = util.filter(|v| v.is_finite()) {
+            next.insert(key.clone(), value.clamp(0.0, 100.0));
+        }
     }
     store.gpu_latest = next;
     if let Some(telemetry) = &poll.nvidia_telemetry {
@@ -460,21 +481,15 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
         MAX_HISTORY,
     );
 
-    // On PDH failure, freeze disk active histories and throughput maps at last-known values.
-    // Do not commit empty maps from a failed PdhCollectQueryData.
-    if poll.pdh_ok {
+    // Discover new rings only on a successful poll. Every retained disk gets
+    // one slot below, including missing disks during their pruning grace.
+    if poll.pdh_ok && !poll.disk_read_failed {
         for disk_key in &poll.disk_display_order {
             if !store.disk_active_histories.contains_key(disk_key) {
                 store.disk_display_order.push(disk_key.clone());
                 store
                     .disk_active_histories
                     .insert(disk_key.clone(), VecDeque::with_capacity(MAX_HISTORY));
-            }
-            if let (Some(history), Some(&pct)) = (
-                store.disk_active_histories.get_mut(disk_key),
-                poll.disk_active.get(disk_key),
-            ) {
-                push_history(history, pct, MAX_HISTORY);
             }
         }
         store.disk_read_mb_s = poll.disk_read_mb_s.clone();
@@ -520,6 +535,20 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
                 store.disk_avg_response_ms.remove(key);
             }
         }
+    } else {
+        store.disk_read_mb_s.clear();
+        store.disk_write_mb_s.clear();
+        store.disk_avg_response_ms.clear();
+    }
+    for (key, history) in &mut store.disk_active_histories {
+        let value = (poll.pdh_ok && !poll.disk_read_failed)
+            .then(|| poll.disk_active.get(key).copied().flatten())
+            .flatten();
+        push_history(
+            history,
+            value.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 100.0)),
+            MAX_HISTORY,
+        );
     }
 }
 
@@ -527,6 +556,153 @@ pub fn commit_disk_network(store: &mut crate::state::HistoryStore, poll: &crate:
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    fn device_poll(value: f64) -> crate::state::RawPoll {
+        crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_updates: vec![("gpu0".into(), "GPU 0".into(), Some(value))],
+            disk_display_order: vec!["C:".into()],
+            disk_active: HashMap::from([("C:".into(), Some(value))]),
+            ..Default::default()
+        }
+    }
+
+    fn commit_devices_at(
+        store: &mut crate::state::HistoryStore,
+        raw: &crate::state::RawPoll,
+        timestamp: u64,
+    ) {
+        commit_gpu(store, raw);
+        commit_disk_network(store, raw);
+        store.push_timestamp(timestamp);
+    }
+
+    #[test]
+    fn device_history_keeps_original_timestamps_through_pdh_failure() {
+        let mut store = crate::state::HistoryStore::new("test");
+        commit_devices_at(&mut store, &device_poll(25.0), 1_000);
+        commit_devices_at(&mut store, &crate::state::RawPoll::default(), 2_000);
+        let missing = serde_json::to_value(build_snapshot(&store, true, 2_000)).unwrap();
+        assert!(missing["gpus"][0]["util"].is_null());
+        assert!(missing["disks"][0]["active"].is_null());
+        assert_eq!(store.gpu_latest["gpu0"], 25.0);
+        commit_devices_at(&mut store, &device_poll(75.0), 3_000);
+        let history = build_history_payload(&store, 60);
+        assert_eq!(history.timestamps, vec![1_000, 2_000, 3_000]);
+        assert_eq!(history.gpus[0].values, vec![Some(25.0), None, Some(75.0)]);
+        assert_eq!(history.disks[0].values, history.gpus[0].values);
+    }
+
+    #[test]
+    fn formatted_read_failure_does_not_prune_or_stop_the_other_domain() {
+        for gpu_failed in [false, true] {
+            let mut store = crate::state::HistoryStore::new("test");
+            let mut first = device_poll(25.0);
+            first.disk_read_mb_s.insert("C:".into(), 2.5);
+            commit_devices_at(&mut store, &first, 1_000);
+            for tick in 1..=PRUNE_MISS_THRESHOLD + 1 {
+                let mut raw = device_poll(75.0);
+                if gpu_failed {
+                    raw.gpu_read_failed = true;
+                    raw.gpu_updates.clear();
+                } else {
+                    raw.disk_read_failed = true;
+                    raw.disk_display_order.clear();
+                    raw.disk_active.clear();
+                }
+                commit_devices_at(&mut store, &raw, 1_000 + tick as u64 * 1_000);
+            }
+            assert_eq!(store.gpu_entries.len(), 1);
+            assert_eq!(store.disk_display_order, vec!["C:"]);
+            let snap = build_snapshot(&store, true, 9_000);
+            assert_eq!(
+                snap.gpus[0].util,
+                if gpu_failed { None } else { Some(75.0) }
+            );
+            assert_eq!(
+                snap.disks[0].active,
+                if gpu_failed { Some(75.0) } else { None }
+            );
+            if !gpu_failed {
+                assert_eq!(snap.disks[0].read_mb_s, None);
+            }
+            assert_eq!(
+                store.gpu_latest["gpu0"],
+                if gpu_failed { 25.0 } else { 75.0 }
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_instances_remain_present_with_gaps_and_last_valid_gpu_scalar() {
+        let mut store = crate::state::HistoryStore::new("test");
+        commit_devices_at(&mut store, &device_poll(25.0), 1_000);
+        let mut invalid = device_poll(0.0);
+        invalid.gpu_updates[0].2 = None;
+        invalid.disk_active.insert("C:".into(), None);
+        for tick in 1..=PRUNE_MISS_THRESHOLD + 1 {
+            commit_devices_at(&mut store, &invalid, 1_000 + tick as u64 * 1_000);
+        }
+        let history = build_history_payload(&store, 60);
+        assert_eq!(history.gpus.len(), 1);
+        assert_eq!(history.disks.len(), 1);
+        let mut expected = vec![Some(25.0)];
+        expected.extend(vec![None; (PRUNE_MISS_THRESHOLD + 1) as usize]);
+        assert_eq!(history.gpus[0].values, expected);
+        assert_eq!(history.disks[0].values, expected);
+        assert_eq!(
+            build_snapshot(&store, false, 9_000).gpus[0].util,
+            Some(25.0)
+        );
+        assert_eq!(build_snapshot(&store, true, 9_000).gpus[0].util, None);
+    }
+
+    #[test]
+    fn device_history_keeps_gaps_when_hardware_returns_during_grace() {
+        let mut store = crate::state::HistoryStore::new("test");
+        commit_devices_at(&mut store, &device_poll(25.0), 1_000);
+        let absent = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_inventory_confirmed: true,
+            ..Default::default()
+        };
+        commit_devices_at(&mut store, &absent, 2_000);
+        commit_devices_at(&mut store, &device_poll(0.0), 3_000);
+        let history = build_history_payload(&store, 60);
+        assert_eq!(history.gpus[0].values, vec![Some(25.0), None, Some(0.0)]);
+        assert_eq!(history.disks[0].values, history.gpus[0].values);
+    }
+
+    #[test]
+    fn device_history_rollover_keeps_failed_slots_aligned() {
+        let mut store = crate::state::HistoryStore::new("test");
+        for tick in 0..MAX_HISTORY + 4 {
+            let raw = if tick % 2 == 0 {
+                device_poll((tick % 100) as f64)
+            } else {
+                crate::state::RawPoll::default()
+            };
+            commit_devices_at(&mut store, &raw, tick as u64 * 1_000);
+        }
+        let history = build_history_payload(&store, MAX_HISTORY as u64);
+        assert_eq!(history.timestamps.len(), MAX_HISTORY);
+        for (index, timestamp) in history.timestamps.iter().enumerate() {
+            let tick = timestamp / 1_000;
+            let expected = if tick % 2 == 0 {
+                Some((tick % 100) as f64)
+            } else {
+                None
+            };
+            assert_eq!(
+                history.gpus[0].values[index], expected,
+                "GPU at {timestamp}"
+            );
+            assert_eq!(
+                history.disks[0].values[index], expected,
+                "disk at {timestamp}"
+            );
+        }
+    }
 
     // --- push_history ---
 
@@ -573,34 +749,53 @@ mod tests {
 
     #[test]
     fn test_cpu_temp_cache_serves_fresh_value_without_wmi() {
-        let mut collector = crate::state::CollectorState::new();
-        collector.cpu_temp_cache = Some((std::time::Instant::now(), 45.5));
-        // Fresh cache entry: returned without any WMI connection.
+        let now = std::time::Instant::now();
+        let mut cache = Some((now, Some(45.5)));
         assert_eq!(
-            query_cpu_temp_cached(&mut collector.cpu_temp_cache, None),
+            cached_cpu_temp(&mut cache, now, || panic!("fresh cache must not query")),
             Some(45.5)
         );
     }
 
     #[test]
     fn test_cpu_temp_cache_expired_entry_re_queries() {
-        let mut collector = crate::state::CollectorState::new();
-        let stale = std::time::Instant::now() - std::time::Duration::from_secs(5);
-        collector.cpu_temp_cache = Some((stale, 45.5));
-        // Expired entry + no WMI connection => re-query fails and the cache
-        // is invalidated (so the next poll retries immediately).
-        assert_eq!(
-            query_cpu_temp_cached(&mut collector.cpu_temp_cache, None),
-            None
-        );
-        assert_eq!(collector.cpu_temp_cache, None);
+        let now = std::time::Instant::now();
+        let mut cache = Some((now, Some(45.5)));
+        let expires = now + CPU_TEMP_CACHE_TTL;
+        assert_eq!(cached_cpu_temp(&mut cache, expires, || None), None);
+        assert_eq!(cache, Some((expires, None)));
     }
 
     #[test]
-    fn test_cpu_temp_cache_failure_is_not_cached() {
-        let mut cache: Option<(std::time::Instant, f64)> = None;
+    fn test_cpu_temp_cache_without_connection_does_not_delay_first_query() {
+        let mut cache = None;
         assert_eq!(query_cpu_temp_cached(&mut cache, None), None);
-        assert_eq!(cache, None, "a failed query must not be cached");
+        assert_eq!(cache, None);
+        let now = std::time::Instant::now();
+        assert_eq!(cached_cpu_temp(&mut cache, now, || Some(50.0)), Some(50.0));
+    }
+
+    #[test]
+    fn test_cpu_temp_cache_bounds_unavailable_queries_and_recovers_at_ttl() {
+        let now = std::time::Instant::now();
+        let mut cache = None;
+        let mut calls = 0;
+        for tick in 0..20 {
+            let value = cached_cpu_temp(
+                &mut cache,
+                now + std::time::Duration::from_millis(tick * 250),
+                || {
+                    calls += 1;
+                    None
+                },
+            );
+            assert_eq!(value, None);
+        }
+        assert_eq!(calls, 1, "unavailable WMI must not be queried at 4 Hz");
+        assert_eq!(
+            cached_cpu_temp(&mut cache, now + CPU_TEMP_CACHE_TTL, || Some(55.0)),
+            Some(55.0)
+        );
     }
 
     // --- scalar commits ---
@@ -624,7 +819,7 @@ mod tests {
         let mut store = crate::state::HistoryStore::new("test");
         let poll = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 150.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(150.0))],
             nvidia_telemetry: Some(std::collections::HashMap::from([(
                 "gpu0".to_string(),
                 crate::state::NvidiaTelemetry {
@@ -649,7 +844,7 @@ mod tests {
         store.gpu_latest.insert("gpu0".to_string(), 42.0);
         let poll = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), 50.0)],
+            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), Some(50.0))],
             ..Default::default()
         };
         commit_gpu_scalar(&mut store, &poll);
@@ -680,12 +875,12 @@ mod tests {
         store.gpu_latest.insert("gpu0".to_string(), 999.0); // stale value
         let poll = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 65.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(65.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &poll);
         let (_, _, hist) = &store.gpu_entries[0];
-        assert_eq!(hist.back().copied(), Some(65.0));
+        assert_eq!(hist.back().copied(), Some(Some(65.0)));
         assert_eq!(
             store.gpu_latest.get("gpu0"),
             Some(&65.0),
@@ -706,7 +901,7 @@ mod tests {
             disk_display_order: vec!["C:".to_string()],
             ..Default::default()
         };
-        present.disk_active.insert("C:".to_string(), 10.0);
+        present.disk_active.insert("C:".to_string(), Some(10.0));
         commit_disk_network(&mut store, &present);
         assert_eq!(store.disk_display_order, vec!["C:".to_string()]);
 
@@ -752,7 +947,7 @@ mod tests {
             disk_display_order: vec!["C:".to_string()],
             ..Default::default()
         };
-        present.disk_active.insert("C:".to_string(), 10.0);
+        present.disk_active.insert("C:".to_string(), Some(10.0));
         commit_disk_network(&mut store, &present);
 
         for _ in 0..PRUNE_MISS_THRESHOLD * 2 {
@@ -775,7 +970,7 @@ mod tests {
             disk_display_order: vec!["C:".to_string()],
             ..Default::default()
         };
-        present.disk_active.insert("C:".to_string(), 10.0);
+        present.disk_active.insert("C:".to_string(), Some(10.0));
         commit_disk_network(&mut store, &present);
         for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
             commit_disk_network(
@@ -825,7 +1020,7 @@ mod tests {
         let mut store = crate::state::HistoryStore::new("test");
         let gpu0 = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 50.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(50.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &gpu0);
@@ -835,7 +1030,7 @@ mod tests {
         // hot-plug); gpu1 is what the poll reports now. gpu0 misses start.
         let gpu1 = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), 60.0)],
+            gpu_updates: vec![("gpu1".to_string(), "GPU 1".to_string(), Some(60.0))],
             ..Default::default()
         };
         for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
@@ -866,7 +1061,7 @@ mod tests {
         let mut store = crate::state::HistoryStore::new("test");
         let present = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 50.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(50.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &present);
@@ -894,7 +1089,7 @@ mod tests {
             &mut store,
             &crate::state::RawPoll {
                 pdh_ok: true,
-                gpu_updates: vec![("last-gpu".into(), "GPU".into(), 50.0)],
+                gpu_updates: vec![("last-gpu".into(), "GPU".into(), Some(50.0))],
                 ..Default::default()
             },
         );
@@ -929,8 +1124,8 @@ mod tests {
         let poll = crate::state::RawPoll {
             pdh_ok: true,
             gpu_updates: vec![
-                ("gpu-b".to_string(), "GPU B".to_string(), 40.0),
-                ("gpu-a".to_string(), "GPU A".to_string(), 30.0),
+                ("gpu-b".to_string(), "GPU B".to_string(), Some(40.0)),
+                ("gpu-a".to_string(), "GPU A".to_string(), Some(30.0)),
             ],
             ..Default::default()
         };
@@ -938,7 +1133,7 @@ mod tests {
 
         let poll2 = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu-c".to_string(), "GPU C".to_string(), 55.0)],
+            gpu_updates: vec![("gpu-c".to_string(), "GPU C".to_string(), Some(55.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &poll2);
@@ -1027,38 +1222,38 @@ mod tests {
         assert_eq!(store.cpu_history.front().copied(), Some(50.0));
     }
 
-    // --- PDH failure gating (GPU/disk freeze on pdh_ok == false) ---
+    // --- PDH failure: history gaps and frozen live scalars ---
 
     #[test]
-    fn test_commit_gpu_freezes_on_pdh_failure() {
+    fn test_commit_gpu_appends_gap_and_preserves_latest_on_pdh_failure() {
         let mut store = crate::state::HistoryStore::new("test");
         // First, a successful poll establishes baseline
         let good_poll = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 45.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(45.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &good_poll);
         assert_eq!(store.gpu_latest.get("gpu0"), Some(&45.0));
         let (_, _, hist) = &store.gpu_entries[0];
-        assert_eq!(hist.back().copied(), Some(45.0));
+        assert_eq!(hist.back().copied(), Some(Some(45.0)));
 
         // Now a PDH-failed tick with a different value (should be ignored)
         let bad_poll = crate::state::RawPoll {
             pdh_ok: false,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(0.0))],
             ..Default::default()
         };
         commit_gpu(&mut store, &bad_poll);
-        // History and latest must remain at the last good value (45.0)
+        // Keep the last good scalar while recording the failed sample's gap.
         assert_eq!(store.gpu_latest.get("gpu0"), Some(&45.0));
         let (_, _, hist) = &store.gpu_entries[0];
         assert_eq!(
             hist.back().copied(),
-            Some(45.0),
-            "GPU history must freeze on PDH failure"
+            Some(None),
+            "GPU history must mark the failed full tick as unavailable"
         );
-        assert_eq!(hist.len(), 1, "No new history entry on PDH failure");
+        assert_eq!(hist.len(), 2, "one slot per full tick, including failure");
     }
 
     #[test]
@@ -1077,7 +1272,7 @@ mod tests {
         );
         let bad_poll = crate::state::RawPoll {
             pdh_ok: false,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(0.0))],
             nvidia_telemetry: Some(std::collections::HashMap::from([(
                 "gpu0".to_string(),
                 crate::state::NvidiaTelemetry {
@@ -1108,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_disk_network_freezes_throughput_on_pdh_failure() {
+    fn test_commit_disk_network_clears_unavailable_throughput_on_pdh_failure() {
         let mut store = crate::state::HistoryStore::new("test");
         // First, a successful poll establishes baseline
         let mut good_poll = crate::state::RawPoll {
@@ -1116,7 +1311,7 @@ mod tests {
             disk_display_order: vec!["C:".to_string()],
             ..Default::default()
         };
-        good_poll.disk_active.insert("C:".to_string(), 10.0);
+        good_poll.disk_active.insert("C:".to_string(), Some(10.0));
         good_poll.disk_read_mb_s.insert("C:".to_string(), 12.5);
         good_poll.disk_write_mb_s.insert("C:".to_string(), 8.2);
         good_poll.disk_avg_response_ms.insert("C:".to_string(), 3.2);
@@ -1131,21 +1326,21 @@ mod tests {
             ..Default::default()
         };
         commit_disk_network(&mut store, &bad_poll);
-        // Throughput maps must remain at last good values
+        // Failed reads must not present the previous throughput as current.
         assert_eq!(
             store.disk_read_mb_s.get("C:"),
-            Some(&12.5),
-            "Disk read must freeze on PDH failure"
+            None,
+            "Disk read must become unavailable on PDH failure"
         );
         assert_eq!(
             store.disk_write_mb_s.get("C:"),
-            Some(&8.2),
-            "Disk write must freeze on PDH failure"
+            None,
+            "Disk write must become unavailable on PDH failure"
         );
         assert_eq!(
             store.disk_avg_response_ms.get("C:"),
-            Some(&3.2),
-            "Disk avg response must freeze on PDH failure"
+            None,
+            "Disk response must become unavailable on PDH failure"
         );
     }
 
@@ -1157,7 +1352,7 @@ mod tests {
         // PDH-failed scalar poll
         let bad_poll = crate::state::RawPoll {
             pdh_ok: false,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 0.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(0.0))],
             ..Default::default()
         };
         commit_gpu_scalar(&mut store, &bad_poll);
@@ -1177,7 +1372,7 @@ mod tests {
         // PDH-successful scalar poll with new value
         let good_poll = crate::state::RawPoll {
             pdh_ok: true,
-            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), 60.0)],
+            gpu_updates: vec![("gpu0".to_string(), "GPU 0".to_string(), Some(60.0))],
             ..Default::default()
         };
         commit_gpu_scalar(&mut store, &good_poll);

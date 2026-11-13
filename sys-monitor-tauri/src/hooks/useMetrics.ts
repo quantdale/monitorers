@@ -19,11 +19,11 @@ export const MAX_HISTORY = 3600;
 /**
  * How long a dynamic card is retained after it disappears from a live
  * snapshot. The backend uses the same four-full-tick grace period; this small
- * wall-clock cushion prevents a late browser event from dropping a card.
+ * monotonic-time cushion prevents a late browser event from dropping a card.
  */
 const PRUNE_GRACE_MS = 5000;
 
-export const EXPECTED_SCHEMA_VERSION = 6;
+export const EXPECTED_SCHEMA_VERSION = 7;
 
 export const SCHEMA_MISMATCH_MESSAGE =
   'Frontend/backend metrics schema mismatch. Rebuild the application so both sides use the same version.';
@@ -93,12 +93,14 @@ export function assertLifecycleSchemaVersion(status: CollectorStatus): void {
 
 export function appendToHistory<T>(arr: T[], value: T, maxLen: number): T[] {
   if (maxLen <= 0) return [];
+  if (maxLen === 1) return [value];
   if (arr.length < maxLen) return [...arr, value];
   return [...arr.slice(-(maxLen - 1)), value];
 }
 
 function alignedValuesBeforeAppend(values: MetricValue[], timestampsLength: number): MetricValue[] {
   const targetLength = Math.min(MAX_HISTORY, Math.max(0, timestampsLength - 1));
+  if (targetLength === 0) return [];
   const tail = values.slice(-targetLength);
   if (tail.length >= targetLength) return tail;
   return [...Array<null>(targetLength - tail.length).fill(null), ...tail];
@@ -113,7 +115,7 @@ export function mergeDiskHistory(
   snapshotDisks: MetricsSnapshot['disks'],
   timestampsLength: number
 ): DiskHistory[] {
-  const now = Date.now();
+  const now = performance.now();
   const updated: DiskHistory[] = [];
 
   for (const disk of prev) {
@@ -175,6 +177,7 @@ export function mergeLatestGpu(
   let changed = false;
   const next = { ...prev };
   for (const gpu of gpus) {
+    if (gpu.util === null || !Number.isFinite(gpu.util)) continue;
     if (next[gpu.key] !== gpu.util) {
       next[gpu.key] = gpu.util;
       changed = true;
@@ -188,7 +191,7 @@ export function mergeGpuHistory(
   snapshotGpus: MetricsSnapshot['gpus'],
   timestampsLength: number
 ): GpuHistory[] {
-  const now = Date.now();
+  const now = performance.now();
   const updated: GpuHistory[] = [];
 
   for (const gpu of prev) {
@@ -200,7 +203,7 @@ export function mergeGpuHistory(
         name: update.name,
         vendor: update.vendor ?? gpu.vendor ?? 'unknown',
         values: appendToHistory(aligned, normalizeMetricValue(update.util), MAX_HISTORY),
-        temp_c: update.temp_c ?? gpu.temp_c ?? null,
+        temp_c: update.temp_c === undefined ? gpu.temp_c ?? null : update.temp_c,
         nvidia: update.nvidia ?? null,
         last_seen_ts: now,
       });
@@ -340,7 +343,7 @@ export function appendSnapshotToHistory(
     timestamps,
     cpu: appendToHistory(previous.cpu, snapshot.cpu, MAX_HISTORY),
     cpu_name: snapshot.cpu_name ?? previous.cpu_name,
-    cpu_temp_c: snapshot.cpu_temp_c ?? previous.cpu_temp_c ?? null,
+    cpu_temp_c: snapshot.cpu_temp_c === undefined ? previous.cpu_temp_c ?? null : snapshot.cpu_temp_c,
     mem: appendToHistory(previous.mem, snapshot.mem, MAX_HISTORY),
     disks: mergeDiskHistory(previous.disks, snapshot.disks, timestampLength),
     net_recv: appendToHistory(previous.net_recv, snapshot.net_recv_kib_s, MAX_HISTORY),
@@ -388,7 +391,7 @@ export function seedHistoryFromSnapshot(snapshot: MetricsSnapshot, timestamp = r
 }
 
 function normalizeHistoryPayload(payload: HistoryPayload): HistoryPayload {
-  const now = Date.now();
+  const now = performance.now();
   return {
     ...payload,
     timestamps: payload.timestamps ?? [],
@@ -481,7 +484,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [latestCpu, setLatestCpu] = useState<number | null>(null);
   const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
   const [connectionRevision, setConnectionRevision] = useState(0);
-  const [registeredRevision, setRegisteredRevision] = useState(0);
+  const [registeredRevision, setRegisteredRevision] = useState(-1);
   const [historyPending, setHistoryPending] = useState(true);
   const [subscriptionPending, setSubscriptionPending] = useState(true);
   // Synchronous click fence: several activations in one task must still start
@@ -792,7 +795,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       net_recv: slice(history.net_recv),
       net_sent: slice(history.net_sent),
       gpus: history.gpus.map((gpu) => {
-        let newest = 0;
+        let newest = Number.NaN;
         for (let i = gpu.values.length - 1; i >= 0; i -= 1) {
           const value = gpu.values[i];
           if (value != null) {

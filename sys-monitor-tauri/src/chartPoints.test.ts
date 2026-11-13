@@ -2,6 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { computeChartPoints } from './chartPoints';
 
 describe('computeChartPoints', () => {
+  it('preserves independent upload and download spikes within a dual-series budget', () => {
+    const history = Array<number>(100).fill(10);
+    const secondaryHistory = Array<number>(100).fill(5);
+    history[37] = 100;
+    secondaryHistory[41] = 80;
+    const points = computeChartPoints({ history, secondaryHistory, maxPoints: 10 });
+    expect(points.length).toBeLessThanOrEqual(10);
+    expect(points.some((point) => point.t === 37 && point.v === 100)).toBe(true);
+    expect(points.some((point) => point.t === 41 && point.v2 === 80 && point.v === 10)).toBe(true);
+    expect(points[0].t).toBe(0);
+    expect(points.at(-1)?.t).toBe(99);
+  });
+
   it('returns [] for empty history', () => {
     expect(computeChartPoints({ history: [], maxPoints: 300 })).toEqual([]);
   });

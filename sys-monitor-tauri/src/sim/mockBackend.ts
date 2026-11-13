@@ -3,7 +3,7 @@
  *
  * Replaces the hardcoded sine mock that used to live in `useMetrics.ts` with
  * a scenario-driven backend: identical default behavior (sine metrics, 250 ms
- * ticks, 4:1 history cadence, two disks, two GPUs, schema version 4) plus a
+ * ticks, 4:1 history cadence, two disks, two GPUs, current metrics schema) plus a
  * timeline/fault-injection surface for simulation journeys (`window.__SIM__`).
  *
  * Active only when `isTauri()` is false. In a real Tauri context no module in
@@ -68,7 +68,7 @@ export type SimFault =
   | { kind: 'gpu-remove'; name?: string; key?: string }
   | { kind: 'gpu-add'; name: string; vendor?: GpuVendor; key?: string; nvidia?: NvidiaTelemetry }
   | { kind: 'schema-version'; version: number }
-  /** Hold all live values for `ticks` further emissions (a PDH freeze). */
+  /** Hold all live values for `ticks` further emissions. */
   | { kind: 'freeze'; ticks: number };
 
 export type SimTimelineEvent = SimFault & { at: number };
@@ -232,7 +232,7 @@ function nvidiaStatsFor(gpu: SimGpuSpec, index: number): NvidiaTelemetry | null 
  * production `SCHEMA_VERSION` in `collector/snapshot.rs` is the third value and
  * must always match; the equality is pinned by `src/sim/mockBackend.test.ts`.
  */
-const MOCK_SCHEMA_VERSION = 6;
+const MOCK_SCHEMA_VERSION = 7;
 
 /**
  * Production ring capacity. `MAX_HISTORY` lives in `useMetrics.ts`, which this
@@ -361,7 +361,7 @@ export class MockBackend {
     net_sent: number[];
     disks: Map<
       string,
-      { values: MetricValue[]; read_mb_s: number; write_mb_s: number; avg_response_ms: number }
+      { values: MetricValue[]; read_mb_s: MetricValue; write_mb_s: MetricValue; avg_response_ms: MetricValue }
     >;
     gpus: Map<
       string,
@@ -785,7 +785,6 @@ export class MockBackend {
         read_mb_s: d.read_mb_s,
         write_mb_s: d.write_mb_s,
         avg_response_ms: d.avg_response_ms,
-        last_seen_ts: snap.timestamp_ms,
       })),
       net_recv: [snap.net_recv_kib_s],
       net_sent: [snap.net_sent_kib_s],
@@ -796,14 +795,13 @@ export class MockBackend {
         values: [g.util],
         temp_c: g.temp_c ?? null,
         nvidia: g.nvidia ?? null,
-        last_seen_ts: snap.timestamp_ms,
       })),
     };
   }
 
   /**
    * Computes the snapshot for the current tick. While a freeze is active the
-   * previous snapshot's values are re-emitted verbatim (PDH freeze hold); the
+   * previous snapshot's values are re-emitted verbatim; the
    * freeze counter decrements each emission.
    */
   private composeSnapshot(): MetricsSnapshot {
@@ -815,9 +813,9 @@ export class MockBackend {
         ...this.lastSnapshot,
         schema_version: this.schemaVersion,
         on_tick: onTick,
-        // Values are frozen (PDH freeze hold) but the clock still advances —
-        // exactly what the real backend does: a frozen poll still pushes a
-        // timestamp on a full tick. Only `on_tick` gates history growth.
+        // This synthetic stale-values fault holds every channel while the
+        // clock advances. Only `on_tick` gates history growth. Native PDH
+        // failures instead preserve unavailable device samples as gaps.
         timestamp_ms: timestamp,
       };
     }
@@ -1023,10 +1021,9 @@ export class MockBackend {
         return {
           key,
           values: entry ? align(entry.values) : new Array(timestamps.length).fill(null),
-          read_mb_s: entry?.read_mb_s ?? spec.read_mb_s ?? 0,
-          write_mb_s: entry?.write_mb_s ?? spec.write_mb_s ?? 0,
-          avg_response_ms: entry?.avg_response_ms ?? spec.avg_response_ms ?? 0,
-          last_seen_ts: timestamps[timestamps.length - 1] ?? 0,
+          read_mb_s: entry ? entry.read_mb_s : spec.read_mb_s ?? null,
+          write_mb_s: entry ? entry.write_mb_s : spec.write_mb_s ?? null,
+          avg_response_ms: entry ? entry.avg_response_ms : spec.avg_response_ms ?? null,
         };
       }),
       net_recv: pick(h.net_recv),
@@ -1041,7 +1038,6 @@ export class MockBackend {
           values: entry ? align(entry.values) : new Array(timestamps.length).fill(null),
           temp_c: entry?.temp_c ?? null,
           nvidia: entry?.nvidia ?? spec.nvidia ?? null,
-          last_seen_ts: timestamps[timestamps.length - 1] ?? 0,
         };
       }),
     };
@@ -1087,7 +1083,6 @@ export class MockBackend {
           read_mb_s: d.read_mb_s ?? wave.base + 4,
           write_mb_s: d.write_mb_s ?? (wave.base + 4) / 2,
           avg_response_ms: d.avg_response_ms ?? (wave.base % 40) / 10 + 0.5,
-          last_seen_ts: now,
         };
       }),
       net_recv: netRecv,
@@ -1101,7 +1096,6 @@ export class MockBackend {
           values: Array.from({ length: n }, (_, i) => clampUtilization(sinAt(wave, i * dt))),
           temp_c: (hashKey(g.name) % 25) + 40,
           nvidia: nvidiaStatsFor(g, index),
-          last_seen_ts: now,
         };
       }),
     };

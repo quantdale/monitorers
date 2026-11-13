@@ -413,7 +413,12 @@ async function captureFailureScreenshot(driver: SimDriver, runDir: string): Prom
   const shot = join(runDir, 'failure.png');
   // A wedged browser must not hang artifact finalization; bounded like the
   // driver teardown paths.
-  const timer = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
-  const taken = driver.page.screenshot({ path: shot, fullPage: true }).then(() => shot);
-  return Promise.race([taken, timer]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timer = new Promise<null>((resolve) => { timeout = setTimeout(() => resolve(null), 15_000); });
+    const taken = driver.page.screenshot({ path: shot, fullPage: true }).then(() => shot);
+    return await Promise.race([taken, timer]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

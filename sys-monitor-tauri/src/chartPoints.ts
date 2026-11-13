@@ -69,7 +69,9 @@ function extremaIndices(
   secondaryHistory: MetricValue[] | undefined,
   budget: number,
 ): number[] {
-  const bucketCount = Math.floor((budget - 2) / 2);
+  const dualSeries = secondaryHistory != null && secondaryHistory.length > 0;
+  const slotsPerBucket = dualSeries ? Math.min(4, budget - 2) : 2;
+  const bucketCount = Math.floor((budget - 2) / slotsPerBucket);
   const interiorLength = history.length - 2;
   const chosen = new Set<number>([0, history.length - 1]);
   for (let bucket = 0; bucket < bucketCount; bucket += 1) {
@@ -82,9 +84,23 @@ function extremaIndices(
     let maxValue = Number.NEGATIVE_INFINITY;
     let hasFinite = false;
     let gapIndex: number | null = null;
+    let secondaryMinIndex = start;
+    let secondaryMaxIndex = start;
+    let secondaryMin = Number.POSITIVE_INFINITY;
+    let secondaryMax = Number.NEGATIVE_INFINITY;
     for (let index = start; index < end; index += 1) {
       const value = chartValue(history[index]);
       const secondaryValue = chartValue(secondaryHistory?.[index]);
+      if (secondaryValue != null) {
+        if (secondaryValue < secondaryMin) {
+          secondaryMin = secondaryValue;
+          secondaryMinIndex = index;
+        }
+        if (secondaryValue > secondaryMax) {
+          secondaryMax = secondaryValue;
+          secondaryMaxIndex = index;
+        }
+      }
       if (value == null || (secondaryHistory != null && secondaryValue == null)) {
         gapIndex ??= index;
       }
@@ -99,7 +115,15 @@ function extremaIndices(
         maxIndex = index;
       }
     }
-    if (gapIndex != null) {
+    if (dualSeries) {
+      // Both lines share source indices. Reserve room for each line's extrema
+      // instead of sampling upload only where download happened to peak.
+      // Gaps take priority, then peaks, then minima if the budget permits.
+      const candidates = [gapIndex, hasFinite ? maxIndex : null, secondaryMax > Number.NEGATIVE_INFINITY ? secondaryMaxIndex : null,
+        hasFinite ? minIndex : null, secondaryMin < Number.POSITIVE_INFINITY ? secondaryMinIndex : null];
+      const bucketIndices = [...new Set(candidates.filter((index): index is number => index != null))];
+      for (const index of bucketIndices.slice(0, slotsPerBucket)) chosen.add(index);
+    } else if (gapIndex != null) {
       // A gap consumes one slot in this bucket. Use the largest finite primary
       // point for the other slot so a short spike remains visible as well.
       chosen.add(gapIndex);

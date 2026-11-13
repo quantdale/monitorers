@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use windows::Win32::System::Performance::{
     PdhCloseQuery, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
-    PDH_HCOUNTER, PDH_HQUERY,
+    PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
 };
 
 thread_local! {
@@ -63,7 +63,9 @@ unsafe impl Sync for PdhHandles {}
 /// only read while the scratch borrow is alive (the HashMap owns plain
 /// String/f64 values, and each item's CStatus is checked before its value is
 /// read).
-pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
+/// Outer `None` means the read failed; inner `None` preserves an unavailable
+/// instance without confusing it with disappearance or a legitimate zero.
+pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> Option<HashMap<String, Option<f64>>> {
     PDH_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
         // SAFETY: all pointer indirection through PDH_FMT_COUNTERVALUE_ITEM_W
@@ -86,7 +88,7 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
                     Some(buf_ptr),
                 );
                 if status == 0 {
-                    return parse_counter_items(buf_ptr, item_count);
+                    return Some(parse_counter_items(buf_ptr, item_count));
                 }
             }
 
@@ -95,7 +97,7 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
             // between the two calls — a new GPU engine process, a hot-plugged
             // disk — and PDH then needs more than the reported size).
             let mut buffer_size: u32 = 0;
-            let _ = PdhGetFormattedCounterArrayW(
+            let size_status = PdhGetFormattedCounterArrayW(
                 counter,
                 PDH_FMT_DOUBLE,
                 &mut buffer_size,
@@ -103,7 +105,10 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
                 None,
             );
             if buffer_size == 0 || item_count == 0 {
-                return HashMap::new();
+                return (size_status == 0).then(HashMap::new);
+            }
+            if size_status != PDH_MORE_DATA {
+                return None;
             }
 
             let u64_count = (buffer_size as usize * 3).div_ceil(8);
@@ -121,10 +126,10 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
             );
 
             if status != 0 {
-                return HashMap::new();
+                return None;
             }
 
-            parse_counter_items(buf_ptr, item_count)
+            Some(parse_counter_items(buf_ptr, item_count))
         }
     })
 }
@@ -140,19 +145,64 @@ pub fn read_pdh_counter_array(counter: PDH_HCOUNTER) -> HashMap<String, f64> {
 unsafe fn parse_counter_items(
     buf_ptr: *mut PDH_FMT_COUNTERVALUE_ITEM_W,
     item_count: u32,
-) -> HashMap<String, f64> {
+) -> HashMap<String, Option<f64>> {
     let mut result = HashMap::new();
     for i in 0..item_count as usize {
         let item: &PDH_FMT_COUNTERVALUE_ITEM_W = &*buf_ptr.add(i);
 
-        if item.FmtValue.CStatus > 1 {
-            continue;
-        }
-
         let name = item.szName.to_string().unwrap_or_default();
-        let value = item.FmtValue.Anonymous.doubleValue;
+        // Keep invalid instances present so callers cannot mistake their
+        // missing reading for disappearance or idle utilization. Never read
+        // the value union for an invalid CStatus.
+        let value = if item.FmtValue.CStatus <= 1 {
+            let value = item.FmtValue.Anonymous.doubleValue;
+            value.is_finite().then_some(value)
+        } else {
+            None
+        };
         result.insert(name, value);
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_counter_handle_is_unavailable_instead_of_a_successful_empty_array() {
+        let result = read_pdh_counter_array(PDH_HCOUNTER::default());
+        assert!(serde_json::to_value(result).unwrap().is_null());
+    }
+
+    #[test]
+    fn invalid_instances_keep_their_identity_and_valid_zero_stays_zero() {
+        let names: Vec<Vec<u16>> = ["good", "bad", "nonfinite"]
+            .iter()
+            .map(|name| name.encode_utf16().chain(Some(0)).collect())
+            .collect();
+        let mut items = Vec::new();
+        for (index, (status, value)) in [(0, 0.0), (123, 45.0), (1, f64::NAN)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut item = PDH_FMT_COUNTERVALUE_ITEM_W {
+                szName: windows::core::PWSTR(names[index].as_ptr() as *mut u16),
+                ..Default::default()
+            };
+            item.FmtValue.CStatus = status;
+            item.FmtValue.Anonymous.doubleValue = value;
+            items.push(item);
+        }
+        // SAFETY: the initialized items and all nul-terminated names remain
+        // alive for the full read; the parser does not mutate them.
+        let values = unsafe { parse_counter_items(items.as_mut_ptr(), items.len() as u32) };
+        assert_eq!(
+            serde_json::to_value(values).unwrap(),
+            serde_json::json!({
+                "good": 0.0, "bad": null, "nonfinite": null,
+            })
+        );
+    }
 }

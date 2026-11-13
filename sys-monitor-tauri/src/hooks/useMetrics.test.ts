@@ -41,6 +41,10 @@ function baseSnap(timestamp_ms: number, on_tick = true): MetricsSnapshot {
 const MAX_HISTORY = 3600;
 
 describe('appendToHistory', () => {
+  it('keeps only the newest value at capacity one', () => {
+    expect(appendToHistory([1, 2, 3], 4, 1)).toEqual([4]);
+  });
+
   it('appends a value to the array', () => {
     expect(appendToHistory([1, 2, 3], 4, MAX_HISTORY)).toEqual([1, 2, 3, 4]);
   });
@@ -165,7 +169,21 @@ describe('sliceByRange', () => {
 // --- appendLiveEvent (bounded live-event retention) ---
 
 describe('mergeDiskHistory', () => {
-  const now = Date.now();
+  it('expires absent devices by monotonic time across a wall-clock rewind', () => {
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const first = mergeDiskHistory([], [{ key: 'C:', active: 25, read_mb_s: 0, write_mb_s: 0, avg_response_ms: 0 }], 1);
+      wall.mockReturnValue(1_600_000_000_000);
+      monotonic.mockReturnValue(7_001);
+      expect(mergeDiskHistory(first, [], 2)).toEqual([]);
+    } finally {
+      monotonic.mockRestore();
+      wall.mockRestore();
+    }
+  });
+
+  const now = performance.now();
   const existing: DiskHistory[] = [
     { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: now },
   ];
@@ -193,7 +211,7 @@ describe('mergeDiskHistory', () => {
 
   it('preserves a ghost disk within the grace window (frozen)', () => {
     const ghost: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: performance.now() },
     ];
     const result = mergeDiskHistory(ghost, [], 4);
     expect(result[0].values).toEqual([null, 10, 20, null]);
@@ -201,7 +219,7 @@ describe('mergeDiskHistory', () => {
 
   it('prunes a ghost disk absent past the grace window', () => {
     const stale: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() - 6000 },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: performance.now() - 6000 },
     ];
     const result = mergeDiskHistory(stale, [], 4);
     expect(result.length).toBe(0);
@@ -209,19 +227,19 @@ describe('mergeDiskHistory', () => {
 
   it('reappearing disk re-aligns its values to the current timestamp length', () => {
     const reappear: DiskHistory[] = [
-      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: Date.now() - 6000 },
+      { key: 'C:', values: [10, 20], read_mb_s: 5, write_mb_s: 3, avg_response_ms: 1.5, last_seen_ts: performance.now() - 6000 },
     ];
     const snapshot = [{ key: 'C:', active: 30, read_mb_s: 6, write_mb_s: 4, avg_response_ms: 2.0 }];
     const result = mergeDiskHistory(reappear, snapshot, 5);
     expect(result[0].values).toEqual([null, null, 10, 20, 30]);
-    expect(result[0].last_seen_ts).toBeGreaterThanOrEqual(Date.now() - 100);
+    expect(result[0].last_seen_ts).toBeGreaterThanOrEqual(performance.now() - 100);
   });
 });
 
 // --- mergeGpuHistory ---
 
 describe('mergeGpuHistory', () => {
-  const now = Date.now();
+  const now = performance.now();
   const existing: GpuHistory[] = [
     { key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', values: [20, 40], temp_c: 55, nvidia: null, last_seen_ts: now },
   ];
@@ -247,15 +265,31 @@ describe('mergeGpuHistory', () => {
     expect(result[1].last_seen_ts).toBeGreaterThanOrEqual(now);
   });
 
-  it('preserves temp_c from previous when snapshot has null', () => {
+  it('clears an explicitly unavailable GPU temperature', () => {
     const snapshot = [{ key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', util: 70, temp_c: null }];
     const result = mergeGpuHistory(existing, snapshot, 3);
-    expect(result[0].temp_c).toBe(55);
+    expect(result[0].temp_c).toBeNull();
+  });
+
+  it('clears an explicitly unavailable CPU temperature and appends device gaps', () => {
+    const first = appendSnapshotToHistory(null, {
+      ...baseSnap(1_000), cpu_temp_c: 55,
+      gpus: [{ key: 'gpu-a', name: 'GPU', vendor: 'unknown', util: 25 }],
+      disks: [{ key: 'C:', active: 25, read_mb_s: 0, write_mb_s: 0, avg_response_ms: 0 }],
+    });
+    const next = appendSnapshotToHistory(first, {
+      ...baseSnap(2_000), cpu_temp_c: null,
+      gpus: [{ key: 'gpu-a', name: 'GPU', vendor: 'unknown', util: null }],
+      disks: [{ key: 'C:', active: null, read_mb_s: 0, write_mb_s: 0, avg_response_ms: 0 }],
+    });
+    expect(next?.cpu_temp_c).toBeNull();
+    expect(next?.gpus[0].values).toEqual([25, null]);
+    expect(next?.disks[0].values).toEqual([25, null]);
   });
 
   it('prunes a ghost GPU absent past the grace window', () => {
     const stale: GpuHistory[] = [
-      { key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', values: [20, 40], temp_c: 55, nvidia: null, last_seen_ts: Date.now() - 6000 },
+      { key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', values: [20, 40], temp_c: 55, nvidia: null, last_seen_ts: performance.now() - 6000 },
     ];
     const result = mergeGpuHistory(stale, [], 3);
     expect(result.length).toBe(0);
@@ -263,7 +297,7 @@ describe('mergeGpuHistory', () => {
 
   it('preserves a ghost GPU within the grace window', () => {
     const ghost: GpuHistory[] = [
-      { key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', values: [20, 40], temp_c: 55, nvidia: null, last_seen_ts: Date.now() },
+      { key: 'gpu-a', name: 'RTX 4050', vendor: 'nvidia', values: [20, 40], temp_c: 55, nvidia: null, last_seen_ts: performance.now() },
     ];
     const result = mergeGpuHistory(ghost, [], 3);
     expect(result[0].values).toEqual([20, 40, null]);
@@ -277,6 +311,11 @@ describe('mergeGpuHistory', () => {
 // one-line function itself is not re-tested here.
 
 describe('mergeLatestGpu', () => {
+  it('retains the latest valid scalar across null and nonfinite samples', () => {
+    const previous = { 'gpu-a': 42 };
+    expect(mergeLatestGpu(previous, [{ key: 'gpu-a', util: null }])).toBe(previous);
+    expect(mergeLatestGpu(previous, [{ key: 'gpu-a', util: Number.NaN }])).toBe(previous);
+  });
   it('sets latest util for a new GPU', () => {
     const result = mergeLatestGpu({}, [{ key: 'gpu-a', util: 42 }]);
     expect(result).toEqual({ 'gpu-a': 42 });

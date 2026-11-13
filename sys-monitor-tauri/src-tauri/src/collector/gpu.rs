@@ -67,14 +67,7 @@ fn strip_brand_prefix(caption: &str) -> String {
 /// rarely appears — this must also recognize professional-line model names
 /// (Quadro, Tesla, NVS) that lack a consumer keyword like GeForce/RTX/GTX.
 pub fn is_nvidia_gpu(display_name: &str) -> bool {
-    let lower = display_name.to_lowercase();
-    lower.contains("geforce")
-        || lower.contains("rtx")
-        || lower.contains("gtx")
-        || lower.contains("nvidia")
-        || lower.contains("quadro")
-        || lower.contains("tesla")
-        || lower.contains("nvs")
+    crate::hardware::classify_gpu(display_name).0 == crate::hardware::GpuVendor::Nvidia
 }
 
 /// Classify a LUID as iGPU or dGPU.
@@ -83,16 +76,14 @@ pub fn is_nvidia_gpu(display_name: &str) -> bool {
 /// LUIDs not in the vendor map fall through to Unknown — no hardcoded fallbacks,
 /// since LUIDs are machine-specific and change across reboots.
 pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuClass {
-    if let Some(vendor) = vendor_map.get(luid) {
-        let v = vendor.to_lowercase();
-        if v.contains("intel") {
-            return GpuClass::IGpu;
-        }
-        if v.contains("nvidia") || v.contains("amd") || v.contains("radeon") {
-            return GpuClass::DGpu;
-        }
+    match vendor_map
+        .get(luid)
+        .map(|caption| crate::hardware::classify_gpu(caption).1)
+    {
+        Some(crate::hardware::GpuKind::Integrated) => GpuClass::IGpu,
+        Some(crate::hardware::GpuKind::Discrete) => GpuClass::DGpu,
+        _ => GpuClass::Unknown,
     }
-    GpuClass::Unknown
 }
 
 // ── EXACT OS ADAPTER CATALOG ─────────────────────────────────────────────────
@@ -165,7 +156,7 @@ pub fn enumerate_gpu_adapters() -> windows::core::Result<GpuAdapterCatalog> {
 // ── GPU PDH UTILIZATION ──────────────────────────────────────────────────────
 
 /// Per-GPU result: (luid, display_name, utilization%).
-pub type GpuUtilEntry = (String, String, f64);
+pub type GpuUtilEntry = (String, String, Option<f64>);
 
 const ADAPTER_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -300,25 +291,25 @@ pub fn query_gpu_utilization_pdh(
     gpu_error_lock: &OnceLock<()>,
     gpu_adapters: &mut Option<GpuAdapterCatalog>,
     adapters_last_refresh: &mut std::time::Instant,
-) -> Vec<GpuUtilEntry> {
+) -> Option<Vec<GpuUtilEntry>> {
     let mut result = Vec::new();
-    if pdh.query.is_none() {
-        return result;
-    }
-    let counter_3d = match pdh.gpu_3d_counter {
-        Some(c) => c,
-        None => return result,
-    };
+    pdh.query?;
+    let counter_3d = pdh.gpu_3d_counter?;
 
     let mut luid_3d_totals: HashMap<String, f64> = HashMap::new();
+    let mut unavailable = HashSet::new();
 
-    for (name, util) in crate::pdh::read_pdh_counter_array(counter_3d) {
+    for (name, util) in crate::pdh::read_pdh_counter_array(counter_3d)? {
         let luid = match extract_luid_from_name(&name) {
             Some(l) => l,
             None => continue,
         };
-        let util = util.clamp(0.0_f64, 100.0);
-        *luid_3d_totals.entry(luid).or_insert(0.0) += util;
+        if let Some(util) = util {
+            *luid_3d_totals.entry(luid).or_insert(0.0) += util.clamp(0.0_f64, 100.0);
+        } else {
+            unavailable.insert(luid.clone());
+            luid_3d_totals.entry(luid).or_insert(0.0);
+        }
     }
 
     let now = std::time::Instant::now();
@@ -350,20 +341,33 @@ pub fn query_gpu_utilization_pdh(
     // arrays and separate cards. The display_name (with disambiguation
     // suffix) is used for the UI label.
     for (luid, display_name, _class, util) in entries {
-        result.push((luid, display_name, util));
+        let value = (!unavailable.contains(&luid)).then_some(util);
+        result.push((luid, display_name, value));
     }
 
     if cfg!(debug_assertions) {
         eprintln!("[PDH DEBUG] GPUs: {:?}", result);
     }
 
-    result
+    Some(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn ordering_uses_the_same_form_factor_policy_as_profiles() {
+        let map = HashMap::from([
+            ("intel-discrete".into(), "Intel Arc A770".into()),
+            ("amd-integrated".into(), "AMD Radeon Graphics".into()),
+            ("unknown".into(), "Intel Adapter".into()),
+        ]);
+        assert_eq!(classify_luid("intel-discrete", &map), GpuClass::DGpu);
+        assert_eq!(classify_luid("amd-integrated", &map), GpuClass::IGpu);
+        assert_eq!(classify_luid("unknown", &map), GpuClass::Unknown);
+    }
 
     // --- extract_luid_from_name ---
 
@@ -531,11 +535,11 @@ mod tests {
         );
         assert_eq!(
             first[0],
-            ("a".into(), "Same Model 1".into(), GpuClass::DGpu, 10.0)
+            ("a".into(), "Same Model 1".into(), GpuClass::Unknown, 10.0)
         );
         assert_eq!(
             first[1],
-            ("b".into(), "Same Model 2".into(), GpuClass::DGpu, 40.0)
+            ("b".into(), "Same Model 2".into(), GpuClass::Unknown, 40.0)
         );
     }
 

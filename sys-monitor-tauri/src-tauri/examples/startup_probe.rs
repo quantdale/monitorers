@@ -21,6 +21,18 @@ fn median(samples: &mut [u128]) -> u128 {
     samples[samples.len() / 2]
 }
 
+fn bootstrap_medians(state_costs: &mut [u128], profile_costs: &mut [u128]) -> (u128, u128, u128) {
+    // Pair observations while iteration identity is intact; median sorts.
+    let mut totals: Vec<u128> = state_costs
+        .iter()
+        .zip(profile_costs.iter())
+        .map(|(a, b)| a + b)
+        .collect();
+    let state = median(state_costs);
+    let profile = median(profile_costs);
+    (state, profile, median(&mut totals))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let iterations: usize = match args.first().map(String::as_str) {
@@ -90,24 +102,32 @@ fn main() {
         profile_costs.push(started.elapsed().as_millis());
     }
 
+    let (state_median, profile_median, total_median) =
+        bootstrap_medians(&mut state_costs, &mut profile_costs);
     println!(
         "session bootstrap: CollectorState::new      median {} ms",
-        median(&mut state_costs)
+        state_median
     );
     println!(
         "session bootstrap: profile discovery        median {} ms",
-        median(&mut profile_costs)
+        profile_median
     );
-    // Per-iteration TOTALS must be captured BEFORE either phase vector is
-    // sorted: median() sorts in place, so zipping afterwards would pair
-    // timings by rank across iterations and misstate end-to-end startup cost.
-    let mut totals: Vec<u128> = state_costs
-        .iter()
-        .zip(profile_costs.iter())
-        .map(|(a, b)| a + b)
-        .collect();
     println!(
         "session bootstrap: TOTAL                    median {} ms",
-        median(&mut totals)
+        total_median
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_total_pairs_phases_before_sorting_them() {
+        // Real totals are 110, 110, 70: median 110. Sorting the phases
+        // independently first invents 20, 70, 200 and incorrectly reports 70.
+        let mut state = [10, 100, 50];
+        let mut profile = [100, 10, 20];
+        assert_eq!(bootstrap_medians(&mut state, &mut profile), (50, 20, 110));
+    }
 }

@@ -8,7 +8,7 @@
 // at least 60 seconds so both ratio and wall-clock SLOs are meaningful.
 
 use crate::collector::run_loop::TickTiming;
-use crate::state::SafeHistoryStore;
+use crate::state::{SafeHistoryStore, HISTORY_CAPACITY};
 
 pub const MIN_OBSERVATION_MS: u64 = 60_000;
 
@@ -29,6 +29,10 @@ pub struct CadenceRecord {
     pub ts_len: usize,
     /// Number of GPU entries represented by `gpu_total_len` at this point.
     pub gpu_count: usize,
+    /// Per-key lengths distinguish rollover and device churn from lost commits.
+    pub gpu_histories: std::collections::BTreeMap<String, usize>,
+    /// Committed ring timestamp, so full ticks remain observable at capacity.
+    pub newest_timestamp_ms: Option<u64>,
     /// Real timestamp span in the history ring, in milliseconds.
     pub timestamp_span_ms: u64,
     /// Time spent in the collector body before emit, in milliseconds.
@@ -68,6 +72,12 @@ impl CadenceRecord {
             gpu_total_len: s.gpu_entries.iter().map(|(_, _, h)| h.len()).sum(),
             ts_len: s.timestamps.len(),
             gpu_count: s.gpu_entries.len(),
+            gpu_histories: s
+                .gpu_entries
+                .iter()
+                .map(|(key, _, history)| (key.clone(), history.len()))
+                .collect(),
+            newest_timestamp_ms: s.timestamps.back().copied(),
             timestamp_span_ms,
             work_duration_ms: timing.work_duration.as_millis() as u64,
             deadline_overrun_ms: timing.deadline_overrun.as_millis() as u64,
@@ -271,7 +281,11 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
     // (C) history grows exactly +1 per on_tick:true, +0 per on_tick:false.
     for (i, w) in records.windows(2).enumerate() {
         let delta = w[1].cpu_len as isize - w[0].cpu_len as isize;
-        let expected = if w[1].on_tick { 1 } else { 0 };
+        let expected = if w[1].on_tick && w[0].cpu_len < HISTORY_CAPACITY {
+            1
+        } else {
+            0
+        };
         if delta != expected {
             failures.push(format!(
                 "record {}: cpu_len delta {delta} != expected {expected} (on_tick={})",
@@ -287,20 +301,25 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
     let final_ts_len = records.last().map(|r| r.ts_len).unwrap_or(0);
     let final_gpu_total_len = records.last().map(|r| r.gpu_total_len).unwrap_or(0);
     let timestamp_span_ms = records.last().map(|r| r.timestamp_span_ms).unwrap_or(0);
-    if final_cpu_len != on_tick_count {
+    let expected_final_len = on_tick_count.min(HISTORY_CAPACITY);
+    if final_cpu_len != expected_final_len {
         failures.push(format!(
-            "final cpu_len {final_cpu_len} != on_tick_count {on_tick_count} (history length must equal full-tick count)"
+            "final cpu_len {final_cpu_len} != bounded on_tick_count {expected_final_len}"
         ));
     }
-    if final_ts_len != on_tick_count {
+    if final_ts_len != expected_final_len {
         failures.push(format!(
-            "final ts_len {final_ts_len} != on_tick_count {on_tick_count} (timestamp history is not aligned)"
+            "final ts_len {final_ts_len} != bounded on_tick_count {expected_final_len} (timestamp history is not aligned)"
         ));
     }
     for (i, w) in records.windows(2).enumerate() {
         let cpu_delta = w[1].cpu_len as isize - w[0].cpu_len as isize;
         let ts_delta = w[1].ts_len as isize - w[0].ts_len as isize;
-        let expected = if w[1].on_tick { 1 } else { 0 };
+        let expected = if w[1].on_tick && w[0].cpu_len < HISTORY_CAPACITY {
+            1
+        } else {
+            0
+        };
         if cpu_delta != expected || ts_delta != expected {
             failures.push(format!(
                 "record {}: aligned history deltas cpu={cpu_delta} timestamps={ts_delta}, expected {expected}",
@@ -316,8 +335,60 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
             ));
             break;
         }
-        if w[1].on_tick {
-            let expected_gpu = w[1].gpu_count as isize;
+        if let (Some(previous), Some(current)) =
+            (w[0].newest_timestamp_ms, w[1].newest_timestamp_ms)
+        {
+            if (w[1].on_tick && current <= previous) || (!w[1].on_tick && current != previous) {
+                failures.push(format!(
+                    "record {}: committed timestamp did not follow full-tick advancement",
+                    i + 1
+                ));
+                break;
+            }
+        }
+        let detailed = w.iter().any(|record| record.newest_timestamp_ms.is_some())
+            || w.iter()
+                .all(|record| record.gpu_count == 0 || !record.gpu_histories.is_empty());
+        if detailed {
+            if w.iter().any(|record| {
+                record.gpu_histories.len() != record.gpu_count
+                    || record.gpu_histories.values().sum::<usize>() != record.gpu_total_len
+            }) {
+                failures.push(format!(
+                    "record {}: GPU history detail disagrees with aggregate",
+                    i + 1
+                ));
+                break;
+            }
+            let valid = if w[1].on_tick {
+                w[1].gpu_histories.iter().all(|(key, len)| {
+                    let expected = w[0]
+                        .gpu_histories
+                        .get(key)
+                        .copied()
+                        .unwrap_or(0)
+                        .saturating_add(1)
+                        .min(HISTORY_CAPACITY);
+                    *len == expected
+                })
+            } else {
+                w[0].gpu_histories == w[1].gpu_histories
+            };
+            if !valid {
+                failures.push(format!(
+                    "record {}: per-device GPU history did not follow full-tick advancement",
+                    i + 1
+                ));
+                break;
+            }
+        } else if w[1].on_tick {
+            // Legacy records have only aggregate lengths. Preserve their
+            // stable-inventory check, including the fully saturated case.
+            let expected_gpu = if w[0].gpu_total_len == w[1].gpu_count * HISTORY_CAPACITY {
+                0
+            } else {
+                w[1].gpu_count as isize
+            };
             if gpu_delta != expected_gpu {
                 failures.push(format!(
                     "record {}: GPU history delta {gpu_delta} != active GPU count {expected_gpu}",
@@ -331,20 +402,19 @@ pub fn check_records(records: &[CadenceRecord]) -> CadenceCheck {
     // (E) Real elapsed-time coverage. This is the check that rejects a slow
     // 4:1 loop: history length must track seconds, not just emitted samples.
     if observation_ms >= MIN_OBSERVATION_MS {
-        let expected_history = observation_ms / 1_000 + 1;
+        let expected_history = (observation_ms / 1_000 + 1).min(HISTORY_CAPACITY as u64);
         let tolerance = 2.max(expected_history / 20);
         if final_cpu_len.abs_diff(expected_history as usize) > tolerance as usize {
             failures.push(format!(
                 "final cpu_len {final_cpu_len} does not cover elapsed time: expected about {expected_history} ± {tolerance} points over {observation_ms}ms"
             ));
         }
-        if timestamp_span_ms > 0 {
-            let timestamp_tolerance = 2_000.max(observation_ms / 20);
-            if timestamp_span_ms.abs_diff(observation_ms) > timestamp_tolerance {
-                failures.push(format!(
-                    "timestamp span {timestamp_span_ms}ms differs from monotonic observation {observation_ms}ms by more than {timestamp_tolerance}ms"
-                ));
-            }
+        let expected_span = observation_ms.min((HISTORY_CAPACITY as u64 - 1) * 1_000);
+        let timestamp_tolerance = 2_000.max(expected_span / 20);
+        if timestamp_span_ms.abs_diff(expected_span) > timestamp_tolerance {
+            failures.push(format!(
+                "timestamp span {timestamp_span_ms}ms differs from bounded monotonic observation {expected_span}ms by more than {timestamp_tolerance}ms"
+            ));
         }
     }
 
@@ -391,6 +461,8 @@ mod tests {
             gpu_total_len: 0,
             ts_len: cpu_len,
             gpu_count: 0,
+            gpu_histories: Default::default(),
+            newest_timestamp_ms: None,
             timestamp_span_ms: elapsed_ms,
             work_duration_ms: 1,
             deadline_overrun_ms: 0,
@@ -415,6 +487,69 @@ mod tests {
         assert_eq!(check.total_records, 241);
         assert_eq!(check.on_tick_count, 61);
         assert!((210.0..=290.0).contains(&check.mean_interval_ms));
+    }
+
+    #[test]
+    fn checker_rejects_missing_timestamp_coverage_instead_of_skipping_it() {
+        let records: Vec<_> = (0..241usize)
+            .map(|i| {
+                let mut record = rec(i as u64 * 250, i % 4 == 0, i / 4 + 1);
+                record.timestamp_span_ms = 0;
+                record
+            })
+            .collect();
+        assert!(!check_records(&records).passed());
+    }
+
+    #[test]
+    fn checker_accepts_a_correct_ring_after_capacity_rollover() {
+        let capacity = crate::state::HISTORY_CAPACITY;
+        let records: Vec<_> = (0..=(capacity + 30) * 4)
+            .map(|i| {
+                let len = (i / 4 + 1).min(capacity);
+                let mut record = rec(i as u64 * 250, i % 4 == 0, len);
+                record.timestamp_span_ms = (len - 1) as u64 * 1_000;
+                record.gpu_count = 1;
+                record.gpu_total_len = len;
+                record.gpu_histories.insert("gpu".into(), len);
+                record.newest_timestamp_ms = Some(1_700_000_000_000 + (i / 4) as u64 * 1_000);
+                record
+            })
+            .collect();
+        let result = check_records(&records);
+        assert!(result.passed(), "{:?}", result.failures);
+    }
+
+    #[test]
+    fn checker_rejects_full_ticks_without_new_committed_timestamps() {
+        let records: Vec<_> = (0..241usize)
+            .map(|i| {
+                let mut record = rec(i as u64 * 250, i % 4 == 0, i / 4 + 1);
+                record.newest_timestamp_ms = Some(1_700_000_000_000);
+                record
+            })
+            .collect();
+        assert!(check_records(&records)
+            .failures
+            .iter()
+            .any(|message| message.contains("committed timestamp")));
+    }
+
+    #[test]
+    fn checker_rejects_missing_device_detail_in_modern_records() {
+        let records: Vec<_> = (0..241usize)
+            .map(|i| {
+                let mut record = rec(i as u64 * 250, i % 4 == 0, i / 4 + 1);
+                record.gpu_count = 1;
+                record.gpu_total_len = record.cpu_len;
+                record.newest_timestamp_ms = Some(1_700_000_000_000 + (i / 4) as u64 * 1_000);
+                record
+            })
+            .collect();
+        assert!(check_records(&records)
+            .failures
+            .iter()
+            .any(|message| message.contains("GPU history detail")));
     }
 
     // 4.3 negative fixtures — each violates exactly one invariant.

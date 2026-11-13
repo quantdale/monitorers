@@ -31,12 +31,15 @@ pub struct RawPoll {
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
     pub mem_pct: f64,
-    pub gpu_updates: Vec<(String, String, f64)>, // (history_key, display_name, util%)
+    pub gpu_updates: Vec<(String, String, Option<f64>)>, // (history_key, display_name, util%)
+    /// Collection can succeed while one domain's formatted read fails.
+    pub gpu_read_failed: bool,
+    pub disk_read_failed: bool,
     /// A successful adapter inventory distinguishes confirmed emptiness from
     /// missing metadata. PDH failure still prevents all GPU pruning.
     pub gpu_inventory_confirmed: bool,
     pub nvidia_telemetry: Option<HashMap<String, NvidiaTelemetry>>,
-    pub disk_active: HashMap<String, f64>,
+    pub disk_active: HashMap<String, Option<f64>>,
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
     pub disk_avg_response_ms: HashMap<String, f64>,
@@ -87,7 +90,7 @@ pub struct CollectorState {
     pub gpu_adapters_last_refresh: Instant,
     /// 5-second TTL cache for the CPU temperature WMI query — temps change
     /// slowly, and the raw query is ~2x the collector's per-tick budget.
-    pub cpu_temp_cache: Option<(Instant, f64)>,
+    pub cpu_temp_cache: Option<(Instant, Option<f64>)>,
     #[cfg(feature = "nvml")]
     pub nvml: Option<nvml_wrapper::Nvml>,
     #[cfg(feature = "nvml")]
@@ -126,7 +129,7 @@ impl CollectorState {
         disks.refresh(false);
 
         let mut networks = Networks::new_with_refreshed_list();
-        networks.refresh(false);
+        networks.refresh(true);
 
         // NVAPI must be initialized once per process. Same reason as PDH query handle — stateful C API.
         // Only needed when nvml is absent — nvml is the sole consumer path for NVAPI-free
@@ -224,10 +227,10 @@ pub struct HistoryStore {
     pub mem_history: VecDeque<f64>,
     pub mem_used_gb: f64,
     pub mem_total_gb: f64,
-    pub gpu_entries: Vec<(String, String, VecDeque<f64>)>,
+    pub gpu_entries: Vec<(String, String, VecDeque<Option<f64>>)>,
     pub gpu_latest: HashMap<String, f64>,
     pub nvidia_telemetry: HashMap<String, NvidiaTelemetry>,
-    pub disk_active_histories: HashMap<String, VecDeque<f64>>,
+    pub disk_active_histories: HashMap<String, VecDeque<Option<f64>>>,
     pub disk_display_order: Vec<String>,
     pub disk_read_mb_s: HashMap<String, f64>,
     pub disk_write_mb_s: HashMap<String, f64>,
@@ -334,7 +337,7 @@ mod tests {
         prior.gpu_entries.push((
             "gpu0".to_string(),
             "GeForce RTX 4050".to_string(),
-            VecDeque::from([10.0]),
+            VecDeque::from([Some(10.0)]),
         ));
         prior.disk_display_order.push("C:".to_string());
 

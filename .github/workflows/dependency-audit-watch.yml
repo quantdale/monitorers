@@ -28,6 +28,9 @@ concurrency:
 jobs:
   audit-watch:
     name: Audit watch — both npm scopes
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -99,6 +99,23 @@ describe('renderCardContent', () => {
     expect(c.textContent).toContain('Avg: 3.2 ms');
   });
 
+  it('disk card preserves unavailable activity and throughput as dashes', async () => {
+    const c = await mount(
+      renderCardContent({
+        id: 'disk_C:',
+        metrics: sliced({
+          disks: [{ key: 'C:', values: [null], read_mb_s: null, write_mb_s: null, avg_response_ms: null }],
+        }),
+        viewMode: 'default',
+        hasNvidiaData: false,
+      })
+    );
+    expect(c.textContent).toContain('Active Time —');
+    expect(c.textContent).toContain('R: — MB/s · W: — MB/s');
+    expect(c.textContent).toContain('Avg: —');
+    expect(c.textContent).not.toContain('0.0');
+  });
+
   it('network card — dual throughput badges', async () => {
     const c = await mount(
       renderCardContent({ id: 'network', metrics: sliced(), viewMode: 'default', hasNvidiaData: false })

@@ -193,6 +193,48 @@ function freshIpcMock(): void {
 describe('useMetrics (Tauri event wiring)', () => {
   beforeEach(freshIpcMock);
 
+  it('keeps a newly discovered GPU unavailable until its first valid utilization', async () => {
+    const hook = renderUseMetrics(60);
+    try {
+      await act(async () => { await Promise.resolve(); });
+      act(() => emit('metrics-update', {
+        ...baseSnapshot(true),
+        gpus: [{ key: 'new-gpu', name: 'GPU', vendor: 'unknown', util: null }],
+      }));
+      expect(hook.result().gpus[0].values).toEqual([null]);
+      expect(Number.isNaN(hook.result().gpus[0].latest)).toBe(true);
+      act(() => emit('metrics-update', {
+        ...baseSnapshot(false),
+        gpus: [{ key: 'new-gpu', name: 'GPU', vendor: 'unknown', util: 0 }],
+      }));
+      expect(hook.result().gpus[0].latest).toBe(0);
+    } finally {
+      hook.unmount();
+    }
+  });
+
+  it('waits for initial listener registration before reading the history ring', async () => {
+    let attach: (() => void) | undefined;
+    vi.mocked(listen).mockImplementationOnce((_name, callback) => new Promise((resolve) => {
+      attach = () => {
+        listeners.set('metrics-update', callback as (event: { payload: unknown }) => void);
+        resolve(() => listeners.delete('metrics-update'));
+      };
+    }));
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockClear();
+    const hook = renderUseMetrics(60);
+    try {
+      await act(async () => { await Promise.resolve(); });
+      expect(invokeMock.mock.calls.filter(([command]) => command === 'get_history')).toHaveLength(0);
+      await act(async () => { attach?.(); });
+      expect(invokeMock.mock.calls.filter(([command]) => command === 'get_history')).toHaveLength(1);
+      expect(hook.connectionPending()).toBe(false);
+    } finally {
+      hook.unmount();
+    }
+  });
+
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
@@ -500,6 +542,7 @@ describe('useMetrics (Tauri event wiring)', () => {
   it('keeps the newer history request when an older deferred request resolves last', async () => {
     deferredHistory = true;
     const { result, unmount, rerender } = renderUseMetrics(30);
+    await act(async () => { await Promise.resolve(); });
     rerender(60);
     expect(historyRequests).toHaveLength(2);
     const newer = { ...emptyHistoryPayload(), timestamps: [2_000], cpu: [20], mem: [20], net_recv: [0], net_sent: [0] };
@@ -546,6 +589,7 @@ describe('useMetrics (Tauri event wiring)', () => {
   it('replays a live full-tick received during a deferred refetch instead of rolling back', async () => {
     deferredHistory = true;
     const { result, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
     act(() => emit('metrics-update', { ...baseSnapshot(true), cpu: 42 }));
     await act(async () => {
       historyRequests[0].resolve({ ...emptyHistoryPayload(), timestamps: [1_000], cpu: [10], mem: [10], net_recv: [0], net_sent: [0] });
@@ -571,6 +615,7 @@ describe('useMetrics in-place connection recovery', () => {
   it('uses known history for startup CPU and leaves unknown memory sizes unavailable', async () => {
     deferredHistory = true;
     const hook = renderUseMetrics(60);
+    await flush();
     await act(async () => {
       historyRequests[0].resolve({ ...emptyHistoryPayload(), timestamps: [1_000], cpu: [73], mem: [25], net_recv: [0], net_sent: [0] });
     });
@@ -772,7 +817,8 @@ describe('useMetrics in-place connection recovery', () => {
     vi.mocked(listen).mockImplementationOnce(() => new Promise(() => {}));
     const hook = renderUseMetrics(60);
     await flush();
-    expect(vi.getTimerCount()).toBe(2);
+    // History is fenced behind registration, so only its deadline exists.
+    expect(vi.getTimerCount()).toBe(1);
     hook.unmount();
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
