@@ -32,6 +32,9 @@ pub struct RawPoll {
     pub mem_total_gb: f64,
     pub mem_pct: f64,
     pub gpu_updates: Vec<(String, String, f64)>, // (history_key, display_name, util%)
+    /// A successful adapter inventory distinguishes confirmed emptiness from
+    /// missing metadata. PDH failure still prevents all GPU pruning.
+    pub gpu_inventory_confirmed: bool,
     pub nvidia_telemetry: Option<HashMap<String, NvidiaTelemetry>>,
     pub disk_active: HashMap<String, f64>,
     pub disk_read_mb_s: HashMap<String, f64>,
@@ -78,12 +81,10 @@ pub struct CollectorState {
     pub nvapi_initialized: bool,
     pub gpu_error_lock: OnceLock<()>,
     pub cpu_temp_error_lock: OnceLock<()>,
-    /// Cached WMI LUID→caption map for GPU classification. Building it runs
-    /// two WMI queries, so it is rebuilt only when needed (see
-    /// collector::gpu::should_rebuild_vendor_map), never per poll.
-    pub gpu_vendor_map: Option<HashMap<String, String>>,
-    /// When the cached GPU vendor map was last built (rebuild rate limiter).
-    pub gpu_vendor_map_last_build: Instant,
+    /// Exact DXGI physical captions/software keys, refreshed outside history locks.
+    pub gpu_adapters: Option<crate::collector::GpuAdapterCatalog>,
+    /// Bounded refresh time; enumeration is never performed on every poll.
+    pub gpu_adapters_last_refresh: Instant,
     /// 5-second TTL cache for the CPU temperature WMI query — temps change
     /// slowly, and the raw query is ~2x the collector's per-tick budget.
     pub cpu_temp_cache: Option<(Instant, f64)>,
@@ -162,11 +163,8 @@ impl CollectorState {
             nvapi_initialized,
             gpu_error_lock: OnceLock::new(),
             cpu_temp_error_lock: OnceLock::new(),
-            // `gpu_vendor_map: None` means "never built" — the first poll
-            // builds it. `last_build` is initialised to the recent past so the
-            // very first rebuild isn't rate-limited.
-            gpu_vendor_map: None,
-            gpu_vendor_map_last_build: Instant::now(),
+            gpu_adapters: None,
+            gpu_adapters_last_refresh: Instant::now(),
             cpu_temp_cache: None,
             #[cfg(feature = "nvml")]
             nvml,

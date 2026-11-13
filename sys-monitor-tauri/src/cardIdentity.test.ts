@@ -54,6 +54,22 @@ describe('computeDefaultCardIds', () => {
 });
 
 describe('migrateLegacyGpuCardOrder', () => {
+  it('migrates a unique low-half alias while retaining ambiguous aliases', () => {
+    expect(migrateLegacyGpuCardOrder(['memory', 'gpu_0x00000002', 'cpu'], [
+      { key: '0x00000001_0x00000002', name: 'Fixture GPU' },
+    ])).toEqual(['memory', 'gpu_0x00000001_0x00000002', 'cpu']);
+    expect(migrateLegacyGpuCardOrder(['gpu_0x00000002'], [
+      { key: '0x00000001_0x00000002', name: 'Fixture A' },
+      { key: '0x00000003_0x00000002', name: 'Fixture B' },
+    ])).toEqual(['gpu_0x00000002']);
+  });
+
+  it('does not reassign an existing common key when another key shares its low half', () => {
+    expect(migrateLegacyGpuCardOrder(['gpu_0x00000002'], [
+      { key: '0x00000002', name: 'Fixture A' },
+      { key: '0x00000001_0x00000002', name: 'Fixture B' },
+    ])).toEqual(['gpu_0x00000002']);
+  });
   it('maps a unique display-name slug without changing placement', () => {
     expect(
       migrateLegacyGpuCardOrder(['cpu', 'gpu_geforce_rtx_4050', 'memory'], [
@@ -172,6 +188,21 @@ describe('isCardPresent', () => {
 });
 
 describe('computeVisibleCardOrder', () => {
+  it('canonicalizes historical LUID casing without case-folding arbitrary GPU keys', () => {
+    const gpus = [
+      { key: '0x000000AB', name: 'Common' },
+      { key: '0x00000001_0x000000CD', name: 'Full' },
+      { key: 'CaseSensitive', name: 'Other' },
+    ];
+    expect(migrateLegacyGpuCardOrder(['gpu_0x000000ab', 'gpu_0x000000cd', 'gpu_casesensitive'], gpus))
+      .toEqual(['gpu_0x000000AB', 'gpu_0x00000001_0x000000CD', 'gpu_casesensitive']);
+    expect(migrateLegacyGpuCardOrder(['sb_gpu_0x000000ab'], gpus, 'sb_gpu_'))
+      .toEqual(['sb_gpu_0x000000AB']);
+    expect(migrateLegacyGpuCardOrder(['gpu_0x000000ab'], [
+      ...gpus, { key: '0x00000001_0x000000AB', name: 'Shared low half' },
+    ])).toEqual(['gpu_0x000000AB']);
+  });
+
   it('reproduces the same visible arrangement when hardware is unchanged between loads', () => {
     const cardOrder = ['cpu', 'memory', 'disk_C:', 'network', 'gpu_gpu-a'];
     const m = metrics();

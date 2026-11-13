@@ -84,27 +84,46 @@ export function computeHasNvidiaData(metrics: NvidiaStatsShape | null): boolean 
 }
 
 /**
- * Migrate legacy `gpu_<display-name-slug>` ids when the slug maps to exactly
- * one current GPU. Ambiguous slugs remain as inert legacy entries and the
+ * Migrate legacy name slugs and low-half LUID aliases when they map to exactly
+ * one current GPU. Ambiguous aliases remain as inert legacy entries and the
  * stable ids are appended by the normal merge path; this avoids guessing which
  * identical physical card a saved display name represented.
  */
 export function migrateLegacyGpuCardOrder(
   order: string[],
-  gpus: { key: string; name: string }[]
+  gpus: { key: string; name: string }[],
+  prefix = 'gpu_',
 ): string[] {
-  const byLegacyId = new Map<string, string[]>();
+  const byLegacyId = new Map<string, Set<string>>();
+  // Older counters preserved hex casing. Normalize only LUID aliases so
+  // canonical OS keys retain saved choices without changing arbitrary IDs.
+  const aliasKey = (id: string) => id.startsWith(prefix) && /^0x[\da-f]{8}(?:_0x[\da-f]{8})?$/i.test(id.slice(prefix.length))
+    ? prefix + id.slice(prefix.length).toUpperCase()
+    : id;
+  const addAlias = (alias: string, current: string) => {
+    const normalized = aliasKey(alias);
+    const keys = byLegacyId.get(normalized) ?? new Set<string>();
+    keys.add(current);
+    byLegacyId.set(normalized, keys);
+  };
   for (const gpu of gpus) {
-    const legacy = 'gpu_' + gpu.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    const keys = byLegacyId.get(legacy) ?? [];
-    keys.push(`gpu_${gpu.key}`);
-    byLegacyId.set(legacy, keys);
+    const current = prefix + gpu.key;
+    addAlias(current, current);
+    if (gpu.name) {
+      const legacy = prefix + gpu.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      addAlias(legacy, current);
+    }
+    const fullLuid = /^0x[\da-f]{8}_(0x[\da-f]{8})$/i.exec(gpu.key);
+    if (fullLuid) addAlias(prefix + fullLuid[1], current);
   }
   const result: string[] = [];
   const seen = new Set<string>();
   for (const id of order) {
-    const candidates = byLegacyId.get(id);
-    const migrated = candidates?.length === 1 ? candidates[0] : id;
+    const candidates = byLegacyId.get(aliasKey(id));
+    // A present canonical key wins over its alias on another adapter. This
+    // also preserves historical casing when the low half is shared.
+    const exact = [...(candidates ?? [])].filter((candidate) => aliasKey(candidate) === aliasKey(id));
+    const migrated = candidates?.size === 1 ? [...candidates][0] : exact.length === 1 ? exact[0] : id;
     if (!seen.has(migrated)) {
       result.push(migrated);
       seen.add(migrated);

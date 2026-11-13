@@ -84,7 +84,6 @@ fn main() {
         };
         collector_state.profile = detect_with_cpu(
             Some(&collector_state.pdh),
-            None,
             disk_infos,
             &collector_state.cpu_identity,
         );

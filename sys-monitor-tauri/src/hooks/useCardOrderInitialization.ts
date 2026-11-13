@@ -18,24 +18,32 @@ export function useCardOrderInitialization(
   metrics: SlicedHistory | null,
   cardOrder: Settings['cardOrder'],
   save: (patch: Partial<Settings>) => Promise<void>,
+  hiddenCardIds?: Settings['hiddenCardIds'],
 ): void {
   const initialized = useRef(false);
 
   useEffect(() => {
     if (!loaded || !metrics) return;
     const defaultIds = computeDefaultCardIds(metrics);
+    const patch: Partial<Settings> = {};
     if (cardOrder === null) {
-      if (initialized.current) return;
+      if (!initialized.current) {
+        initialized.current = true;
+        patch.cardOrder = defaultIds;
+      }
+    } else {
       initialized.current = true;
-      void save({ cardOrder: defaultIds });
-      return;
+      const migrated = migrateLegacyGpuCardOrder(cardOrder, metrics.gpus);
+      const changed = migrated.length !== cardOrder.length || migrated.some((id, index) => id !== cardOrder[index]);
+      const merged = mergeNewCardIds(changed ? migrated : cardOrder, defaultIds);
+      if (merged !== null || changed) patch.cardOrder = merged ?? migrated;
     }
-    initialized.current = true;
-    const migrated = migrateLegacyGpuCardOrder(cardOrder, metrics.gpus);
-    const migratedOrCurrent = migrated.length !== cardOrder.length || migrated.some((id, index) => id !== cardOrder[index])
-      ? migrated
-      : cardOrder;
-    const merged = mergeNewCardIds(migratedOrCurrent, defaultIds);
-    if (merged !== null) void save({ cardOrder: merged });
-  }, [loaded, metrics, cardOrder, save]);
+    if (hiddenCardIds) {
+      const migrated = migrateLegacyGpuCardOrder(hiddenCardIds, metrics.gpus);
+      if (migrated.length !== hiddenCardIds.length || migrated.some((id, index) => id !== hiddenCardIds[index])) {
+        patch.hiddenCardIds = migrated;
+      }
+    }
+    if (Object.keys(patch).length > 0) void save(patch);
+  }, [loaded, metrics, cardOrder, save, hiddenCardIds]);
 }

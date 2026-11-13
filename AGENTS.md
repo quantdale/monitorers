@@ -67,6 +67,7 @@ cargo run --example startup_probe                 # session-bootstrap timing pro
 - Fresh sessions rebuild ALL OS-facing state (PDH/sysinfo/NVML/WMI bootstrap/registry) on their own thread and prime rate baselines, then WAIT for the initial tick deadline before the first poll/commit — post-recovery first commits are real ~250ms deltas, never fabricated 0% or downtime spikes. The loop waits at the TOP of each iteration; never move the wait back below the tick body.
 - Tauri managed state is keyed by Rust TYPE: two independent flags MUST be distinct newtypes (`StopFlag`, `RetryRequest` in `main.rs`, registered via `register_lifecycle_flags` which asserts each registration). Never register two values of the same raw type (`manage` silently refuses the duplicate and everything aliases the first value).
 - Nvidia code is feature-gated `#[cfg(feature = "nvml")]` (primary) / `#[cfg(feature = "nvapi")]` (fallback). Every `unsafe` block needs `// SAFETY:`.
+- GPU captions join PDH counters by exact DXGI adapter LUID, never WMI enumeration order. Exclude known software renderers; retain unknown keys conservatively. Catalog refresh is bounded to 10s on the collector thread, outside history locks, retaining the last good catalog on failure. Zero-high-part keys stay compatible; nonzero high parts use `0xHIGH_0xLOW`, with unique legacy low-half aliases migrated in saved frontend layouts.
 - IPC payload structs derive `Serialize` only — never `Deserialize`.
 
 ## IPC contract (Tauri v2) — easy to get wrong

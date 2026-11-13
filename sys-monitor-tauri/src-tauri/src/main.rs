@@ -292,7 +292,6 @@ fn run_session_body(
     // physical-disk list resolved above.
     collector_state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
         Some(&collector_state.pdh),
-        None,
         disk_infos.clone(),
         &collector_state.cpu_identity,
     );
@@ -370,7 +369,6 @@ fn run_session_body(
             });
             state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
                 Some(&state.pdh),
-                Some(wmi),
                 enriched_disk_infos,
                 &state.cpu_identity,
             );
@@ -451,7 +449,7 @@ fn run_session_body(
 /// Reconcile the sidebar profile with the stable identities currently present
 /// in the committed dashboard snapshot. This is intentionally metadata-only:
 /// all PDH/WMI/sysinfo work remains on the collector thread and outside the
-/// HistoryStore lock. WMI enrichment may later replace the conservative
+/// HistoryStore lock. Adapter/disk enrichment may later replace the conservative
 /// metadata for the same keys, but a hot-plugged device becomes visible (and a
 /// pruned device disappears) without waiting for an app restart.
 fn reconcile_profile_with_snapshot(
@@ -467,14 +465,15 @@ fn reconcile_profile_with_snapshot(
             GpuInfo {
                 key: gpu.key.clone(),
                 name: gpu.name.clone(),
-                vendor: existing.map(|entry| entry.vendor.clone()).unwrap_or(
-                    match gpu.vendor.as_str() {
+                vendor: existing
+                    .filter(|entry| entry.vendor != sys_monitor_tauri::hardware::GpuVendor::Unknown)
+                    .map(|entry| entry.vendor.clone())
+                    .unwrap_or(match gpu.vendor.as_str() {
                         "nvidia" => sys_monitor_tauri::hardware::GpuVendor::Nvidia,
                         "amd" => sys_monitor_tauri::hardware::GpuVendor::Amd,
                         "intel" => sys_monitor_tauri::hardware::GpuVendor::Intel,
                         _ => classified_vendor,
-                    },
-                ),
+                    }),
                 kind: existing
                     .filter(|entry| entry.kind != sys_monitor_tauri::hardware::GpuKind::Unknown)
                     .map(|entry| entry.kind.clone())
@@ -693,6 +692,15 @@ mod tests {
         assert_eq!(next.gpus[0].kind, GpuKind::Discrete);
         assert_eq!(next.disks[0].key, "disk-new");
         assert_eq!(next.disks[0].kind, DiskKind::Unknown);
+
+        // Metadata can arrive after an initial DXGI failure. Reusing a known
+        // key must not freeze its initially Unknown vendor forever.
+        let mut degraded = next.clone();
+        degraded.gpus[0].vendor = GpuVendor::Unknown;
+        degraded.gpus[0].kind = GpuKind::Unknown;
+        let enriched = reconcile_profile_with_snapshot(&degraded, &snapshot);
+        assert_eq!(enriched.gpus[0].vendor, GpuVendor::Intel);
+        assert_eq!(enriched.gpus[0].kind, GpuKind::Discrete);
     }
 
     // ── Retry/stop managed-state wiring (real Tauri seam) ──

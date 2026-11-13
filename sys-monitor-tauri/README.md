@@ -154,6 +154,11 @@ The backend is Windows-only; frontend tests and builds can run elsewhere.
   gap before its first observation; missing is never rendered as numeric zero.
 - **Hardware identity:** Dashboard, sidebar, persisted layout, and GPU
   telemetry use stable hardware keys; display names are presentation-only.
+  GPU captions are joined to PDH counters by exact DXGI adapter LUID, with
+  known software renderers excluded. Metadata refreshes every ten seconds;
+  transient failures retain the last catalog. Both LUID halves are preserved,
+  and unique legacy low-half layout aliases migrate without resetting order
+  or hidden cards. LUIDs can change across Windows reboots.
 - **Disk temperature:** No reliable per-disk temperature provider is enabled,
   so the dashboard does not display an unsupported temperature badge.
 - **Platform:** The collector uses Windows-specific APIs (PDH, WMI); the app is intended for Windows.

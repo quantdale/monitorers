@@ -10,6 +10,7 @@ pub use cpu::query_cpu_temp_c;
 pub use disk::{disk_display_name, physical_disk_list, query_disk_models_wmi};
 pub use gpu::is_nvidia_gpu;
 pub use gpu::query_gpu_utilization_pdh;
+pub use gpu::{enumerate_gpu_adapters, GpuAdapterCatalog};
 #[cfg(all(feature = "nvapi", not(feature = "nvml")))]
 pub use nvidia::query_nvidia_gpu_temp;
 pub use run_loop::{
@@ -268,10 +269,9 @@ pub fn poll(
 
     let gpu_updates = gpu::query_gpu_utilization_pdh(
         &collector.pdh,
-        wmi_con,
         &collector.gpu_error_lock,
-        &mut collector.gpu_vendor_map,
-        &mut collector.gpu_vendor_map_last_build,
+        &mut collector.gpu_adapters,
+        &mut collector.gpu_adapters_last_refresh,
     );
 
     #[cfg(feature = "nvml")]
@@ -301,6 +301,10 @@ pub fn poll(
         mem_total_gb,
         mem_pct,
         gpu_updates,
+        gpu_inventory_confirmed: collector
+            .gpu_adapters
+            .as_ref()
+            .is_some_and(GpuAdapterCatalog::is_confirmed),
         nvidia_telemetry,
         disk_active,
         disk_read_mb_s,
@@ -371,13 +375,12 @@ pub fn commit_gpu(store: &mut crate::state::HistoryStore, poll: &crate::state::R
 
     // Previously-known keys absent from this poll are ghosts. Keep them
     // through a PRUNE_MISS_THRESHOLD grace window (history frozen, last-known
-    // util held) so a transient vendor-map/WMI blip cannot wipe GPU cards;
+    // util held) so a transient adapter-metadata blip cannot wipe GPU cards;
     // drop them once the threshold is crossed (a caption leaving the vendor
-    // map for good, e.g. after a hot-plug rebuild). The gate on an empty poll
-    // is essential: empty gpu_updates means PDH or WMI was unavailable this
-    // tick — that is not evidence every GPU vanished, so ghosts are kept.
+    // catalog for good, e.g. after hot-plug refresh). An empty successful
+    // inventory can remove the final device too; unavailable metadata cannot.
     // Iterated in `prior_keys` order so the resulting gpus array stays stable.
-    if !poll.gpu_updates.is_empty() {
+    if !poll.gpu_updates.is_empty() || poll.gpu_inventory_confirmed {
         for key in prior_keys {
             let Some((name, hist)) = existing.remove(&key) else {
                 continue; // already moved into next_entries as a fresh key
@@ -858,9 +861,8 @@ mod tests {
 
     #[test]
     fn test_commit_gpu_skips_pruning_when_poll_empty() {
-        // An empty gpu_updates poll means PDH or WMI was unavailable this
-        // tick — it must never be read as "every GPU vanished". gpu_entries
-        // (and thus the UI's GPU cards) survive repeated empty polls.
+        // An unconfirmed empty poll is not evidence every GPU vanished.
+        // Cards survive unavailable PDH and missing adapter metadata.
         let mut store = crate::state::HistoryStore::new("test");
         let present = crate::state::RawPoll {
             pdh_ok: true,
@@ -870,12 +872,52 @@ mod tests {
         commit_gpu(&mut store, &present);
         for _ in 0..PRUNE_MISS_THRESHOLD * 2 {
             commit_gpu(&mut store, &crate::state::RawPoll::default());
+            commit_gpu(
+                &mut store,
+                &crate::state::RawPoll {
+                    pdh_ok: true,
+                    ..Default::default()
+                },
+            );
         }
         assert_eq!(store.gpu_entries.len(), 1);
         assert!(
             store.gpu_miss_count.is_empty(),
             "empty polls must not count as misses"
         );
+    }
+
+    #[test]
+    fn confirmed_empty_inventory_prunes_the_final_gpu_after_grace() {
+        let mut store = crate::state::HistoryStore::new("test");
+        commit_gpu(
+            &mut store,
+            &crate::state::RawPoll {
+                pdh_ok: true,
+                gpu_updates: vec![("last-gpu".into(), "GPU".into(), 50.0)],
+                ..Default::default()
+            },
+        );
+        let mut absent = crate::state::RawPoll {
+            pdh_ok: true,
+            gpu_inventory_confirmed: true,
+            ..Default::default()
+        };
+        // An unavailable read must still freeze the last-known channel.
+        absent.pdh_ok = false;
+        for _ in 0..PRUNE_MISS_THRESHOLD * 2 {
+            commit_gpu(&mut store, &absent);
+        }
+        assert_eq!(store.gpu_entries.len(), 1);
+        absent.pdh_ok = true;
+        for _ in 0..PRUNE_MISS_THRESHOLD - 1 {
+            commit_gpu(&mut store, &absent);
+            assert_eq!(store.gpu_entries.len(), 1);
+        }
+        commit_gpu(&mut store, &absent);
+        assert!(store.gpu_entries.is_empty());
+        assert!(store.gpu_latest.is_empty());
+        assert!(store.gpu_miss_count.is_empty());
     }
 
     #[test]

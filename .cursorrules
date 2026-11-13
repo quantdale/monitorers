@@ -162,7 +162,7 @@ monitorers/
                 ├── supervisor.rs     ← supervised sessions, bounded recovery, CollectorStatus lifecycle
                 ├── cpu.rs           ← WMI CPU thermal (tenths-Kelvin → Celsius)
                 ├── disk.rs          ← PDH disk active%, read/write MB/s, response ms
-                ├── gpu.rs           ← PDH GPU 3D util, WMI LUID→vendor classification, is_nvidia_gpu()
+                ├── gpu.rs           ← PDH GPU 3D util, exact DXGI LUID catalog, is_nvidia_gpu()
                 └── nvidia.rs        ← NVML primary / NVAPI fallback telemetry (feature-gated)
 ```
 
@@ -436,5 +436,6 @@ by the shipped configuration.
 - Disk keys are drive-letter combos (`"C:"`, `"C: D:"`) parsed from PDH instance names like `"0 C: D:"`
 - GPU display names are brand-stripped (`"NVIDIA GeForce RTX 4050"` → `"GeForce RTX 4050"`) via `strip_brand_prefix`
 - GPU LUIDs are machine-specific, change across reboots — never hardcode them
+- GPU captions join counters by exact DXGI adapter LUID; known software renderers are excluded. The collector-thread catalog refreshes every 10s and retains its last good result on failure. Common zero-high-part keys stay `0xLOW`; nonzero high parts use `0xHIGH_0xLOW`. Unique legacy low-half aliases migrate in dashboard order/visibility and sidebar order; ambiguous aliases stay inert.
 - `WMI retry`: exponential backoff, base 1s, max 30s, 8 attempts
 - `SafeAppState = SafeHistoryStore = Mutex<HistoryStore>` — all the same type alias

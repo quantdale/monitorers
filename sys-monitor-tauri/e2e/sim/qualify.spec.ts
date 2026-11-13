@@ -15,7 +15,7 @@
  * owned by this driver — shipped configuration carries no debugging flag.
  */
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RealAppDriver } from './drivers/RealAppDriver';
 import { assertNoOrphanProcesses } from './drivers/processGuard';
@@ -168,6 +168,16 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     expect(ts2, 'live collector data kept advancing').toBeTruthy();
     expect(Number(ts2)).toBeGreaterThan(Number(ts1));
 
+    // Preserve the real, host-specific inventory for comparison with the
+    // independent DXGI probe; do not hardcode this host's cards into CI.
+    const inventory = await page.evaluate(async () => {
+      const internals = (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args: unknown) => Promise<unknown> };
+      }).__TAURI_INTERNALS__;
+      return internals.invoke('get_history', { windowSecs: 60 });
+    });
+    writeFileSync(testInfo.outputPath('gpu-inventory.json'), JSON.stringify(inventory, null, 2));
+
     // ── 4. Representative interaction lands in the isolated real store ──
     const settingsPath = join(driver.appDataDir ?? '', 'settings.json');
     await page.getByRole('button', { name: 'Tile' }).click();
@@ -268,6 +278,7 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
     await page.setViewportSize({ width: 900, height: 1100 });
+    await page.getByTestId('dashboard-scroll-area').evaluate((el) => { el.scrollTop = 0; });
     await page.screenshot({ path: testInfo.outputPath('dashboard-real.png') });
 
     // ── 6. Clean exit; no orphaned processes; real store untouched ──

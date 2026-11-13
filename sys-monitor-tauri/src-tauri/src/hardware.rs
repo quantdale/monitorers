@@ -104,7 +104,7 @@ impl CpuIdentity {
 
 impl HardwareProfile {
     /// The profile's CPU identity, for rebuilding a profile in place (e.g.
-    /// re-detecting GPUs once PDH/WMI become available) without re-enumerating
+    /// re-detecting GPUs once PDH/DXGI become available) without re-enumerating
     /// the CPU.
     pub fn cpu_identity(&self) -> CpuIdentity {
         CpuIdentity {
@@ -200,21 +200,15 @@ pub fn classify_gpu(name: &str) -> (GpuVendor, GpuKind) {
     (vendor, kind)
 }
 
-/// Reuses existing GPU enumeration from collector::gpu (PDH + WMI). No new PDH queries.
-fn detect_gpus(pdh: Option<&PdhHandles>, wmi_con: Option<&wmi::WMIConnection>) -> Vec<GpuInfo> {
+/// Reuses existing GPU enumeration from collector::gpu (PDH + DXGI). No new PDH queries.
+fn detect_gpus(pdh: Option<&PdhHandles>) -> Vec<GpuInfo> {
     let Some(pdh_ref) = pdh else { return vec![] };
     let lock = OnceLock::new();
-    // One-time startup call — a throwaway cache avoids rebuilding the WMI
-    // vendor map here while leaving the steady-state cache untouched.
-    let mut vendor_map: Option<std::collections::HashMap<String, String>> = None;
+    // One-time startup metadata, separate from the steady-state cache.
+    let mut adapters = None;
     let mut last_build = std::time::Instant::now();
-    let entries = crate::collector::query_gpu_utilization_pdh(
-        pdh_ref,
-        wmi_con,
-        &lock,
-        &mut vendor_map,
-        &mut last_build,
-    );
+    let entries =
+        crate::collector::query_gpu_utilization_pdh(pdh_ref, &lock, &mut adapters, &mut last_build);
     entries
         .into_iter()
         .map(|(key, display_name, _util)| {
@@ -265,10 +259,9 @@ pub fn disk_infos_from(disks: &sysinfo::Disks) -> Vec<DiskInfo> {
 
 // ── detect_with_cpu ───────────────────────────────────────────────────────────
 
-/// Build the hardware profile. Call with `(None, None, None)` when WMI is not
-/// yet available (the pre-WMI degraded profile); call with
-/// `(Some(&pdh), wmi_con, Some(disks))` on the background thread after WMI is
-/// ready to populate GPUs and the physical-disk list. When `disks_override` is
+/// Build the hardware profile. Supply PDH handles on the background thread to
+/// resolve GPUs through DXGI; GPU discovery does not depend on WMI bootstrap.
+/// When `disks_override` is
 /// `Some`, it is used so the sidebar matches the dashboard disk count.
 ///
 /// The `cpu` argument is a caller-supplied CPU identity rather than something
@@ -277,7 +270,6 @@ pub fn disk_infos_from(disks: &sysinfo::Disks) -> Vec<DiskInfo> {
 /// enumeration for nothing. See `CpuIdentity` for why that matters.
 pub fn detect_with_cpu(
     pdh: Option<&PdhHandles>,
-    wmi_con: Option<&wmi::WMIConnection>,
     disks_override: Option<Vec<DiskInfo>>,
     cpu: &CpuIdentity,
 ) -> HardwareProfile {
@@ -290,7 +282,7 @@ pub fn detect_with_cpu(
     HardwareProfile {
         cpu_vendor: cpu.vendor.clone(),
         cpu_name: cpu.name.clone(),
-        gpus: detect_gpus(pdh, wmi_con),
+        gpus: detect_gpus(pdh),
         disks,
     }
 }
@@ -325,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_hardware_profile_cpu_identity_round_trips() {
-        let profile = detect_with_cpu(None, None, None, &CpuIdentity::from_brand("AMD Ryzen 9"));
+        let profile = detect_with_cpu(None, None, &CpuIdentity::from_brand("AMD Ryzen 9"));
         assert_eq!(
             profile.cpu_identity(),
             CpuIdentity::from_brand("AMD Ryzen 9")

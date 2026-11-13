@@ -106,7 +106,6 @@ fn main() {
         };
         collector_state.profile = sys_monitor_tauri::hardware::detect_with_cpu(
             Some(&collector_state.pdh),
-            None,
             disk_infos.clone(),
             &collector_state.profile.cpu_identity(),
         );

@@ -27,9 +27,10 @@ function Harness(props: {
   loaded: boolean;
   metrics: SlicedHistory | null;
   cardOrder: Settings['cardOrder'];
+  hiddenCardIds?: string[];
   save: (patch: Partial<Settings>) => Promise<void>;
 }) {
-  useCardOrderInitialization(props.loaded, props.metrics, props.cardOrder, props.save);
+  useCardOrderInitialization(props.loaded, props.metrics, props.cardOrder, props.save, props.hiddenCardIds);
   return null;
 }
 
@@ -76,6 +77,30 @@ describe('useCardOrderInitialization', () => {
       save,
     })));
     expect(saves).toEqual([]);
+    cleanup();
+  });
+
+  it('persists an identity migration even when no device needs appending', () => {
+    const saves: Partial<Settings>[] = [];
+    const save = async (patch: Partial<Settings>) => { saves.push(patch); };
+    const withGpu: SlicedHistory = {
+      ...metrics,
+      gpus: [{ key: 'gpu-a', name: 'Fixture GPU', vendor: 'nvidia', values: [1], latest: 1 }],
+    };
+    mount({ loaded: true, metrics: withGpu, cardOrder: ['memory', 'gpu_fixture_gpu', 'cpu', 'network'], save });
+    expect(saves).toEqual([{ cardOrder: ['memory', 'gpu_gpu-a', 'cpu', 'network'] }]);
+    cleanup();
+  });
+
+  it('migrates hidden GPU identities even when the order is already current', () => {
+    const saves: Partial<Settings>[] = [];
+    const save = async (patch: Partial<Settings>) => { saves.push(patch); };
+    const withGpu: SlicedHistory = {
+      ...metrics,
+      gpus: [{ key: '0x00000001_0x00000002', name: 'Fixture GPU', vendor: 'nvidia', values: [1], latest: 1 }],
+    };
+    mount({ loaded: true, metrics: withGpu, cardOrder: ['cpu', 'memory', 'network', 'gpu_0x00000001_0x00000002'], hiddenCardIds: ['gpu_0x00000002'], save });
+    expect(saves).toEqual([{ hiddenCardIds: ['gpu_0x00000001_0x00000002'] }]);
     cleanup();
   });
 

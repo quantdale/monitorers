@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_NOT_FOUND,
+};
 
 // ── GPU CLASSIFICATION ───────────────────────────────────────────────────────
 
@@ -10,13 +13,13 @@ pub enum GpuClass {
     Unknown,
 }
 
-/// Extract the low 32-bit LUID hex string from a PDH/WMI GPU engine Name field.
+/// Preserve both LUID halves, keeping existing zero-high-part keys compatible.
 ///
 /// Name formats:
 ///   New: `"pid_1234_luid_0x00000000_0x00017D0F_phys_0_eng_0_engtype_3D"`
 ///   Old: `"luid_0x00000000_0x00017D0F_phys_0_eng_0_engtype_3D"`
 ///
-/// Returns e.g. `"0x00017D0F"` (the second hex segment — low LUID bits).
+/// Returns `"0x00017D0F"` when high is zero, otherwise `"0xHIGH_0xLOW"`.
 pub fn extract_luid_from_name(name: &str) -> Option<String> {
     let after_luid = if let Some(pos) = name.find("_luid_") {
         &name[pos + 6..]
@@ -25,11 +28,17 @@ pub fn extract_luid_from_name(name: &str) -> Option<String> {
         name.strip_prefix("luid_")?
     };
 
-    let parts: Vec<&str> = after_luid.splitn(3, '_').collect();
-    if parts.len() >= 2 && parts[1].starts_with("0x") {
-        Some(parts[1].to_string())
+    let mut parts = after_luid.split('_');
+    let high = u32::from_str_radix(parts.next()?.strip_prefix("0x")?, 16).ok()?;
+    let low = u32::from_str_radix(parts.next()?.strip_prefix("0x")?, 16).ok()?;
+    Some(gpu_luid_key(high, low))
+}
+
+fn gpu_luid_key(high: u32, low: u32) -> String {
+    if high == 0 {
+        format!("0x{low:08X}")
     } else {
-        None
+        format!("0x{high:08X}_0x{low:08X}")
     }
 }
 
@@ -70,7 +79,7 @@ pub fn is_nvidia_gpu(display_name: &str) -> bool {
 
 /// Classify a LUID as iGPU or dGPU.
 ///
-/// Primary: keyword match on vendor caption from Win32_VideoController.
+/// Primary: keyword match on the exact DXGI adapter caption.
 /// LUIDs not in the vendor map fall through to Unknown — no hardcoded fallbacks,
 /// since LUIDs are machine-specific and change across reboots.
 pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuClass {
@@ -86,99 +95,71 @@ pub fn classify_luid(luid: &str, vendor_map: &HashMap<String, String>) -> GpuCla
     GpuClass::Unknown
 }
 
-// ── WMI GPU VENDOR MAP ───────────────────────────────────────────────────────
+// ── EXACT OS ADAPTER CATALOG ─────────────────────────────────────────────────
 
-/// Deterministically assign a VideoController caption to every known LUID.
-///
-/// Win32_VideoController exposes no LUID, so there is no true foreign key to
-/// pair adapters with engine LUIDs; the correspondence must be inferred. LUIDs
-/// are sorted in a stable order and matched positionally against the caption
-/// list (which WMI returns in PCI-enumeration order). Unlike fragile index
-/// tricks, this function derives a caption for *every* known LUID in a single
-/// pass: LUIDs beyond the caption count (e.g. dGPU engines that only surface
-/// via PDH) inherit the last caption, so the same inputs always yield the same
-/// map and an extra LUID can never leave a known engine without a caption or
-/// silently shift captions between engines. The match is deterministic per
-/// input; it is not a true foreign-key join, which Windows does not expose.
-fn assign_captions_to_luids(luids: &mut [String], captions: &[String]) -> HashMap<String, String> {
-    luids.sort();
-    let last_caption = captions.last().cloned().unwrap_or_default();
-    luids
-        .iter()
-        .enumerate()
-        .map(|(i, luid)| {
-            let caption = captions
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| last_caption.clone());
-            (luid.clone(), caption)
-        })
-        .collect()
+/// Metadata only: COM objects never leave the collector's enumeration call.
+#[derive(Clone, Debug, Default)]
+pub struct GpuAdapterCatalog {
+    pub captions: HashMap<String, String>,
+    pub software_keys: HashSet<String>,
+    confirmed: bool,
 }
 
-/// Build a LUID → vendor-name map by positionally matching:
-///   Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine (has LUIDs, no names)
-///   Win32_VideoController (has names, no LUIDs)
-///
-/// `extra_luids`: LUIDs from PDH that may not appear in GPUEngine (e.g. dGPU engines
-/// that only show up when a process uses them). These get the last VideoController
-/// caption when we have more LUIDs than adapters.
-pub fn build_gpu_vendor_map(
-    wmi_con: &wmi::WMIConnection,
-    extra_luids: impl Iterator<Item = String>,
-) -> HashMap<String, String> {
-    let luid_rows = match wmi_con.raw_query::<HashMap<String, wmi::Variant>>(
-        "SELECT Name FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine",
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!(
-                "[GPU] build_gpu_vendor_map: LUID enumeration failed: {:?}",
-                e
-            );
-            return HashMap::new();
-        }
+impl GpuAdapterCatalog {
+    pub fn is_confirmed(&self) -> bool {
+        self.confirmed
+    }
+}
+
+fn catalog_from_adapters(
+    adapters: impl IntoIterator<Item = (String, String, bool)>,
+) -> GpuAdapterCatalog {
+    let mut catalog = GpuAdapterCatalog {
+        confirmed: true,
+        ..Default::default()
     };
-
-    let mut luid_set: HashSet<String> = HashSet::new();
-    for row in &luid_rows {
-        if let Some(wmi::Variant::String(name)) = row.get("Name") {
-            if let Some(luid) = extract_luid_from_name(name) {
-                luid_set.insert(luid);
-            }
+    for (key, caption, software) in adapters {
+        if software {
+            catalog.software_keys.insert(key);
+        } else {
+            catalog.captions.insert(key, caption);
         }
     }
-    for luid in extra_luids {
-        luid_set.insert(luid);
+    catalog
+}
+
+/// Enumerate labels and software classification from the same adapter LUID.
+pub fn enumerate_gpu_adapters() -> windows::core::Result<GpuAdapterCatalog> {
+    // SAFETY: DXGI creates an owned factory for the requested interface; it
+    // and every returned adapter remain on this thread and are RAII-released.
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
+    let mut adapters = Vec::new();
+    for index in 0.. {
+        // SAFETY: factory is a valid owned COM interface; DXGI bounds-checks
+        // the index and returns DXGI_ERROR_NOT_FOUND at the end of the list.
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
+            Err(error) => return Err(error),
+        };
+        // SAFETY: adapter is a live owned interface; GetDesc1 returns its
+        // descriptor by value and the binding owns the output storage.
+        let descriptor = unsafe { adapter.GetDesc1()? };
+        let length = descriptor
+            .Description
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(descriptor.Description.len());
+        adapters.push((
+            gpu_luid_key(
+                descriptor.AdapterLuid.HighPart as u32,
+                descriptor.AdapterLuid.LowPart,
+            ),
+            String::from_utf16_lossy(&descriptor.Description[..length]),
+            descriptor.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
+        ));
     }
-    let mut luids: Vec<String> = luid_set.into_iter().collect();
-
-    let vc_rows = match wmi_con
-        .raw_query::<HashMap<String, wmi::Variant>>("SELECT Caption FROM Win32_VideoController")
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!(
-                "[GPU] build_gpu_vendor_map: VideoController query failed: {:?}",
-                e
-            );
-            return HashMap::new();
-        }
-    };
-    let captions: Vec<String> = vc_rows
-        .iter()
-        .filter_map(|vc| match vc.get("Caption") {
-            Some(wmi::Variant::String(s)) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-
-    let map = assign_captions_to_luids(&mut luids, &captions);
-
-    if cfg!(debug_assertions) {
-        eprintln!("[GPU DEBUG] Vendor map: {:?}", map);
-    }
-    map
+    Ok(catalog_from_adapters(adapters))
 }
 
 // ── GPU PDH UTILIZATION ──────────────────────────────────────────────────────
@@ -186,34 +167,25 @@ pub fn build_gpu_vendor_map(
 /// Per-GPU result: (luid, display_name, utilization%).
 pub type GpuUtilEntry = (String, String, f64);
 
-/// How often a stale/outdated vendor map may be rebuilt via WMI. The map is
-/// built once per session; this rate limit only applies to self-healing
-/// rebuilds (new LUIDs appearing, or a failed first enumeration), so a WMI
-/// outage can't turn the collector into a per-tick WMI query loop.
-const VENDOR_MAP_REBUILD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const ADAPTER_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Whether the cached LUID→caption map needs rebuilding from WMI.
-///
-/// - `None` (never built) → rebuild immediately.
-/// - Empty map (a prior enumeration failed) → rebuild, but at most once per
-///   `VENDOR_MAP_REBUILD_INTERVAL` so a persistent WMI failure can't hot-loop.
-/// - Non-empty map → rebuild only when a PDH-reported LUID is missing
-///   (hot-plug / late-appearing dGPU engine), also rate-limited.
-pub fn should_rebuild_vendor_map(
-    cache: &Option<HashMap<String, String>>,
-    last_build: std::time::Instant,
-    pdh_luids: &[String],
+fn should_refresh_adapters(
+    cache: &Option<GpuAdapterCatalog>,
+    last_refresh: std::time::Instant,
+    now: std::time::Instant,
 ) -> bool {
-    let Some(map) = cache else {
-        return true;
-    };
-    if map.is_empty() {
-        return last_build.elapsed() >= VENDOR_MAP_REBUILD_INTERVAL;
+    cache.is_none() || now.saturating_duration_since(last_refresh) >= ADAPTER_REFRESH_INTERVAL
+}
+
+fn refresh_adapter_cache(
+    cache: &mut Option<GpuAdapterCatalog>,
+    result: windows::core::Result<GpuAdapterCatalog>,
+) {
+    match result {
+        Ok(catalog) => *cache = Some(catalog),
+        Err(_) if cache.is_none() => *cache = Some(GpuAdapterCatalog::default()),
+        Err(_) => {} // A transient metadata failure must not relabel known devices.
     }
-    if last_build.elapsed() < VENDOR_MAP_REBUILD_INTERVAL {
-        return false;
-    }
-    pdh_luids.iter().any(|l| !map.contains_key(l))
 }
 
 /// Merge per-LUID utilization totals into per-LUID entries.
@@ -244,15 +216,19 @@ fn merge_gpu_utilization_by_caption(
                     luid
                 );
             });
-            continue;
         }
         let util = luid_3d_totals.get(luid).copied().unwrap_or(0.0).min(100.0);
         let display_name = strip_brand_prefix(caption);
-        if display_name.is_empty() {
-            continue;
-        }
+        let display_name = if display_name.is_empty() {
+            format!("GPU {luid}")
+        } else {
+            display_name
+        };
         entries.push((luid.clone(), display_name, class, util));
     }
+
+    // Suffixes must follow identity, never randomized HashMap iteration order.
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Disambiguate same-display-name GPUs: count occurrences, append " 1", " 2" etc.
     let mut name_counts: HashMap<String, usize> = HashMap::new();
@@ -271,7 +247,7 @@ fn merge_gpu_utilization_by_caption(
     entries
 }
 
-/// PDH still exposes stable LUIDs even when WMI is unavailable. Keep those
+/// PDH still exposes stable LUIDs even when adapter metadata is unavailable. Keep those
 /// entries visible with conservative metadata instead of hiding every GPU;
 /// enrichment can be retried later and the stable key remains unchanged.
 fn merge_gpu_utilization_without_vendor_map(
@@ -290,24 +266,40 @@ fn merge_gpu_utilization_without_vendor_map(
         .collect()
 }
 
+fn merge_gpu_utilization(
+    catalog: Option<&GpuAdapterCatalog>,
+    totals: &HashMap<String, f64>,
+    error_log: &OnceLock<()>,
+) -> Vec<(String, String, GpuClass, f64)> {
+    let Some(catalog) = catalog else {
+        return merge_gpu_utilization_without_vendor_map(totals);
+    };
+    let mut entries = merge_gpu_utilization_by_caption(Some(&catalog.captions), totals, error_log);
+    for (key, util) in totals {
+        if !catalog.captions.contains_key(key) && !catalog.software_keys.contains(key) {
+            entries.push((
+                key.clone(),
+                format!("GPU {key}"),
+                GpuClass::Unknown,
+                (*util).clamp(0.0, 100.0),
+            ));
+        }
+    }
+    entries
+}
+
 /// Read GPU 3D-engine utilization from PDH. Returns list of (history_key, display_name, util%) per GPU.
 ///
 /// PdhCollectQueryData is called once per poll in poll() before this function runs.
 /// This function only reads the already-collected data.
 ///
-/// `wmi_con` is the caller's MTA-thread WMI connection used for vendor-name
-/// classification. It lives in the background thread's stack frame.
-///
-/// `gpu_vendor_map` / `vendor_map_last_build` cache the LUID→caption map across
-/// polls. Building it runs two WMI queries, so it must happen once, not on
-/// every ~250ms GPU poll (the pre-cache behavior made the collector spend most
-/// of each tick inside WMI — see should_rebuild_vendor_map).
+/// DXGI metadata is cached across polls and refreshed at a bounded cadence.
+/// Enumeration runs on this collector thread, outside the history lock.
 pub fn query_gpu_utilization_pdh(
     pdh: &crate::state::PdhHandles,
-    wmi_con: Option<&wmi::WMIConnection>,
     gpu_error_lock: &OnceLock<()>,
-    gpu_vendor_map: &mut Option<HashMap<String, String>>,
-    vendor_map_last_build: &mut std::time::Instant,
+    gpu_adapters: &mut Option<GpuAdapterCatalog>,
+    adapters_last_refresh: &mut std::time::Instant,
 ) -> Vec<GpuUtilEntry> {
     let mut result = Vec::new();
     if pdh.query.is_none() {
@@ -329,50 +321,29 @@ pub fn query_gpu_utilization_pdh(
         *luid_3d_totals.entry(luid).or_insert(0.0) += util;
     }
 
-    // Build (or refresh) the vendor map with PDH LUIDs included so dGPU
-    // engines that only appear in PDH (not in GPUEngine WMI) get a caption.
-    // Cached across polls: WMI enumeration is expensive (~2 queries per call)
-    // and the hardware only changes on hot-plug.
-    if let Some(con) = wmi_con {
-        let pdh_luids: Vec<String> = luid_3d_totals.keys().cloned().collect();
-        if should_rebuild_vendor_map(gpu_vendor_map, *vendor_map_last_build, &pdh_luids) {
-            let rebuilt = build_gpu_vendor_map(con, pdh_luids.into_iter());
-            // Preserve existing LUID→caption pairs; only add new entries.
-            // This prevents hot-plug rebuilds from shifting captions for
-            // already-known LUIDs (positional-match fragility — AUDIT-005).
-            if let Some(ref mut existing) = gpu_vendor_map {
-                for (luid, caption) in rebuilt {
-                    existing.entry(luid).or_insert(caption);
-                }
-            } else {
-                *gpu_vendor_map = Some(rebuilt);
-            }
-            *vendor_map_last_build = std::time::Instant::now();
+    let now = std::time::Instant::now();
+    if should_refresh_adapters(gpu_adapters, *adapters_last_refresh, now) {
+        let result = enumerate_gpu_adapters();
+        if let Err(error) = &result {
+            gpu_error_lock.get_or_init(|| eprintln!("[GPU] DXGI enumeration failed: {error}"));
         }
-    } else {
-        // WMI is gone — drop the stale map so it is rebuilt on recovery.
-        *gpu_vendor_map = None;
+        refresh_adapter_cache(gpu_adapters, result);
+        *adapters_last_refresh = std::time::Instant::now();
     }
 
-    // Borrow through the Option instead of cloning the whole map every poll;
-    // the rebuild above has already finished, so this borrow is safe.
-    let vendor_map = gpu_vendor_map.as_ref();
+    let mut entries = merge_gpu_utilization(gpu_adapters.as_ref(), &luid_3d_totals, gpu_error_lock);
 
-    let mut entries: Vec<(String, String, GpuClass, f64)> =
-        if vendor_map.is_none_or(|map| map.is_empty()) {
-            merge_gpu_utilization_without_vendor_map(&luid_3d_totals)
-        } else {
-            merge_gpu_utilization_by_caption(vendor_map, &luid_3d_totals, gpu_error_lock)
-        };
-
-    // Sort: iGPU first, then dGPU; within each class by display name.
+    // A total order keeps unknown vendors from making comparisons cyclic.
+    let class_rank = |class| match class {
+        GpuClass::IGpu => 0,
+        GpuClass::DGpu => 1,
+        GpuClass::Unknown => 2,
+    };
     entries.sort_by(|a, b| {
-        let ord = match (a.2, b.2) {
-            (GpuClass::IGpu, GpuClass::DGpu) => std::cmp::Ordering::Less,
-            (GpuClass::DGpu, GpuClass::IGpu) => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
-        };
-        ord.then_with(|| a.1.cmp(&b.1))
+        class_rank(a.2)
+            .cmp(&class_rank(b.2))
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
     // Use LUID as history key so two identical GPUs get separate history
@@ -429,175 +400,142 @@ mod tests {
         assert_eq!(extract_luid_from_name("pid_99_luid_notahex"), None);
     }
 
-    // --- should_rebuild_vendor_map ---
+    // --- exact adapter identity and bounded metadata refresh ---
 
-    fn fresh_instant() -> std::time::Instant {
-        std::time::Instant::now()
+    fn observed_catalog() -> GpuAdapterCatalog {
+        catalog_from_adapters([
+            ("0x000183B8".into(), "Intel(R) UHD Graphics".into(), false),
+            (
+                "0x0001865D".into(),
+                "Microsoft Basic Render Driver".into(),
+                true,
+            ),
+            (
+                "0x000186D3".into(),
+                "NVIDIA GeForce RTX 4050 Laptop GPU".into(),
+                false,
+            ),
+        ])
     }
 
     #[test]
-    fn test_should_rebuild_never_built() {
-        assert!(should_rebuild_vendor_map(
-            &None,
-            fresh_instant(),
-            &["0x00017D0F".to_string()]
-        ));
-        assert!(should_rebuild_vendor_map(&None, fresh_instant(), &[]));
+    fn software_renderer_must_not_inherit_the_nvidia_caption() {
+        let catalog = observed_catalog();
+        let totals = HashMap::from([
+            ("0x000183B8".into(), 8.0),
+            ("0x0001865D".into(), 95.0),
+            ("0x000186D3".into(), 30.0),
+        ]);
+        let entries = merge_gpu_utilization(Some(&catalog), &totals, &OnceLock::new());
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .any(|(key, name, _, util)| key == "0x000186D3"
+                && name == "GeForce RTX 4050 Laptop GPU"
+                && *util == 30.0));
+        assert!(!entries.iter().any(|(key, _, _, _)| key == "0x0001865D"));
     }
 
     #[test]
-    fn test_should_not_rebuild_while_cached_map_covers_all_luids() {
-        let mut cache = HashMap::new();
-        cache.insert(
-            "0x00017D0F".to_string(),
-            "NVIDIA GeForce RTX 3060".to_string(),
-        );
-        // A map that was just built: rate limit prevents churn.
-        assert!(!should_rebuild_vendor_map(
-            &Some(cache.clone()),
-            fresh_instant(),
-            &["0x00017D0F".to_string()]
-        ));
-        // A map that is old but still covers all PDH LUIDs: no rebuild either.
-        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        assert!(!should_rebuild_vendor_map(
-            &Some(cache),
-            long_ago,
-            &["0x00017D0F".to_string()]
-        ));
-    }
-
-    #[test]
-    fn test_should_rebuild_when_new_luid_appears_after_interval() {
-        let mut cache = HashMap::new();
-        cache.insert(
-            "0x00017D0F".to_string(),
-            "NVIDIA GeForce RTX 3060".to_string(),
-        );
-        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        // A brand-new PDH LUID (hot-plug / late-appearing engine) triggers a
-        // rebuild, but only once the rate-limit window has elapsed.
-        assert!(should_rebuild_vendor_map(
-            &Some(cache.clone()),
-            long_ago,
-            &["0x00017D0F".to_string(), "0x00017E00".to_string()]
-        ));
-        assert!(!should_rebuild_vendor_map(
-            &Some(cache),
-            fresh_instant(),
-            &["0x00017D0F".to_string(), "0x00017E00".to_string()]
-        ));
-    }
-
-    #[test]
-    fn test_should_rebuild_failed_enumeration_is_rate_limited() {
-        // Empty map = a prior WMI enumeration failed. Retried periodically,
-        // never on every poll.
-        let empty: HashMap<String, String> = HashMap::new();
-        assert!(!should_rebuild_vendor_map(
-            &Some(empty.clone()),
-            fresh_instant(),
-            &[]
-        ));
-        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-        assert!(should_rebuild_vendor_map(
-            &Some(empty),
-            long_ago,
-            &["0x00017D0F".to_string()]
-        ));
-    }
-
-    // --- assign_captions_to_luids (F-2) ---
-
-    fn captions(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn test_assign_captions_equal_counts_positional() {
-        let mut luids = vec!["0x00017B00".to_string(), "0x00017A00".to_string()];
-        let map = assign_captions_to_luids(&mut luids, &captions(&["NVIDIA RTX", "Intel Iris"]));
-        // Sorted deterministically: "0x00017A00" < "0x00017B00".
+    fn luid_high_halves_do_not_collapse_and_common_keys_are_compatible() {
+        let a = extract_luid_from_name("pid_1_luid_0x00000001_0x00000002_phys_0_eng_0_engtype_3D");
+        let b = extract_luid_from_name("luid_0x00000002_0x00000002_phys_0_eng_0_engtype_3D");
+        assert_eq!(a.as_deref(), Some("0x00000001_0x00000002"));
+        assert_eq!(b.as_deref(), Some("0x00000002_0x00000002"));
+        assert_ne!(a, b);
         assert_eq!(
-            map.get("0x00017A00").map(String::as_str),
-            Some("NVIDIA RTX")
+            extract_luid_from_name("luid_0x00000000_0x000183b8_phys_0").as_deref(),
+            Some("0x000183B8")
+        );
+        assert_eq!(gpu_luid_key(u32::MAX, 2), "0xFFFFFFFF_0x00000002");
+        assert_eq!(
+            extract_luid_from_name("luid_0xINVALID_0x00000002_phys_0"),
+            None
         );
         assert_eq!(
-            map.get("0x00017B00").map(String::as_str),
-            Some("Intel Iris")
+            extract_luid_from_name("luid_0x00000000_0xNOTHEX_phys_0"),
+            None
         );
     }
 
     #[test]
-    fn test_assign_captions_extra_luids_inherit_last_caption() {
-        // Three LUIDs (e.g. one extra PDH dGPU engine) but two captions: every
-        // LUID still gets a caption, and overflow inherits the last one.
-        let mut luids = vec![
-            "0x00017A00".to_string(),
-            "0x00017B00".to_string(),
-            "0x00017C00".to_string(),
+    fn metadata_refresh_is_bounded_for_success_and_failure_and_detects_removal() {
+        let now = std::time::Instant::now();
+        assert!(should_refresh_adapters(&None, now, now));
+        for cache in [GpuAdapterCatalog::default(), observed_catalog()] {
+            assert!(!should_refresh_adapters(
+                &Some(cache.clone()),
+                now,
+                now + std::time::Duration::from_millis(9_999)
+            ));
+            assert!(should_refresh_adapters(
+                &Some(cache),
+                now,
+                now + ADAPTER_REFRESH_INTERVAL
+            ));
+        }
+        assert!(!should_refresh_adapters(
+            &Some(observed_catalog()),
+            now + ADAPTER_REFRESH_INTERVAL,
+            now
+        ));
+    }
+
+    #[test]
+    fn transient_enumeration_failure_retains_last_good_catalog() {
+        let error = || windows::core::Error::from_hresult(windows::core::HRESULT(-2147467259));
+        let mut cache = Some(observed_catalog());
+        refresh_adapter_cache(&mut cache, Err(error()));
+        assert_eq!(cache.as_ref().unwrap().captions.len(), 2);
+        assert!(cache.as_ref().unwrap().software_keys.contains("0x0001865D"));
+        refresh_adapter_cache(&mut cache, Ok(GpuAdapterCatalog::default()));
+        assert!(cache.unwrap().captions.is_empty()); // successful removal replaces stale data
+        let mut failed = None;
+        refresh_adapter_cache(&mut failed, Err(error()));
+        assert!(failed.is_some()); // failed first enumeration is also rate-limited
+        assert!(!failed.as_ref().unwrap().is_confirmed());
+        refresh_adapter_cache(&mut failed, Ok(catalog_from_adapters([])));
+        assert!(failed.as_ref().unwrap().is_confirmed()); // even an empty successful inventory
+    }
+
+    #[test]
+    fn unknown_counter_channels_remain_visible_without_borrowed_vendor_data() {
+        let totals = HashMap::from([("0x00019999".into(), 23.0)]);
+        let entries = merge_gpu_utilization(Some(&observed_catalog()), &totals, &OnceLock::new());
+        assert!(entries
+            .iter()
+            .any(|(key, name, class, util)| key == "0x00019999"
+                && name == "GPU 0x00019999"
+                && *class == GpuClass::Unknown
+                && *util == 23.0));
+        let catalog =
+            catalog_from_adapters([("0x00000001".into(), "Qualcomm Adreno".into(), false)]);
+        let entries = merge_gpu_utilization(Some(&catalog), &HashMap::new(), &OnceLock::new());
+        assert_eq!(entries[0].1, "Qualcomm Adreno");
+        assert_eq!(entries[0].2, GpuClass::Unknown);
+    }
+
+    #[test]
+    fn duplicate_model_suffixes_follow_keys_regardless_of_enumeration_order() {
+        let adapters = vec![
+            ("b".into(), "NVIDIA Same Model".into(), false),
+            ("a".into(), "NVIDIA Same Model".into(), false),
         ];
-        let map = assign_captions_to_luids(&mut luids, &captions(&["Intel Iris", "NVIDIA RTX"]));
-        assert_eq!(map.len(), 3, "every known LUID must get a caption");
+        let a = catalog_from_adapters(adapters.clone());
+        let b = catalog_from_adapters(adapters.into_iter().rev());
+        let totals = HashMap::from([("a".into(), 10.0), ("b".into(), 40.0)]);
+        let first = merge_gpu_utilization(Some(&a), &totals, &OnceLock::new());
         assert_eq!(
-            map.get("0x00017C00").map(String::as_str),
-            Some("NVIDIA RTX")
-        );
-    }
-
-    #[test]
-    fn test_assign_captions_fewer_luids_than_captions() {
-        // One LUID, two captions: only the first caption is consumed.
-        let mut luids = vec!["0x00017A00".to_string()];
-        let map = assign_captions_to_luids(&mut luids, &captions(&["Intel Iris", "NVIDIA RTX"]));
-        assert_eq!(map.len(), 1);
-        assert_eq!(
-            map.get("0x00017A00").map(String::as_str),
-            Some("Intel Iris")
-        );
-    }
-
-    #[test]
-    fn test_assign_captions_empty_captions_yield_empty_values() {
-        let mut luids = vec!["0x00017A00".to_string()];
-        let map = assign_captions_to_luids(&mut luids, &[]);
-        assert_eq!(map.len(), 1);
-        assert_eq!(map.get("0x00017A00").map(String::as_str), Some(""));
-    }
-
-    #[test]
-    fn test_assign_captions_deterministic_for_same_input() {
-        let mut a = vec!["0x00017B00".to_string(), "0x00017A00".to_string()];
-        let mut b = a.clone();
-        let caps = captions(&["Intel Iris", "NVIDIA RTX"]);
-        let m1 = assign_captions_to_luids(&mut a, &caps);
-        let m2 = assign_captions_to_luids(&mut b, &caps);
-        assert_eq!(m1, m2);
-    }
-
-    #[test]
-    fn test_assign_captions_extra_luid_does_not_shift_existing_caption() {
-        // The caption for an already-known LUID must not move when a new LUID
-        // is added to the set (the fragility the old positional-index code had).
-        let mut base = vec!["0x00017A00".to_string(), "0x00017B00".to_string()];
-        let caps = captions(&["Intel Iris", "NVIDIA RTX"]);
-        let base_map = assign_captions_to_luids(&mut base, &caps);
-
-        let mut grown = vec![
-            "0x00017A00".to_string(),
-            "0x00017B00".to_string(),
-            "0x00017C00".to_string(),
-        ];
-        let grown_map = assign_captions_to_luids(&mut grown, &caps);
-
-        // "0x00017A00" stays on the first caption in both cases.
-        assert_eq!(
-            base_map.get("0x00017A00").map(String::as_str),
-            grown_map.get("0x00017A00").map(String::as_str)
+            first,
+            merge_gpu_utilization(Some(&b), &totals, &OnceLock::new())
         );
         assert_eq!(
-            grown_map.get("0x00017A00").map(String::as_str),
-            Some("Intel Iris")
+            first[0],
+            ("a".into(), "Same Model 1".into(), GpuClass::DGpu, 10.0)
+        );
+        assert_eq!(
+            first[1],
+            ("b".into(), "Same Model 2".into(), GpuClass::DGpu, 40.0)
         );
     }
 
@@ -694,7 +632,7 @@ mod tests {
         assert_eq!(entries.len(), 2);
     }
 
-    // --- merge_gpu_utilization_without_vendor_map (WMI-unavailable fallback) ---
+    // --- merge_gpu_utilization_without_vendor_map (metadata-unavailable fallback) ---
 
     #[test]
     fn test_merge_without_vendor_map_emits_one_unknown_class_entry_per_luid() {

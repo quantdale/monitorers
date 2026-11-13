@@ -354,7 +354,7 @@ export default function App() {
       historySelectRef.current?.focus({ preventScroll: true });
     }
   }, [connectionPending, historyLoadError]);
-  useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
+  useCardOrderInitialization(loaded, metrics, settings.cardOrder, save, settings.hiddenCardIds);
   const sensors = useCardSensors();
 
   const hasNvidiaData = computeHasNvidiaData(metrics);

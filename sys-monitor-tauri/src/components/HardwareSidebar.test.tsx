@@ -89,6 +89,12 @@ describe('mergeSidebarCardOrder', () => {
 // --- persistSidebarCardOrder (non-destructive store merge) ---
 
 describe('persistSidebarCardOrder', () => {
+  it('preserves placement when a unique legacy low-half GPU key is completed', () => {
+    const current = ['sb_memory', 'sb_gpu_0x00000002', 'sb_cpu'];
+    const defaults = ['sb_cpu', 'sb_memory', 'sb_gpu_0x00000001_0x00000002'];
+    expect(persistSidebarCardOrder(current, defaults)).toEqual(['sb_memory', 'sb_gpu_0x00000001_0x00000002', 'sb_cpu']);
+    expect(mergeSidebarCardOrder(current, defaults)).toEqual(['sb_memory', 'sb_gpu_0x00000001_0x00000002', 'sb_cpu']);
+  });
   it('keeps saved stable ids the current discovery pass did not enumerate', () => {
     // Regression pin: Windows materializes GPU Engine counters lazily, so a
     // session can legitimately discover fewer adapters than the previous one.

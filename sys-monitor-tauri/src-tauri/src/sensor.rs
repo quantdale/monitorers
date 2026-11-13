@@ -73,15 +73,14 @@ impl SensorProvider for GpuSensorProvider {
     fn poll(
         &mut self,
         state: &mut CollectorState,
-        wmi_con: Option<&wmi::WMIConnection>,
+        _wmi_con: Option<&wmi::WMIConnection>,
     ) -> RawPoll {
         let pdh_ok = collector::collect_pdh(state);
         let gpu_updates = query_gpu_utilization_pdh(
             &state.pdh,
-            wmi_con,
             &state.gpu_error_lock,
-            &mut state.gpu_vendor_map,
-            &mut state.gpu_vendor_map_last_build,
+            &mut state.gpu_adapters,
+            &mut state.gpu_adapters_last_refresh,
         );
 
         #[cfg(feature = "nvml")]
@@ -111,6 +110,10 @@ impl SensorProvider for GpuSensorProvider {
 
         RawPoll {
             gpu_updates,
+            gpu_inventory_confirmed: state
+                .gpu_adapters
+                .as_ref()
+                .is_some_and(crate::collector::GpuAdapterCatalog::is_confirmed),
             nvidia_telemetry,
             pdh_ok,
             ..Default::default()

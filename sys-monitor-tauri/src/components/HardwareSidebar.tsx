@@ -22,6 +22,7 @@ import type { HardwareProfile, HardwareProfileState } from '../hooks/useHardware
 import { useSettings } from '../hooks/useSettings';
 import { useCardSensors } from '../hooks/useCardSensors';
 import { cardDropTarget } from '../cardDropTarget';
+import { migrateLegacyGpuCardOrder } from '../cardIdentity';
 import { SortableSidebarCard } from './SortableSidebarCard';
 import { formatGigabytes } from '../cards/formatters';
 import {
@@ -147,7 +148,8 @@ export function migrateLegacySidebarCardOrder(current: string[], profile?: Hardw
  * arrangement out of settings.json.
  */
 export function persistSidebarCardOrder(current: string[], defaultIds: string[]): string[] {
-  const migrated = migrateLegacySidebarCardOrder(current);
+  const gpus = defaultIds.filter((id) => id.startsWith('sb_gpu_')).map((id) => ({ key: id.slice('sb_gpu_'.length), name: '' }));
+  const migrated = migrateLegacyGpuCardOrder(migrateLegacySidebarCardOrder(current), gpus, 'sb_gpu_');
   const seen = new Set(migrated);
   const merged = [...migrated];
   for (const id of defaultIds) {
@@ -164,19 +166,8 @@ export function mergeSidebarCardOrder(
   defaultIds: string[],
   profile?: HardwareProfile
 ): string[] {
-  const migrated = profile ? migrateLegacySidebarCardOrder(current, profile) : current;
-  if (migrated.length === 0) return defaultIds;
-  const currentSet = new Set(migrated);
-  const hasNew = defaultIds.some((id) => !currentSet.has(id));
-  if (!hasNew) return migrated.filter((id) => defaultIds.includes(id));
-  const merged: string[] = [];
-  for (const id of migrated) {
-    if (defaultIds.includes(id)) merged.push(id);
-  }
-  for (const id of defaultIds) {
-    if (!merged.includes(id)) merged.push(id);
-  }
-  return merged;
+  void profile;
+  return persistSidebarCardOrder(current, defaultIds).filter((id) => defaultIds.includes(id));
 }
 
 /**
