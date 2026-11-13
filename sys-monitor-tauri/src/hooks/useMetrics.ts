@@ -437,12 +437,31 @@ export function appendLiveEvent(buffer: LiveEvent[], event: LiveEvent): LiveEven
   return buffer;
 }
 
+/** Bound IPC waits without losing ownership of late listener registrations.
+ * The caller still disposes raw listeners; late request results cannot win a
+ * promise that has already timed out. Cleanup cancels its own timer. */
+function metricsRequest<T>(work: Promise<T>, operation: string) {
+  let timer: number | undefined;
+  const promise = new Promise<T>((resolve, reject) => {
+    timer = window.setTimeout(() => reject(new Error(`${operation} timed out after 10 seconds.`)), 10_000);
+    work.then(
+      (value) => { window.clearTimeout(timer); resolve(value); },
+      (error: unknown) => { window.clearTimeout(timer); reject(error); },
+    );
+  });
+  return { promise, cancel: () => window.clearTimeout(timer) };
+}
+
 export interface UseMetricsResult {
   metrics: SlicedHistory | null;
   /** Includes actionable schema mismatch text when an incompatible payload is rejected. */
   historyLoadError: string | null;
   /** Latest supervised-lifecycle status (null until one arrives). */
   lifecycle: CollectorStatus | null;
+  /** Reconnect listeners and reload the current history window in place. */
+  reloadConnection: () => void;
+  /** True while connection registration or the selected history read is pending. */
+  connectionPending: boolean;
   /**
    * Manual retry for an exhausted recovery budget. Resolves to the resulting
    * lifecycle state — matching `retry_collection` exactly: `'failed'` means
@@ -456,11 +475,18 @@ export interface UseMetricsResult {
 export function useMetrics(windowSeconds: number): UseMetricsResult {
   const [history, setHistory] = useState<HistoryPayload | null>(null);
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
-  const [memGb, setMemGb] = useState({ used: 0, total: 0 });
+  const [memGb, setMemGb] = useState({ used: Number.NaN, total: Number.NaN });
   const [collectorError, setCollectorError] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<CollectorStatus | null>(null);
-  const [latestCpu, setLatestCpu] = useState(0);
+  const [latestCpu, setLatestCpu] = useState<number | null>(null);
   const [latestGpu, setLatestGpu] = useState<Record<string, number>>({});
+  const [connectionRevision, setConnectionRevision] = useState(0);
+  const [registeredRevision, setRegisteredRevision] = useState(0);
+  const [historyPending, setHistoryPending] = useState(true);
+  const [subscriptionPending, setSubscriptionPending] = useState(true);
+  // Synchronous click fence: several activations in one task must still start
+  // only one reconnect, before disabled state has reached the DOM.
+  const reloadInFlight = useRef(false);
   const historyRef = useRef<HistoryPayload | null>(null);
   const historyRequestError = useRef<string | null>(null);
   const liveSchemaError = useRef<string | null>(null);
@@ -505,10 +531,28 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     return getSimBackend().retryCollection();
   }, []);
 
+  const connectionPending = historyPending || subscriptionPending;
   useEffect(() => {
+    if (!connectionPending) reloadInFlight.current = false;
+  }, [connectionPending]);
+
+  const reloadConnection = useCallback(() => {
+    if (reloadInFlight.current) return;
+    reloadInFlight.current = true;
+    setHistoryPending(true);
+    setSubscriptionPending(true);
+    setConnectionRevision((revision) => revision + 1);
+  }, []);
+
+  useEffect(() => {
+    // On an explicit reconnect, wait for listener registration attempts before
+    // reading the ring. Events in that gap are recovered by the history read;
+    // events during the read are reconciled by the existing sequence replay.
+    if (registeredRevision !== connectionRevision) return;
     const generation = ++requestGeneration.current;
     const startSequence = liveSequence.current;
     let cancelled = false;
+    setHistoryPending(true);
 
     const acceptHistory = (payload: HistoryPayload) => {
       if (cancelled || generation !== requestGeneration.current) return;
@@ -523,7 +567,6 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         lastBackendTimestamp.current = Math.max(next.timestamps.at(-1) ?? 0, lastBackendTimestamp.current ?? 0);
         setHistory(next);
         historyRequestError.current = null;
-        liveSchemaError.current = null;
         syncLoadError();
         // The accepted payload now includes every event recorded so far.
         liveEvents.current = liveEvents.current.filter((event) => event.sequence > liveSequence.current);
@@ -531,6 +574,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
         historyRequestError.current = error instanceof SchemaMismatchError ? error.message : String(error);
         syncLoadError();
       }
+      setHistoryPending(false);
     };
 
     const rejectHistory = (error: unknown) => {
@@ -538,29 +582,28 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       console.warn('[useMetrics] get_history failed:', error);
       historyRequestError.current = error instanceof Error ? error.message : String(error);
       syncLoadError();
+      setHistoryPending(false);
     };
 
+    let work: Promise<HistoryPayload>;
     if (isTauri()) {
-      invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds })
-        .then(acceptHistory)
-        .catch(rejectHistory);
+      work = invoke<HistoryPayload>('get_history', { windowSecs: windowSeconds });
     } else {
       // Pass the selected window, mirroring the Tauri branch's
       // `invoke('get_history', { windowSecs })`. The mock now answers with an
       // elapsed-time slice of its own accumulating ring, so the browser lane
       // exercises the same windowing semantics as production instead of
       // re-seeding an unrelated series on every request.
-      getSimBackend()
-        .getHistory(windowSeconds)
-        .then(acceptHistory)
-        .catch(rejectHistory);
-      setMemGb({ used: 8, total: 16 });
+      work = getSimBackend().getHistory(windowSeconds);
     }
+    const request = metricsRequest(work, 'Metrics history request');
+    request.promise.then(acceptHistory).catch(rejectHistory);
 
     return () => {
       cancelled = true;
+      request.cancel();
     };
-  }, [windowSeconds]);
+  }, [windowSeconds, connectionRevision, registeredRevision]);
 
   useEffect(() => {
     const handleSnapshot = (snap: MetricsSnapshot) => {
@@ -642,11 +685,38 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
       const unlistenStatusPromise = listen<CollectorStatus>('collector-status', (event) => {
         if (!bootstrapCancelled) handleCollectorStatus(event.payload);
       });
-      void Promise.all([unlistenMetricsPromise, unlistenErrorPromise, unlistenStatusPromise])
-        .catch((error) => {
+      const failSubscription = (error: unknown) => {
+        if (bootstrapCancelled) return;
+        subscriptionError.current = `Live metrics subscription failed: ${error instanceof Error ? error.message : String(error)}`;
+        syncLoadError();
+      };
+      // Report failures immediately even if a sibling registration is slow.
+      for (const registration of [unlistenMetricsPromise, unlistenErrorPromise, unlistenStatusPromise]) {
+        void registration.catch(failSubscription);
+      }
+      // Wait for every attempt, including late successful registrations after
+      // another rejects. Each successful listener still needs proper cleanup.
+      const registration = metricsRequest(
+        Promise.allSettled([unlistenMetricsPromise, unlistenErrorPromise, unlistenStatusPromise]),
+        'Live metrics subscription',
+      );
+      void registration.promise
+        .then((results) => {
           if (bootstrapCancelled) return;
-          subscriptionError.current = `Live metrics subscription failed: ${error instanceof Error ? error.message : String(error)}`;
+          const failure = results.find((result) => result.status === 'rejected');
+          const error: unknown = failure?.status === 'rejected' ? failure.reason : null;
+          subscriptionError.current = failure
+            ? `Live metrics subscription failed: ${error instanceof Error ? error.message : String(error)}`
+            : null;
           syncLoadError();
+          setSubscriptionPending(false);
+          setRegisteredRevision(connectionRevision);
+        })
+        .catch((error: unknown) => {
+          if (bootstrapCancelled) return;
+          failSubscription(error);
+          setSubscriptionPending(false);
+          setRegisteredRevision(connectionRevision);
         });
 
       // Bootstrap the CURRENT managed status on mount/reload so an already-
@@ -672,6 +742,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
 
       return () => {
         bootstrapCancelled = true;
+        registration.cancel();
         unlistenMetricsPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenErrorPromise.then((unlisten) => unlisten()).catch(() => undefined);
         unlistenStatusPromise.then((unlisten) => unlisten()).catch(() => undefined);
@@ -683,13 +754,17 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     backend.onCollectorError(handleCollectorError);
     backend.onCollectorStatus(handleCollectorStatus);
     backend.start();
+    subscriptionError.current = null;
+    syncLoadError();
+    setSubscriptionPending(false);
+    setRegisteredRevision(connectionRevision);
     return () => {
       backend.stop();
       backend.offSnapshot(handleSnapshot);
       backend.offCollectorError(handleCollectorError);
       backend.offCollectorStatus(handleCollectorStatus);
     };
-  }, []);
+  }, [connectionRevision]);
 
   // Heavy windowing pass — recomputed ONLY when the committed history or the
   // selected window changes (1 Hz at most), never on the ~250ms scalar-only
@@ -747,7 +822,7 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     return {
       timestamps: windowed.timestamps,
       cpu: windowed.cpu,
-      latestCpu,
+      latestCpu: latestCpu ?? windowed.cpu.at(-1) ?? Number.NaN,
       cpu_name: windowed.cpu_name,
       cpu_temp_c: windowed.cpu_temp_c,
       mem: windowed.mem,
@@ -765,5 +840,5 @@ export function useMetrics(windowSeconds: number): UseMetricsResult {
     };
   }, [windowed, memGb, latestCpu, latestGpu, collectorError, lifecycle]);
 
-  return { metrics, historyLoadError, lifecycle, retryMetrics };
+  return { metrics, historyLoadError, lifecycle, retryMetrics, reloadConnection, connectionPending };
 }

@@ -15,6 +15,7 @@ import { useSettings, WINDOW_SECS_OPTIONS } from './hooks/useSettings';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ViewModeSelector } from './components/ViewModeSelector';
 import { MetricCardSelector } from './components/MetricCardSelector';
+import { MetricsConnectionError } from './components/MetricsConnectionError';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HardwareSidebar } from './components/HardwareSidebar';
 import { useHardwareProfile } from './hooks/useHardwareProfile';
@@ -279,6 +280,9 @@ export default function App() {
   const sidebarOverlay = useMediaQuery(SIDEBAR_OVERLAY_MEDIA);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const metricsTriggerRef = useRef<HTMLButtonElement>(null);
+  const historySelectRef = useRef<HTMLSelectElement>(null);
+  const connectionRetryRef = useRef<HTMLButtonElement>(null);
+  const connectionRetryOrigin = useRef<HTMLButtonElement | null>(null);
   const restoreSidebarFocus = useRef(false);
 
   const closeSidebar = useCallback(() => {
@@ -327,7 +331,7 @@ export default function App() {
   }, [sidebarOverlay, sidebarOpen]);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const hardwareProfileState = useHardwareProfile();
-  const { metrics, historyLoadError, lifecycle, retryMetrics } = useMetrics(windowSecs);
+  const { metrics, historyLoadError, lifecycle, retryMetrics, reloadConnection, connectionPending } = useMetrics(windowSecs);
   const collectorState = lifecycle?.state ?? metrics?.collectorState ?? null;
   const [retryPending, setRetryPending] = useState(false);
 
@@ -336,6 +340,20 @@ export default function App() {
     setRetryPending(true);
     void retryMetrics().finally(() => setRetryPending(false));
   }
+
+  function handleRetryConnection() {
+    connectionRetryOrigin.current = connectionRetryRef.current;
+    reloadConnection();
+  }
+
+  useEffect(() => {
+    if (connectionPending || !connectionRetryOrigin.current) return;
+    const origin = connectionRetryOrigin.current;
+    connectionRetryOrigin.current = null;
+    if (!historyLoadError && (document.activeElement === origin || document.activeElement === document.body)) {
+      historySelectRef.current?.focus({ preventScroll: true });
+    }
+  }, [connectionPending, historyLoadError]);
   useCardOrderInitialization(loaded, metrics, settings.cardOrder, save);
   const sensors = useCardSensors();
 
@@ -634,6 +652,7 @@ export default function App() {
           </motion.div>
           <motion.div variants={riseItem}>
             <TimeRangeSelector
+              selectRef={historySelectRef}
               options={TIME_OPTIONS}
               value={windowSecs}
               onChange={(value) => save({ windowSecs: value })}
@@ -642,6 +661,7 @@ export default function App() {
           {metrics && cardOrder.length > 0 && (
             <motion.div variants={riseItem}>
               <MetricCardSelector
+                disabled={sidebarOverlay && sidebarOpen}
                 triggerRef={metricsTriggerRef}
                 items={cardOrder.filter(id => isCardPresent(id, metrics)).map(id => ({ id, label: getCardLabel(id) }))}
                 hiddenIds={hiddenCardIds}
@@ -798,47 +818,20 @@ export default function App() {
         }}
       >
       <AnimatePresence initial={false}>
-        {historyLoadError && metrics && (
-          <motion.div
+        {historyLoadError && (
+          <MetricsConnectionError
             key="history-error"
-            role="alert"
-            aria-live="polite"
-            variants={riseItem}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            style={{
-              color: dangerText,
-              padding: '9px 13px',
-              marginBottom: 12,
-              fontSize: type.body,
-              background: dangerTint,
-              border: dangerBorder,
-              borderRadius: radius.control,
-            }}
-          >
-            Couldn't refresh metrics history — {historyLoadError}. Showing previous data.
-          </motion.div>
+            error={historyLoadError}
+            hasMetrics={metrics !== null}
+            pending={connectionPending}
+            onRetry={handleRetryConnection}
+            retryRef={connectionRetryRef}
+          />
         )}
       </AnimatePresence>
 
       {historyLoadError && !metrics ? (
-        <motion.div
-          variants={riseItem}
-          initial="hidden"
-          animate="visible"
-          role="alert"
-          aria-live="assertive"
-          style={{
-            color: dangerText,
-            padding: '40px 0',
-            textAlign: 'center',
-            fontSize: type.body,
-            lineHeight: 1.6,
-          }}
-        >
-          Couldn't load metrics history — {historyLoadError}. Try restarting the app.
-        </motion.div>
+        null
       ) : hasMetricsButNoVisibleCards(metrics, visibleCardOrder) ? (
         <EmptyDashboard
           title="All metrics hidden"

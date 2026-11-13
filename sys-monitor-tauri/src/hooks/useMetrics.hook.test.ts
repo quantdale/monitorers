@@ -2,7 +2,9 @@ import React, { act } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import type { HistoryPayload, MetricsSnapshot } from '../types/metrics';
+import { getSimBackend } from '../sim/mockBackend';
 
 // Fakes the Tauri event/invoke surface so the hook's real "metrics-update" /
 // "collector-error" listener wiring can be exercised end-to-end, the same way
@@ -135,6 +137,8 @@ interface RenderResult {
   historyLoadError: () => string | null;
   lifecycle: () => CollectorStatus | null;
   retryMetrics: () => Promise<CollectorStatus['state'] | null>;
+  reloadConnection: () => void;
+  connectionPending: () => boolean;
   unmount: () => void;
   rerender: (windowSecs: number) => void;
 }
@@ -163,6 +167,8 @@ function renderUseMetrics(windowSecs: number, strictMode = false): RenderResult 
     historyLoadError: () => hookValue?.historyLoadError ?? null,
     lifecycle: () => hookValue?.lifecycle ?? null,
     retryMetrics: () => (hookValue ? hookValue.retryMetrics() : Promise.resolve(null)),
+    reloadConnection: () => hookValue?.reloadConnection(),
+    connectionPending: () => hookValue?.connectionPending ?? false,
     unmount: () => act(() => root.unmount()),
     rerender: (w: number) => act(() => root.render(React.createElement(TestComponent, { w }))),
   };
@@ -504,6 +510,19 @@ describe('useMetrics (Tauri event wiring)', () => {
     unmount();
   });
 
+  it('does not let compatible history hide an unresolved live-schema failure', async () => {
+    const { historyLoadError, rerender, unmount } = renderUseMetrics(60);
+    await act(async () => { await Promise.resolve(); });
+    act(() => emit('metrics-update', { ...baseSnapshot(true), schema_version: 3 }));
+    expect(historyLoadError()).toMatch(/schema mismatch.*MetricsSnapshot/i);
+    rerender(300);
+    await act(async () => { await Promise.resolve(); });
+    expect(historyLoadError()).toMatch(/schema mismatch.*MetricsSnapshot/i);
+    act(() => emit('metrics-update', baseSnapshot(true)));
+    expect(historyLoadError()).toBeNull();
+    unmount();
+  });
+
   it('keeps the metrics object referentially stable across unrelated re-renders', async () => {
     const { result, rerender, unmount } = renderUseMetrics(60);
     await act(async () => {
@@ -534,6 +553,229 @@ describe('useMetrics (Tauri event wiring)', () => {
     });
     expect(result().cpu.at(-1)).toBe(42);
     unmount();
+  });
+});
+
+describe('useMetrics in-place connection recovery', () => {
+  beforeEach(freshIpcMock);
+  afterEach(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+
+  async function flush() {
+    await act(async () => {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+  }
+
+  it('uses known history for startup CPU and leaves unknown memory sizes unavailable', async () => {
+    deferredHistory = true;
+    const hook = renderUseMetrics(60);
+    await act(async () => {
+      historyRequests[0].resolve({ ...emptyHistoryPayload(), timestamps: [1_000], cpu: [73], mem: [25], net_recv: [0], net_sent: [0] });
+    });
+    expect(hook.result().latestCpu).toBe(73);
+    expect(Number.isNaN(hook.result().mem_used_gb)).toBe(true);
+    expect(Number.isNaN(hook.result().mem_total_gb)).toBe(true);
+    act(() => emit('metrics-update', { ...baseSnapshot(false), cpu: 0 }));
+    expect(hook.result().latestCpu).toBe(0); // a genuine zero is still valid
+    expect(hook.result().mem_used_gb).toBe(8);
+    hook.unmount();
+  });
+
+  it('does not reset live memory sizes to fixture values on a browser history refresh', async () => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    vi.useFakeTimers();
+    const hook = renderUseMetrics(60);
+    try {
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      const knownUsed = hook.result().mem_used_gb;
+      expect(knownUsed).not.toBe(8);
+      hook.rerender(300);
+      await flush();
+      expect(hook.result().mem_used_gb).toBe(knownUsed);
+      expect(hook.result().mem_total_gb).toBe(16);
+    } finally {
+      hook.unmount();
+      getSimBackend().stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces retry clicks, retains metrics and replays live events during the selected-window read', async () => {
+    const hook = renderUseMetrics(60);
+    await flush();
+    act(() => emit('metrics-update', { ...baseSnapshot(true), timestamp_ms: 1_000 }));
+    historyInvokeError = new Error('history unavailable');
+    hook.rerender(300);
+    await flush();
+    expect(hook.historyLoadError()).toBe('history unavailable');
+
+    historyInvokeError = null;
+    deferredHistory = true;
+    act(() => {
+      hook.reloadConnection();
+      hook.reloadConnection();
+      hook.reloadConnection();
+    });
+    expect(hook.result().cpu).toEqual([42]);
+    expect(hook.connectionPending()).toBe(true);
+    await flush();
+    expect(vi.mocked(listen)).toHaveBeenCalledTimes(6);
+    expect(historyRequests).toHaveLength(1);
+    expect(vi.mocked(invoke)).toHaveBeenLastCalledWith('get_history', { windowSecs: 300 });
+    expect(hook.historyLoadError()).toBe('history unavailable');
+    act(() => emit('metrics-update', { ...baseSnapshot(true), timestamp_ms: 2_000, cpu: 55 }));
+    await act(async () => {
+      historyRequests[0].resolve({ ...emptyHistoryPayload(), timestamps: [1_000], cpu: [10], mem: [10], net_recv: [0], net_sent: [0] });
+    });
+    expect(hook.result().cpu).toEqual([10, 55]);
+    expect(hook.connectionPending()).toBe(false);
+    expect(hook.historyLoadError()).toBeNull();
+    expect(retryInvocations).toBe(0);
+    hook.unmount();
+  });
+
+  it('retries an initial failure repeatedly and eventually loads without a remount', async () => {
+    historyInvokeError = new Error('history offline');
+    const hook = renderUseMetrics(600);
+    await flush();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      act(hook.reloadConnection);
+      await flush();
+      expect(hook.historyLoadError()).toBe('history offline');
+      expect(hook.connectionPending()).toBe(false);
+      expect(() => hook.result()).toThrow('metrics not loaded yet');
+    }
+    historyInvokeError = null;
+    act(hook.reloadConnection);
+    await flush();
+    expect(hook.result().cpu).toEqual([]);
+    expect(hook.historyLoadError()).toBeNull();
+    expect(hook.connectionPending()).toBe(false);
+    hook.unmount();
+  });
+
+  it('reconnects a failed listener and fences callbacks from the disposed connection', async () => {
+    vi.mocked(listen).mockRejectedValueOnce(new Error('listener unavailable'));
+    collectorStatusAnswer = { status: status('healthy') };
+    const hook = renderUseMetrics(60);
+    await flush();
+    expect(hook.historyLoadError()).toContain('listener unavailable');
+    const oldCalls = [...vi.mocked(listen).mock.calls];
+    act(hook.reloadConnection);
+    await flush();
+    expect(hook.historyLoadError()).toBeNull();
+    act(() => {
+      for (const [event, callback] of oldCalls) {
+        const payload = event === 'metrics-update'
+          ? { ...baseSnapshot(true), cpu: 99 }
+          : event === 'collector-status' ? status('failed') : 'disposed error';
+        callback({ event, id: 0, payload });
+      }
+      emit('metrics-update', baseSnapshot(true));
+    });
+    expect(hook.result().cpu).toEqual([42]);
+    expect(hook.result().collectorError).toBeNull();
+    expect(hook.lifecycle()?.state).toBe('healthy');
+    hook.unmount();
+    expect(listeners.size).toBe(3); // removal is asynchronous
+    await flush();
+    expect(listeners.size).toBe(0);
+  });
+
+  it('waits for reconnect registration before refetch and ignores an obsolete history response', async () => {
+    deferredHistory = true;
+    const hook = renderUseMetrics(30);
+    await flush();
+    expect(historyRequests).toHaveLength(1);
+    let attach: (() => void) | undefined;
+    vi.mocked(listen).mockImplementationOnce((event, callback) => {
+      listeners.set(event, ({ payload }) => callback({ event, id: 0, payload }));
+      return new Promise((resolve) => {
+        attach = () => resolve(() => { listeners.delete(event); });
+      });
+    });
+    act(hook.reloadConnection);
+    await flush();
+    expect(historyRequests).toHaveLength(1);
+    expect(hook.connectionPending()).toBe(true);
+    await act(async () => { historyRequests[0].reject(new Error('obsolete request')); });
+    expect(hook.historyLoadError()).toBeNull();
+    expect(hook.connectionPending()).toBe(true);
+    act(() => attach?.());
+    await flush();
+    expect(historyRequests).toHaveLength(2);
+    await act(async () => { historyRequests[1].resolve(emptyHistoryPayload()); });
+    expect(hook.connectionPending()).toBe(false);
+    expect(hook.historyLoadError()).toBeNull();
+    hook.unmount();
+    await flush();
+    expect(listeners.size).toBe(0);
+  });
+
+  it('bounds an unanswered history read, rejects its late result and permits a fresh retry', async () => {
+    vi.useFakeTimers();
+    deferredHistory = true;
+    const hook = renderUseMetrics(60);
+    try {
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(hook.historyLoadError()).toContain('history request timed out');
+      expect(hook.connectionPending()).toBe(false);
+      await act(async () => { historyRequests[0].resolve(emptyHistoryPayload()); });
+      expect(() => hook.result()).toThrow('metrics not loaded yet');
+      expect(hook.historyLoadError()).toContain('timed out');
+      deferredHistory = false;
+      act(hook.reloadConnection);
+      await flush();
+      expect(hook.historyLoadError()).toBeNull();
+      expect(hook.connectionPending()).toBe(false);
+    } finally {
+      hook.unmount();
+      await flush();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds unanswered registration and cleans up a late listener after retry', async () => {
+    vi.useFakeTimers();
+    let finishRegistration: ((dispose: () => void) => void) | undefined;
+    vi.mocked(listen).mockImplementationOnce(() => new Promise((resolve) => { finishRegistration = resolve; }));
+    const hook = renderUseMetrics(60);
+    try {
+      await flush();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(hook.historyLoadError()).toContain('subscription timed out');
+      expect(hook.connectionPending()).toBe(false);
+      act(hook.reloadConnection);
+      await flush();
+      expect(hook.historyLoadError()).toBeNull();
+      const disposeLate = vi.fn();
+      await act(async () => { finishRegistration?.(disposeLate); });
+      expect(disposeLate).toHaveBeenCalledOnce();
+      act(() => emit('metrics-update', baseSnapshot(true)));
+      expect(hook.result().cpu).toEqual([42]);
+    } finally {
+      hook.unmount();
+      await flush();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels request deadlines on unmount even if IPC never answers', async () => {
+    vi.useFakeTimers();
+    deferredHistory = true;
+    vi.mocked(listen).mockImplementationOnce(() => new Promise(() => {}));
+    const hook = renderUseMetrics(60);
+    await flush();
+    expect(vi.getTimerCount()).toBe(2);
+    hook.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
   });
 });
 

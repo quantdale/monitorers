@@ -97,4 +97,44 @@ test.describe('hardware sidebar presentation', () => {
     expect(await overflowingCards(page)).toBe(0);
     await expect(page.getByTestId('hardware-sidebar-scrim')).toHaveCount(0);
   });
+
+  test('a modal resize dismisses the portaled selector and owns focus exclusively', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.goto('/');
+    await waitForFirstMetrics(page);
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    await page.getByRole('button', { name: /Metrics/ }).click();
+    const metricsDialog = page.getByRole('dialog', { name: 'Metric card visibility' });
+    await metricsDialog.getByRole('checkbox', { name: 'CPU', exact: true }).uncheck();
+
+    await page.setViewportSize({ width: 400, height: 700 });
+    const close = page.getByRole('button', { name: 'Close hardware info' });
+    await expect(metricsDialog).toHaveCount(0);
+    await expect(close).toBeFocused();
+    for (const key of ['Tab', 'Shift+Tab', 'Tab']) {
+      await page.keyboard.press(key);
+      await expect(close).toBeFocused();
+    }
+    await page.screenshot({ path: testInfo.outputPath('exclusive-hardware-modal.png') });
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Show hardware info' })).toBeFocused();
+
+    const metricsTrigger = page.getByRole('button', { name: /Metrics/ });
+    await metricsTrigger.click();
+    await expect(metricsDialog.getByRole('checkbox', { name: 'CPU', exact: true })).not.toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(metricsTrigger).toBeFocused();
+
+    // Repeating the breakpoint roundtrip must not resurrect latent open state.
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    await metricsTrigger.click();
+    await expect(metricsDialog).toBeVisible();
+    await page.setViewportSize({ width: 639, height: 700 });
+    await expect(close).toBeFocused();
+    await page.setViewportSize({ width: 900, height: 700 });
+    await expect(page.getByRole('button', { name: 'Hide hardware info' })).toBeFocused();
+    await expect(metricsTrigger).toHaveAttribute('aria-expanded', 'false');
+    await expect(metricsDialog).toHaveCount(0);
+  });
 });

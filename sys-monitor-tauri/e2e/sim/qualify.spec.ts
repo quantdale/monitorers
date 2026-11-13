@@ -14,7 +14,7 @@
  * The remote-debugging port is supplied per-process via environment variables
  * owned by this driver — shipped configuration carries no debugging flag.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RealAppDriver } from './drivers/RealAppDriver';
@@ -40,6 +40,24 @@ function assertBuiltExe(): string {
 async function assertNoOrphanAppProcesses(): Promise<void> {
   // Shared with the simulation runner's real-lane teardown guard.
   await assertNoOrphanProcesses(APP_EXE);
+}
+
+/** One synthetic transport response in the isolated CDP page. Tauri's invoke
+ * function is deliberately immutable; leave it intact and intercept fetch at
+ * the test boundary. The following attempt uses the untouched native fetch. */
+async function failNextIpc(page: Page, command: string, message: string): Promise<void> {
+  await page.evaluate(({ command, message }) => {
+    const nativeFetch = window.fetch;
+    window.fetch = (input, options) => {
+      const address = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(address, window.location.href);
+      if (url.hostname === 'ipc.localhost' && decodeURIComponent(url.pathname) === `/${command}`) {
+        window.fetch = nativeFetch;
+        return Promise.resolve(new Response(message, { headers: { 'Tauri-Response': 'error', 'Content-Type': 'text/plain' } }));
+      }
+      return nativeFetch(input, options);
+    };
+  }, { command, message });
 }
 
 test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) => {
@@ -170,6 +188,33 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     }
     expect(persistedViewMode, 'settings write landed in the per-run isolated store').toBe('tile');
 
+    // CDP-scoped transient failures at the transport boundary, not shipped
+    // fault controls. Both recovery attempts use the real Tauri commands and
+    // listener implementation; the collector process stays alive throughout.
+    await failNextIpc(page, 'get_history', 'qualification history connection failure');
+    await page.getByRole('combobox', { name: 'History time range' }).selectOption('300');
+    const connectionError = page.getByTestId('metrics-connection-error');
+    const retryConnection = page.getByRole('button', { name: 'Retry metrics connection', exact: true });
+    await expect(connectionError).toContainText('qualification history connection failure');
+    await expect(page.getByTestId('metric-card-cpu')).toBeVisible();
+
+    await failNextIpc(page, 'plugin:event|listen', 'qualification live listener failure');
+    await retryConnection.click();
+    await expect(connectionError).toContainText('qualification live listener failure');
+    await expect(retryConnection).toBeEnabled();
+    const beforeReconnect = Number(await latestTs());
+    await retryConnection.focus();
+    await page.keyboard.press('Enter');
+    await expect(connectionError).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'History time range' })).toBeFocused();
+    await expect(page.getByRole('combobox', { name: 'History time range' })).toHaveValue('300');
+    await expect(page.getByRole('button', { name: 'Tile', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => Number(await latestTs()), { timeout: 15_000 }).toBeGreaterThan(beforeReconnect);
+    await expect.poll(() => {
+      const persisted = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+      return { windowSecs: persisted.windowSecs, viewMode: persisted.viewMode };
+    }).toEqual({ windowSecs: 300, viewMode: 'tile' });
+
     // ── 5. Qualify the responsive drawer with real hardware and drag sensors ──
     await page.setViewportSize({ width: 400, height: 700 });
     await page.getByRole('button', { name: 'Show hardware info' }).click();
@@ -204,6 +249,24 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     await page.keyboard.press('Escape');
     await expect(drawer).toBeHidden();
     await expect(page.getByRole('button', { name: 'Show hardware info' })).toBeFocused();
+
+    // Both desktop surfaces may coexist, but only the hardware modal can own
+    // focus when a responsive transition makes the dashboard behind it inert.
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.getByRole('button', { name: 'Show hardware info' }).click();
+    await page.getByRole('button', { name: /Metrics/ }).click();
+    const metricVisibility = page.getByRole('dialog', { name: 'Metric card visibility' });
+    await expect(metricVisibility).toBeVisible();
+    await page.setViewportSize({ width: 400, height: 700 });
+    await expect(metricVisibility).toHaveCount(0);
+    await expect(close).toBeFocused();
+    for (const key of ['Tab', 'Shift+Tab']) {
+      await page.keyboard.press(key);
+      await expect.poll(() => drawer.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    }
+    await page.screenshot({ path: testInfo.outputPath('exclusive-modal-real.png') });
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
     await page.setViewportSize({ width: 900, height: 1100 });
     await page.screenshot({ path: testInfo.outputPath('dashboard-real.png') });
 
@@ -212,7 +275,7 @@ test('packaged app qualifies end-to-end over real IPC', async ({ }, testInfo) =>
     await assertNoOrphanAppProcesses();
     await driver.selfTest();
 
-    console.log('[qualify] PASS: real IPC, live data, isolated settings, modal focus, drag cancellation, clean exit');
+    console.log('[qualify] PASS: real IPC, live data, connection retries, isolated settings, modal focus, drag cancellation, clean exit');
   } finally {
     // Idempotent even after an explicit close above, and crucially runs on
     // launch failure too: kills the spawned app, removes the elevated-host

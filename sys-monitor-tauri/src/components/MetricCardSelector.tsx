@@ -29,14 +29,23 @@ interface Props {
   onToggle: (id: string, visible: boolean) => void;
   /** Optional so an empty-state action can open the same trigger. */
   triggerRef?: RefObject<HTMLButtonElement | null>;
+  /** A modal drawer owns focus while the dashboard behind it is inert. */
+  disabled?: boolean;
 }
 
-export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: externalTriggerRef }: Props) {
+export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: externalTriggerRef, disabled = false }: Props) {
   const [open, setOpen] = useState(false);
+  const panelOpen = open && !disabled;
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocus = useRef(false);
+
+  // Derive closure synchronously above so the portal and focus boundary leave
+  // immediately; clear latent state so a later resize cannot reopen it.
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   const setTrigger = useCallback((node: HTMLButtonElement | null) => {
     triggerRef.current = node;
@@ -45,7 +54,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
   const [position, setPosition] = useState({ top: 8, left: 8, width: 240, maxHeight: 0 });
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!panelOpen) return;
     function reposition() {
       const trigger = triggerRef.current;
       if (!trigger) return;
@@ -73,16 +82,16 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
       window.removeEventListener('resize', reposition);
       document.removeEventListener('scroll', reposition, true);
     };
-  }, [open]);
+  }, [panelOpen]);
 
-  useFocusBoundary(open, panelRef);
+  useFocusBoundary(panelOpen, panelRef);
 
   useEffect(() => {
-    if (!open && returnFocus.current) {
+    if (!panelOpen && returnFocus.current) {
       returnFocus.current = false;
-      triggerRef.current?.focus();
+      if (!disabled) triggerRef.current?.focus();
     }
-  }, [open]);
+  }, [panelOpen, disabled]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -98,7 +107,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
         setOpen(false);
       }
     }
-    if (open) {
+    if (panelOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
       return () => {
@@ -106,7 +115,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
         document.removeEventListener('keydown', handleKeyDown);
       };
     }
-  }, [open]);
+  }, [panelOpen]);
 
   // Count only items that are actually present and not hidden. Using
   // items.length - hiddenIds.size here would undercount when hiddenIds holds
@@ -118,10 +127,11 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
       <motion.button
         type="button"
         ref={setTrigger}
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen((previous) => !previous)}
+        disabled={disabled}
         aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? 'metric-card-selector-panel' : undefined}
+        aria-expanded={panelOpen}
+        aria-controls={panelOpen ? 'metric-card-selector-panel' : undefined}
         whileHover={{ y: -1 }}
         whileTap={{ scale: 0.965 }}
         transition={springPop}
@@ -136,8 +146,8 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
           gap: 7,
           cursor: 'pointer',
           borderRadius: radius.control,
-          background: open ? accentTint : controlShell.background,
-          border: open ? `1px solid ${accent}` : controlShell.border,
+          background: panelOpen ? accentTint : controlShell.background,
+          border: panelOpen ? `1px solid ${accent}` : controlShell.border,
           color: textPrimary,
         }}
       >
@@ -161,9 +171,9 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
         Metrics ({visibleCount}/{items.length})
         <motion.span
           aria-hidden="true"
-          animate={{ rotate: open ? 180 : 0 }}
+          animate={{ rotate: panelOpen ? 180 : 0 }}
           transition={springPop}
-          style={{ color: open ? accent : textMuted, fontSize: 10 }}
+          style={{ color: panelOpen ? accent : textMuted, fontSize: 10 }}
         >
           ▾
         </motion.span>
@@ -172,7 +182,7 @@ export function MetricCardSelector({ items, hiddenIds, onToggle, triggerRef: ext
       {/* Glass/backdrop and animated ancestors establish fixed containing
           blocks. A viewport-positioned panel must live outside that subtree. */}
       {createPortal(<AnimatePresence>
-        {open && (
+        {panelOpen && (
           <GlassPanel
             id="metric-card-selector-panel"
             role="dialog"

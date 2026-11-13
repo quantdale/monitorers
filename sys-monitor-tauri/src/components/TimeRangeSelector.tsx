@@ -1,4 +1,5 @@
 import { Clock3, ChevronDown } from 'lucide-react';
+import type { Ref } from 'react';
 import { accent, controlShell, fontSans, surface, textMuted, textPrimary, type } from '../design/tokens';
 
 interface Option {
@@ -10,14 +11,16 @@ interface Props {
   options: Option[];
   value: number;
   onChange: (value: number) => void;
+  selectRef?: Ref<HTMLSelectElement>;
 }
 
 /** Keep the native select's keyboard, typeahead and automation semantics. */
-export function TimeRangeSelector({ options, value, onChange }: Props) {
+export function TimeRangeSelector({ options, value, onChange, selectRef }: Props) {
   return (
     <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
       <Clock3 size={13} aria-hidden="true" style={{ position: 'absolute', left: 10, color: textMuted, pointerEvents: 'none' }} />
       <select
+        ref={selectRef}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-label="History time range"

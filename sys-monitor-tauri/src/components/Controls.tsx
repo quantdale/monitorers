@@ -12,6 +12,7 @@ interface ButtonProps {
   'aria-label'?: string;
   'aria-expanded'?: boolean;
   'aria-controls'?: string;
+  'aria-busy'?: boolean;
   'data-testid'?: string;
   ref?: Ref<HTMLButtonElement>;
 }
