@@ -1,11 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { readDashboardCardOrder, waitForFirstMetrics } from './helpers';
 
 // Exercise the keyboard sensor's scroll-only path: with a target below the
 // viewport midpoint, smooth scrolling can leave `over` on the source when the
 // next key drops the card. Waiting for a non-'none' transform would not catch
 // it: translate3d(0,0,0) is an identity transform but still passes that check.
-test('keyboard drop reaches the adjacent card when movement requires scrolling', async ({ page }) => {
+async function assertKeyboardRoundtrip(page: Page) {
   await page.setViewportSize({ width: 900, height: 500 });
   await page.goto('/');
   await waitForFirstMetrics(page);
@@ -37,6 +37,35 @@ test('keyboard drop reaches the adjacent card when movement requires scrolling',
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('dashboard-card-list')).toHaveAttribute('data-dragging', 'false');
   expect(await readDashboardCardOrder(page)).toEqual(before);
+}
+
+test('keyboard drop reaches the adjacent card when movement requires scrolling', async ({ page }) => {
+  await assertKeyboardRoundtrip(page);
+});
+
+test('keyboard drop stays correct before native scroll notifications arrive', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 500 });
+  await page.goto('/');
+  await waitForFirstMetrics(page);
+  const before = await readDashboardCardOrder(page);
+  const intermediate = await page.evaluate(() => {
+    // All input occurs in one task. Physical scrolling happens immediately,
+    // but the browser cannot deliver queued native scroll events until this
+    // task completes. No timing sleeps or synthetic layout changes needed.
+    const orders: string[][] = [];
+    for (const direction of ['ArrowDown', 'ArrowUp']) {
+      const handle = document.querySelector<HTMLElement>('[data-testid="drag-handle-cpu"]')!;
+      handle.focus();
+      for (const code of ['Space', direction, 'Enter']) {
+        handle.dispatchEvent(new KeyboardEvent('keydown', { code, key: code === 'Space' ? ' ' : code, bubbles: true }));
+      }
+      orders.push(document.querySelector('[data-testid="dashboard-card-list"]')!.getAttribute('data-card-order')!.split('|'));
+    }
+    return orders;
+  });
+  expect(intermediate[0]).toEqual([before[1], before[0], ...before.slice(2)]);
+  expect(intermediate[1]).toEqual(before);
+  await expect.poll(() => readDashboardCardOrder(page)).toEqual(before);
 });
 
 test('metric selector stays viewport-relative under a transformed glass toolbar', async ({ page }) => {

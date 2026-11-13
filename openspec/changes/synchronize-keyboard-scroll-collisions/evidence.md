@@ -1,0 +1,15 @@
+# Keyboard scroll correction — 2026-11-13
+
+Session logs/screenshots: `D:/Documents/tryPython/_AgentArtifacts/monitorers/sessions/20261113-codex-successor/`. Parent campaign starts at clean `main@6377289` on `agent/production-readiness-2026-11-13`.
+
+Initial full E2E failed reverse keyboard drop (50/51). Isolated 10/10 did not establish reliability: a subsequent stress batch failed 7/60 (`keyboard-stress.log`). Instrumented geometry proved that physical ancestor scrolling moved droppable viewport rectangles while the keyboard collision point remained unadjusted (`keyboard-probe3.log`, 3/10 failed). Unequal card sizing or decorative transforms were not the cause.
+
+Rejected experiments: initial probe attempted to serialize full collision objects, introducing a circular serialization error (discarded); probe3 logs only scalar geometry/IDs. Forcing synthetic scroll notifications, including a variant before every key, made failures more frequent (`keyboard-fixed*.log`), because the collision coordinate itself was still wrong. Those experiments and all temporary sensor probes are removed. A first fixture failed to deliver the notification and could not go red; it was corrected before being accepted as regression protection.
+
+Actual fix: measure ancestor offsets immediately before/after instant scroll, subtract the summed delta from the keyboard position and publish corrected movement synchronously. This matches dnd-kit's transform scroll compensation while preserving the sibling-aware library getter and pointer behavior. The new sensor test uses real closestCenter with nested live rectangles and delivers the scroll notification before Enter. Disabling only the correction causes deterministic `Received: disk` instead of Memory (`sensor-red.log`); restoring it passes. No synthetic events remain in product code.
+
+First post-fix browser batch: 20/20 (`keyboard-delta.log`). Browser coverage also asserts intermediate forward order and final reverse order in a single task, so a no-op roundtrip cannot pass. Final full/stress/packaged qualification remains to be recorded.
+
+Frozen final source: canonical frontend gate **360/360** tests across 28 files, all three TS projects, hooks lint, dead-code check, version/doc consistency, both npm audits and production bundle pass. Full E2E **52/52**, additional keyboard stress **60/60**, full mock matrix **16/16** journey/persona runs (runner 4/4 tests, no quarantines). Fresh packaged qualification **1/1**, including actual hardware-sidebar keyboard cancellation/focus cycling. Final logs are `final-frontend.log`, `final-stress.log`, `final-e2e.log`, `final-mock.log`, `final-build.log` and `packaged.log`.
+
+The real `sidebar-relaunch-persistence` journey passes **17/17** assertions, including keyboard reorder of actual keyed hardware cards and restoration after a true process restart. Customization and restart soak also pass. No test thresholds or pointer behavior were changed, and final product source has no temporary probes or synthetic scroll notifications.

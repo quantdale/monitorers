@@ -7,7 +7,7 @@ import { flushSync } from 'react-dom';
  * and uses a scroll-only path that can drop against stale `over` state.
  * Neither a timeout nor waiting a fixed number of frames makes that reliable.
  */
-class CardKeyboardSensor {
+export class CardKeyboardSensor {
   static activators = KeyboardSensor.activators;
   autoScrollEnabled = false;
   private position = { x: 0, y: 0 };
@@ -74,7 +74,20 @@ class CardKeyboardSensor {
     };
     // Unlike the stock scroll-only path, always publish the actual move first.
     flushSync(() => this.props.onMove(this.position));
+    const ancestors = this.props.context.current.scrollableAncestors;
+    const before = ancestors.map((element) => ({ x: element.scrollLeft, y: element.scrollTop }));
     this.props.activeNode.node.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    // dnd-kit compensates dragging transforms for ancestor scrolling. Keyboard
+    // movement must subtract that same delta so its collision rectangle moves
+    // with the scrolled target, rather than staying at the old viewport point.
+    const delta = ancestors.reduce((sum, element, index) => ({
+      x: sum.x + element.scrollLeft - before[index].x,
+      y: sum.y + element.scrollTop - before[index].y,
+    }), { x: 0, y: 0 });
+    if (delta.x || delta.y) {
+      this.position = { x: this.position.x - delta.x, y: this.position.y - delta.y };
+      flushSync(() => this.props.onMove(this.position));
+    }
   };
 }
 
