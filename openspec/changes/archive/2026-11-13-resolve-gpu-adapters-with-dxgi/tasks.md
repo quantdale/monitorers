@@ -13,5 +13,5 @@
 ## 3. Qualify and deliver
 
 - [x] 3.1 Run Rust feature matrices, fmt/Clippy/audit and frontend/TS/lint/unit/build gates; fix all introduced failures.
-- [ ] 3.2 Verify native GPU inventory/telemetry, startup/cadence, E2E/mock, real settings/restart and cleanup.
-- [ ] 3.3 Adversarially review, reassess remaining material work, record evidence and commit/push a qualified candidate.
+- [x] 3.2 Verify native GPU inventory/telemetry, startup/cadence, E2E/mock, real settings/restart and cleanup.
+- [x] 3.3 Adversarially review, reassess remaining material work, record evidence and commit/push a qualified candidate.
