@@ -32,8 +32,8 @@ pub struct MetricsSnapshot {
     /// ring.
     ///
     /// The backend has exactly one clock for the history ring: `run_loop`'s
-    /// `monotonic_timestamp_ms(wall_origin_ms, loop_epoch, …)`, which fixes a
-    /// wall-clock origin once per session and advances it with `Instant`. The
+    /// `monotonic_timestamp_ms(wall_origin_ms, clock_epoch, …)`, which fixes a
+    /// wall-clock origin once per history-store lifetime and advances it with `Instant`. The
     /// frontend previously stamped live samples with `Date.now()` — a SECOND
     /// clock. Any wall-clock adjustment mid-session (NTP step, user change,
     /// suspend/resume) therefore made live samples disagree with the ring they

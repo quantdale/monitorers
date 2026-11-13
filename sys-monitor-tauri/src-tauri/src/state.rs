@@ -216,6 +216,9 @@ impl Default for CollectorState {
 pub const HISTORY_CAPACITY: usize = 3600;
 
 pub struct HistoryStore {
+    /// Process-local timestamp origin retained across collector replacement.
+    /// Scheduling deadlines and OS-facing rate baselines remain session-local.
+    timestamp_clock: Option<(u64, Instant)>,
     pub cpu_history: VecDeque<f64>,
     pub cpu_name: String,
     pub cpu_temp_c: Option<f64>,
@@ -255,6 +258,7 @@ impl HistoryStore {
             cpu_name.to_string()
         };
         HistoryStore {
+            timestamp_clock: None,
             cpu_history: VecDeque::with_capacity(HISTORY_CAPACITY),
             cpu_name: name,
             cpu_temp_c: None,
@@ -285,6 +289,14 @@ impl HistoryStore {
         }
         self.timestamps.push_back(ts);
     }
+
+    pub(crate) fn timestamp_clock(
+        &mut self,
+        wall_origin_ms: u64,
+        epoch: Instant,
+    ) -> (u64, Instant) {
+        *self.timestamp_clock.get_or_insert((wall_origin_ms, epoch))
+    }
 }
 
 pub type SafeHistoryStore = Mutex<HistoryStore>;
@@ -293,6 +305,23 @@ pub type SafeAppState = SafeHistoryStore;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_clock_survives_replacement_and_wall_clock_adjustment() {
+        let mut history = HistoryStore::new("test");
+        let epoch = Instant::now();
+        let original = history.timestamp_clock(1_000_000, epoch);
+        let later = epoch + std::time::Duration::from_secs(10);
+        assert_eq!(history.timestamp_clock(1, later), original);
+        assert_eq!(history.timestamp_clock(9_000_000, later), original);
+        assert_eq!(
+            crate::collector::run_loop::monotonic_timestamp_ms(original.0, original.1, later),
+            1_010_000
+        );
+        // A new process/ring establishes its own origin.
+        let mut fresh = HistoryStore::new("test");
+        assert_eq!(fresh.timestamp_clock(2_000_000, later), (2_000_000, later));
+    }
 
     // Telemetry (HistoryStore) intentionally does not persist across process
     // restarts — only settings.json (frontend, via plugin-store) does. A

@@ -164,7 +164,7 @@ fn wait_until_deadline(deadline: Instant, stop: Option<&AtomicBool>) -> bool {
     }
 }
 
-/// Project the collector's monotonic epoch onto a wall-clock origin once.
+/// Project the history store's monotonic epoch onto a wall-clock origin once.
 /// The resulting IPC timestamp remains useful to the frontend/X axis while
 /// subsequent samples cannot move backwards when the system clock is adjusted.
 pub fn monotonic_timestamp_ms(wall_origin_ms: u64, epoch: Instant, now: Instant) -> u64 {
@@ -208,7 +208,13 @@ pub fn run_collector_loop(
     state.network_last_refresh = Instant::now();
 
     let loop_epoch = Instant::now();
-    let wall_origin_ms = Utc::now().timestamp_millis().max(0) as u64;
+    // History outlives a collector session. Copy its immutable projection once
+    // so a recovery after an NTP/user clock adjustment cannot rewind or jump
+    // the retained ring. Session deadlines still start at `loop_epoch`.
+    let (wall_origin_ms, clock_epoch) = store
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .timestamp_clock(Utc::now().timestamp_millis().max(0) as u64, loop_epoch);
     let mut next_deadline = loop_epoch + TICK_INTERVAL;
     let mut tick: u32 = 0;
     let mut wmi_ready = false;
@@ -269,7 +275,7 @@ pub fn run_collector_loop(
             // ring is untouched while the snapshot still carries a truthful
             // "read at" time for its scalars; `on_tick` stays the growth gate.
             let tick_timestamp_ms =
-                monotonic_timestamp_ms(wall_origin_ms, loop_epoch, Instant::now());
+                monotonic_timestamp_ms(wall_origin_ms, clock_epoch, Instant::now());
             let snapshot = {
                 let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref r) = raw {
@@ -515,6 +521,47 @@ mod tests {
         assert_eq!(earlier, 1_000_250);
         assert_eq!(later, 1_000_500);
         assert!(later >= earlier);
+    }
+
+    #[test]
+    fn test_replacement_sessions_use_retained_history_clock_for_ring_and_live() {
+        let mut history = HistoryStore::new("test");
+        // A deliberately distinct history origin models an earlier session
+        // followed by a wall-clock adjustment without changing the host clock.
+        let origin = 9_000_000_000_000;
+        history.timestamp_clock(origin, Instant::now());
+        let store = SafeHistoryStore::new(history);
+        let mut previous = origin;
+        for _ in 0..2 {
+            let mut state = CollectorState::new();
+            let mut registry = SensorRegistry::new();
+            registry.register(CpuSensorProvider);
+            let mut wmi = WmiBootstrap::new();
+            let mut emitted = None;
+            let outcome = run_collector_loop(
+                &mut state,
+                &mut wmi,
+                &mut registry,
+                &store,
+                Some(LoopLimit::Ticks(1)),
+                None,
+                |_| {},
+                |_, _| {},
+                |snapshot| {
+                    emitted = Some(snapshot.timestamp_ms);
+                },
+                |_| {},
+            );
+            assert_eq!(outcome, LoopOutcome::Completed);
+            let timestamp = emitted.expect("a session must emit its first full tick");
+            assert!(
+                timestamp > previous,
+                "replacement discarded the retained history clock"
+            );
+            let history = store.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(history.timestamps.back(), Some(&timestamp));
+            previous = timestamp;
+        }
     }
 
     // REGRESSION (first-poll timing): a fresh/recovered session primes its

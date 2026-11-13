@@ -191,7 +191,7 @@ monitorers/
   collector/supervisor.rs) == EXPECTED_LIFECYCLE_SCHEMA_VERSION (TS) == 1.
 - The history ring and every live sample share ONE clock: the backend's
   monotonic projection (`monotonic_timestamp_ms`), which fixes a wall-clock
-  origin once per session and advances it with a monotonic `Instant`. The same
+  origin once per history-store lifetime and advances it with a monotonic `Instant`. The same
   value is pushed into the ring AND carried on the snapshot as `timestamp_ms`.
   The frontend appends live events at the PAYLOAD's timestamp — never
   `Date.now()` — so a mid-session wall-clock adjustment (NTP step, user change,
