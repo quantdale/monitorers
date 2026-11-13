@@ -18,4 +18,6 @@ Combined final candidate: `combined-fast.log` exit 0 (370 unit tests, frontend g
 
 Native combined qualification completed: `combined-packaged.log` 1/1, including the actual hardware-profile modal resize and keyboard cycle, plus real history/listener retry and settings retention. Three real journeys also pass in `combined-real.log`; teardown/store/orphan/policy guards pass. Actual native exclusive-modal screenshot inspected. Source/diff review is clean for this change. A separate GPU caption/identity defect discovered in native screenshot review is becoming a successor campaign; the two completed UI campaigns do not establish overall product completion.
 
+Implementation is committed/pushed at `ebea5b2`; pre-push fast verification passed. Sync/archive adds this change's exclusive-modal requirement to the existing accessibility specification. The overall goal continues with exact GPU adapter identity.
+
 Settled browser axe checks: connection error 0 violations (1 contrast-incomplete rule), Metrics popup 0 violations (2 incomplete rules), hardware modal 0 violations/0 incomplete. Earlier immediate captures reported transitional contrast during entrance opacity; settled reruns and token contrast tests are the scoped evidence. No blanket screen-reader or contrast certification is claimed.

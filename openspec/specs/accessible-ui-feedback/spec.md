@@ -145,3 +145,44 @@ Window summaries and network rates SHALL show unavailable readings when no finit
 #### Scenario: Null-only history window
 - **WHEN** a card's entire visible series is null or empty
 - **THEN** its rate and range summary show unavailable markers rather than 0 or 0.0%
+
+### Requirement: Metrics connection retry exposes progress and usable focus
+Connection error feedback SHALL include a keyboard-operable Retry connection control with a visible focus indicator. Pending work SHALL expose busy feedback and prevent duplicate activation while retaining error details. Error content and controls SHALL fit the 400x300 minimum window, including long unbroken diagnostics. Successful user-triggered recovery SHALL place focus on an available metrics control if the retry control disappears and the user has not moved focus elsewhere. Reduced motion SHALL preserve the same feedback without decorative animation.
+
+#### Scenario: Keyboard recovery completes
+- **WHEN** the user activates Retry connection by keyboard and the connection recovers
+- **THEN** pending feedback is announced and focus returns to the history-range control without changing its selected value
+
+#### Scenario: User moves away during retry
+- **WHEN** focus moves to another dashboard control during the attempt
+- **THEN** successful recovery does not steal that focus
+
+#### Scenario: Narrow error layout
+- **WHEN** a long diagnostic is displayed at 400x300
+- **THEN** the message wraps, the retry action remains reachable and the dashboard does not grow sideways
+
+### Requirement: Connection bootstrap and refetch retain truthful scalar values
+Before the first live snapshot, CPU SHALL use its newest available historical sample or the unavailable marker when none exists. Memory capacity/usage sizes SHALL remain unavailable until supplied by a live snapshot. A history refresh SHALL NOT replace known live sizes with defaults or fixture values. Genuine zero readings SHALL remain valid.
+
+#### Scenario: History arrives before the live connection
+- **WHEN** history contains a CPU sample but no live snapshot has arrived
+- **THEN** the CPU numeral uses that sample and unknown memory sizes show unavailable markers
+
+#### Scenario: History is refreshed after live sizes arrived
+- **WHEN** the selected history window changes or the connection is retried
+- **THEN** known memory sizes remain unchanged until a newer live snapshot updates them
+
+### Requirement: The hardware modal has exclusive temporary focus ownership
+When the hardware rail becomes a modal drawer, any open metric-visibility popup SHALL close and immediately leave the keyboard/accessibility interaction path. Only the hardware modal's focus boundary SHALL remain active. Closing the drawer or returning to desktop SHALL NOT resurrect the old popup; users SHALL be able to reopen it with their metric selections intact.
+
+#### Scenario: Desktop overlays cross the narrow breakpoint
+- **WHEN** the non-modal hardware rail and Metrics popup are both open and the window becomes narrow
+- **THEN** the popup deactivates, focus moves to the hardware Close action, and forward/reverse Tab stay in the drawer
+
+#### Scenario: Drawer closes and Metrics opens again
+- **WHEN** the user dismisses the drawer and reopens Metrics
+- **THEN** the popup opens normally with unchanged selections and Escape returns focus to its trigger
+
+#### Scenario: Window widens again
+- **WHEN** the modal presentation returns to the non-modal rail after suspending Metrics
+- **THEN** Metrics stays closed until the user explicitly opens it

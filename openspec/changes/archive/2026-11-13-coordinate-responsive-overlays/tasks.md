@@ -11,4 +11,4 @@
 ## 3. Qualify and deliver
 
 - [x] 3.1 Run frontend/TS/lint/build, full E2E/mock and native qualification on the combined candidate.
-- [ ] 3.2 Review the diff, record results and commit/push the qualified branch.
+- [x] 3.2 Review the diff, record results and commit/push the qualified branch.
